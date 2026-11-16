@@ -27,7 +27,7 @@ cp SDL2/android-project/app/src/main/java/org/libsdl/app/*.java "$HERE/app/src/m
 A="$HERE/app/src/main/assets"
 rm -rf "$A/gamedata" && mkdir -p "$A" && cp -r "$ENGINES_DIR/carnage3d/gamedata" "$A/gamedata"
 cp "$A/gamedata/config/inputs.json.default" "$A/gamedata/config/inputs.json"
-sed 's/"r_screenDims":.*/"r_screenDims":\t"1280 720",/; s/"r_fullscreen":.*/"r_fullscreen":\t"true",/' \
+sed 's/"r_screenDims":.*/"r_screenDims":\t"1280 720",/; s/"r_fullscreen":.*/"r_fullscreen":\t"true",/; s/"g_gtadata":.*/"g_gtadata":\t"",\n\t"r_aspect":\t"16:9"/' \
   "$A/gamedata/config/sys_config.json.default" > "$A/gamedata/config/sys_config.json"
 
 [ -f "$HERE/local.properties" ] || echo "sdk.dir=${ANDROID_HOME:-$HOME/Android/Sdk}" > "$HERE/local.properties"

@@ -1,5 +1,5 @@
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
-index bb509f8..d2db0ab 100644
+index bb509f8..10aee98 100644
 --- a/src/CarnageGame.cpp
 +++ b/src/CarnageGame.cpp
 @@ -63,7 +63,9 @@ bool CarnageGame::Initialize()
@@ -13,6 +13,114 @@ index bb509f8..d2db0ab 100644
  
      if (gCvarMapname.mValue.empty())
      {
+@@ -122,6 +124,30 @@ bool CarnageGame::IsInGameState() const
+ 
+ void CarnageGame::UpdateFrame()
+ {
++#ifdef __ANDROID__
++    // follow surface size changes (status bar hiding, rotation, split screen, foldables)
++    {
++        Point actualSize;
++        ::glfwShimGetDisplaySize(&actualSize.x, &actualSize.y);
++        if (actualSize.x > 0 && actualSize.y > 0 &&
++            (actualSize.x != gGraphicsDevice.mScreenResolution.x || actualSize.y != gGraphicsDevice.mScreenResolution.y))
++        {
++            gConsole.LogMessage(eLogMessage_Info, "Surface resized to %dx%d", actualSize.x, actualSize.y);
++            gGraphicsDevice.mScreenResolution = actualSize;
++            gCvarGraphicsScreenDims.mValue = actualSize;
++            gGraphicsDevice.SetViewportRect(Rect { 0, 0, actualSize.x, actualSize.y });
++            gGraphicsDevice.SetScissorRect(Rect { 0, 0, actualSize.x, actualSize.y });
++            if (GetHumanPlayersCount() > 0)
++            {
++                SetupScreenLayout();
++            }
++        }
++    }
++#endif
++    if (gCvarGraphicsAspect.IsModified() && GetHumanPlayersCount() > 0)
++    {
++        SetupScreenLayout();
++    }
+     if (mCurrentGamestate)
+     {
+         mCurrentGamestate->OnGamestateFrame();
+@@ -150,6 +176,18 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
+         return;
+     }
+ 
++    if (inputEvent.HasPressed(eKeycode_F7)) // cycle game view aspect ratio: 16:9 -> 4:3 -> fill
++    {
++        const std::string curr = gCvarGraphicsAspect.mValue;
++        gCvarGraphicsAspect.mValue = (curr == "16:9") ? "4:3" : (curr == "4:3") ? "fill" : "16:9";
++        if (GetHumanPlayersCount() > 0)
++        {
++            SetupScreenLayout();
++        }
++        gSystem.SaveConfiguration();
++        return;
++    }
++
+     if (inputEvent.HasPressed(eKeycode_C))
+     {
+         gGameCheatsWindow.mWindowShown = !gGameCheatsWindow.mWindowShown;
+@@ -277,6 +315,31 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
+     }
+ }
+ 
++// game view area inside the screen for the requested aspect ratio (r_aspect), centered;
++// the rest of the screen is left as black bars
++static Rect ComputeGameViewArea(const Point& screenResolution)
++{
++    Rect area { 0, 0, screenResolution.x, screenResolution.y };
++    float targetAspect = 0.0f;
++    if (gCvarGraphicsAspect.mValue == "16:9") targetAspect = 16.0f / 9.0f;
++    else if (gCvarGraphicsAspect.mValue == "4:3") targetAspect = 4.0f / 3.0f;
++    if (targetAspect <= 0.0f || screenResolution.x <= 0 || screenResolution.y <= 0)
++        return area; // fill
++
++    const float screenAspect = (screenResolution.x * 1.0f) / screenResolution.y;
++    if (screenAspect > targetAspect + 0.001f) // wider than target: pillarbox
++    {
++        area.w = static_cast<int>(screenResolution.y * targetAspect + 0.5f);
++        area.x = (screenResolution.x - area.w) / 2;
++    }
++    else if (screenAspect < targetAspect - 0.001f) // taller than target: letterbox
++    {
++        area.h = static_cast<int>(screenResolution.x / targetAspect + 0.5f);
++        area.y = (screenResolution.y - area.h) / 2;
++    }
++    return area;
++}
++
+ void CarnageGame::SetupScreenLayout()
+ {   
+     const int MaxCols = 2;
+@@ -284,7 +347,8 @@ void CarnageGame::SetupScreenLayout()
+ 
+     debug_assert(playersCount > 0);
+ 
+-    Point screenResolution = gGraphicsDevice.mScreenResolution;
++    const Rect gameViewArea = ComputeGameViewArea(gGraphicsDevice.mScreenResolution);
++    Point screenResolution (gameViewArea.w, gameViewArea.h);
+ 
+     int numRows = (playersCount + MaxCols - 1) / MaxCols;
+     debug_assert(numRows > 0);
+@@ -303,10 +367,14 @@ void CarnageGame::SetupScreenLayout()
+         debug_assert(colsOnCurrentRow > 0);
+         int frameSizePerW = screenResolution.x / colsOnCurrentRow;
+ 
+-        Rect viewportArea { currCol * (frameSizePerW + 1), currRow * frameSizePerH, frameSizePerW, frameSizePerH };
++        Rect viewportArea { gameViewArea.x + currCol * (frameSizePerW + 1), gameViewArea.y + currRow * frameSizePerH, frameSizePerW, frameSizePerH };
+         currHuman->SetScreenViewArea(viewportArea);
+         currHuman->SetCurrentCameraMode(ePlayerCameraMode_Follow);
+     }
++    gCvarGraphicsAspect.ClearModified();
++#ifdef __ANDROID__
++    ::glfwShimSetAspectLabel(gCvarGraphicsAspect.mValue == "fill" ? "FILL" : gCvarGraphicsAspect.mValue.c_str());
++#endif
+ }
+ 
+ int CarnageGame::GetHumanPlayerIndex(Pedestrian* pedestrian) const
 diff --git a/src/Console.cpp b/src/Console.cpp
 index c6b1c2e..28adce0 100644
 --- a/src/Console.cpp
@@ -429,6 +537,76 @@ index 068fae5..435924d 100644
  
  int main(int argc, char *argv[])
  {
+diff --git a/src/RenderingManager.cpp b/src/RenderingManager.cpp
+index c626ef7..62d6bc6 100644
+--- a/src/RenderingManager.cpp
++++ b/src/RenderingManager.cpp
+@@ -54,7 +54,22 @@ void RenderingManager::Deinit()
+ 
+ void RenderingManager::RenderFrame()
+ {
+-    gGraphicsDevice.ClearScreen();
++    // clear the whole screen black (aspect-ratio bars), then each game view with the sky color
++    {
++        const Point& res = gGraphicsDevice.mScreenResolution;
++        const Rect prevScissor = gGraphicsDevice.mScissorBox;
++        gGraphicsDevice.SetScissorRect(Rect { 0, 0, res.x, res.y });
++        gGraphicsDevice.SetClearColor(Color32_Black);
++        gGraphicsDevice.ClearScreen();
++        gGraphicsDevice.SetClearColor(Color32_SkyBlue);
++        for (GameCamera* currRenderview: mActiveRenderViews)
++        {
++            const Rect& vp = currRenderview->mViewportRect;
++            gGraphicsDevice.SetScissorRect(Rect { vp.x, res.y - (vp.y + vp.h), vp.w, vp.h });
++            gGraphicsDevice.ClearScreen();
++        }
++        gGraphicsDevice.SetScissorRect(prevScissor);
++    }
+     gSpriteManager.RenderFrameBegin();
+     mMapRenderer.RenderFrameBegin();
+ 
+diff --git a/src/System.cpp b/src/System.cpp
+index 8b24701..3ef720f 100644
+--- a/src/System.cpp
++++ b/src/System.cpp
+@@ -22,6 +22,11 @@ static const char* SysConfigPath = "config/sys_config.json";
+ CvarPoint gCvarGraphicsScreenDims("r_screenDims", Point(1024, 768), "Screen dimensions", CvarFlags_Archive | CvarFlags_RequiresAppRestart);
+ CvarBoolean gCvarGraphicsFullscreen("r_fullscreen", false, "Is fullscreen mode enabled", CvarFlags_Archive);
+ CvarBoolean gCvarGraphicsVSync("r_vsync", true, "Is vertical synchronization enabled", CvarFlags_Archive);
++#ifdef __ANDROID__
++CvarString gCvarGraphicsAspect("r_aspect", "16:9", "Game view aspect ratio: 16:9, 4:3 or fill", CvarFlags_Archive);
++#else
++CvarString gCvarGraphicsAspect("r_aspect", "fill", "Game view aspect ratio: 16:9, 4:3 or fill", CvarFlags_Archive);
++#endif
+ CvarBoolean gCvarGraphicsTexFiltering("r_texFiltering", false, "Is texture filtering enabled", CvarFlags_Archive | CvarFlags_Readonly);
+ 
+ // physics
+diff --git a/src/System.h b/src/System.h
+index e0c0b12..e6ff6bb 100644
+--- a/src/System.h
++++ b/src/System.h
+@@ -15,6 +15,9 @@ public:
+ 
+     // Get real time seconds since system started
+     double GetSystemSeconds() const;
++
++    // Save archive cvars to external configuration file
++    bool SaveConfiguration();
+ 
+ private:
+     void Initialize(int argc, char *argv[]);
+@@ -22,9 +25,8 @@ private:
+     bool ExecuteFrame();
+     void ParseStartupParams(int argc, char *argv[]);
+ 
+-    // Save/Load configuration to/from external file
+-    bool LoadConfiguration();
+-    bool SaveConfiguration();
++    // Load configuration from external file
++    bool LoadConfiguration();
+ 
+ private:
+     bool mQuitRequested;
 diff --git a/src/android/gles_glew_compat.h b/src/android/gles_glew_compat.h
 new file mode 100644
 index 0000000..70113b2
@@ -459,10 +637,10 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..58ff83b
+index 0000000..6e9370e
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
-@@ -0,0 +1,670 @@
+@@ -0,0 +1,682 @@
 +// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
 +#include <SDL.h>
 +#include "glfw_sdl_shim.h"
@@ -556,6 +734,7 @@ index 0000000..58ff83b
 +        Control_Weapon,
 +        Control_Horn,
 +        Control_Lock,
++        Control_Aspect,
 +        Control_COUNT
 +    };
 +
@@ -580,10 +759,11 @@ index 0000000..58ff83b
 +    static std::vector<Finger> gFingers;
 +
 +    // current key state produced by touch
-+    enum { K_UP, K_DOWN, K_LEFT, K_RIGHT, K_FIRE, K_CAR, K_JUMP, K_WPN, K_HORN, K_LOCK, K_COUNT };
++    enum { K_UP, K_DOWN, K_LEFT, K_RIGHT, K_FIRE, K_CAR, K_JUMP, K_WPN, K_HORN, K_LOCK, K_ASPECT, K_COUNT };
 +    static const int gKeyMap[K_COUNT] = {
 +        GLFW_KEY_UP, GLFW_KEY_DOWN, GLFW_KEY_LEFT, GLFW_KEY_RIGHT, GLFW_KEY_LEFT_CONTROL,
-+        GLFW_KEY_ENTER, GLFW_KEY_SPACE, GLFW_KEY_X, GLFW_KEY_TAB, GLFW_KEY_F9 };
++        GLFW_KEY_ENTER, GLFW_KEY_SPACE, GLFW_KEY_X, GLFW_KEY_TAB, GLFW_KEY_F9, GLFW_KEY_F7 };
++    static char gAspectLabel[8] = "16:9"; // set by the engine
 +    static bool gKeyState[K_COUNT] = {};
 +    static bool gVisible = true;
 +
@@ -603,6 +783,7 @@ index 0000000..58ff83b
 +        gButtons[Control_Weapon] = { W - 0.36f * u, H - 0.34f * u, br * 0.85f, K_WPN, "WPN", 0.90f, 0.75f, 0.15f };
 +        gButtons[Control_Horn]   = { W - 0.58f * u, H - 0.10f * u, br * 0.75f, K_HORN, "HORN", 0.60f, 0.60f, 0.60f };
 +        gButtons[Control_Lock]   = { W - 0.09f * u, 0.09f * u, br * 0.65f, K_LOCK, "LOCK", 0.75f, 0.40f, 0.90f };
++        gButtons[Control_Aspect] = { W - 0.09f * u, 0.25f * u, br * 0.65f, K_ASPECT, gAspectLabel, 0.25f, 0.65f, 0.80f };
 +        gButtons[Control_DPad]   = { gDPadX, gDPadY, gDPadR, -1, "", 1, 1, 1 };
 +    }
 +
@@ -691,6 +872,9 @@ index 0000000..58ff83b
 +        {'N', {0x11,0x11,0x19,0x15,0x13,0x11,0x11}}, {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
 +        {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}}, {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
 +        {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'W', {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}},
++        {'1', {0x04,0x0C,0x04,0x04,0x04,0x04,0x0E}}, {'3', {0x1F,0x02,0x04,0x02,0x01,0x11,0x0E}},
++        {'4', {0x02,0x06,0x0A,0x12,0x1F,0x02,0x02}}, {'6', {0x06,0x08,0x10,0x1E,0x11,0x11,0x0E}},
++        {'9', {0x0E,0x11,0x11,0x0F,0x01,0x02,0x0C}}, {':', {0x00,0x0C,0x0C,0x00,0x0C,0x0C,0x00}},
 +    };
 +
 +    static std::vector<float> gVerts; // x,y,r,g,b,a
@@ -1133,12 +1317,18 @@ index 0000000..58ff83b
 +
 +const char* glfwShimInternalStoragePath(void) { return SDL_AndroidGetInternalStoragePath(); }
 +const char* glfwShimExternalStoragePath(void) { return SDL_AndroidGetExternalStoragePath(); }
++
++void glfwShimSetAspectLabel(const char* label)
++{
++    if (!label) return;
++    SDL_strlcpy(touch::gAspectLabel, label, sizeof(touch::gAspectLabel));
++}
 diff --git a/src/android/glfw_sdl_shim.h b/src/android/glfw_sdl_shim.h
 new file mode 100644
-index 0000000..377ba90
+index 0000000..e3b6af6
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.h
-@@ -0,0 +1,178 @@
+@@ -0,0 +1,179 @@
 +#pragma once
 +// GTA Classic Perspective Lock - Android platform layer.
 +// Implements the small subset of the GLFW 3 API that Carnage3D uses, on top of SDL2,
@@ -1317,6 +1507,29 @@ index 0000000..377ba90
 +void glfwShimGetDisplaySize(int* width, int* height);
 +const char* glfwShimInternalStoragePath(void);
 +const char* glfwShimExternalStoragePath(void);
++void glfwShimSetAspectLabel(const char* label); // text on the aspect-ratio touch button
+diff --git a/src/cvars.h b/src/cvars.h
+index dfc0703..eb46820 100644
+--- a/src/cvars.h
++++ b/src/cvars.h
+@@ -15,6 +15,7 @@ extern CvarBoolean gCvarMouseAiming; // aim with mouse
+ extern CvarPoint gCvarGraphicsScreenDims; // screen dimensions
+ extern CvarBoolean gCvarGraphicsFullscreen; // is fullscreen mode enabled
+ extern CvarBoolean gCvarGraphicsVSync; // is vertical synchronization enabled
++extern CvarString gCvarGraphicsAspect; // game view aspect ratio: 16:9, 4:3 or fill (black bars as needed)
+ extern CvarBoolean gCvarGraphicsTexFiltering; // is texture filtering enabled
+ 
+ // physics
+@@ -63,7 +64,8 @@ inline void CvarsRegisterGlobal()
+     // vars
+     gConsole.RegisterVariable(&gCvarGraphicsScreenDims);
+     gConsole.RegisterVariable(&gCvarGraphicsFullscreen);
+-    gConsole.RegisterVariable(&gCvarGraphicsVSync);
++    gConsole.RegisterVariable(&gCvarGraphicsVSync);
++    gConsole.RegisterVariable(&gCvarGraphicsAspect);
+     gConsole.RegisterVariable(&gCvarGraphicsTexFiltering);
+     gConsole.RegisterVariable(&gCvarPhysicsFramerate);
+     gConsole.RegisterVariable(&gCvarMemEnableFrameHeapAllocator);
 diff --git a/src/path_utils.cpp b/src/path_utils.cpp
 index 117d3a9..50017e4 100644
 --- a/src/path_utils.cpp

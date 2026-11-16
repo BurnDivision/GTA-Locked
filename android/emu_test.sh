@@ -16,7 +16,7 @@ if ! adb shell ls "$EXT/GTADATA/NYC.CMP" >/dev/null 2>&1; then
 fi
 adb shell am force-stop $PKG
 adb logcat -c
-adb shell am start -n $PKG/.LauncherActivity | tail -1
+adb shell am start -n $PKG/.LauncherActivity --ez autostart true | tail -1
 sleep "$WAIT"
 [ -n "$EXTRA" ] && adb shell "$EXTRA" && sleep 3
 adb exec-out screencap -p > "$HERE/shots/$NAME.png"

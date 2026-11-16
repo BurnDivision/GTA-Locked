@@ -229,3 +229,41 @@ Goal (user): turn the perspective-lock prototype into an Android app.
 - Not yet verified: driving and car entry via touch (the emulator has no easy way to spawn a
   car next to the player), real-device performance, a real gamepad, and audio output (the
   emulator runs `-no-audio`).
+
+## 2026-11-16 — Aspect ratios: 16:9 and 4:3 (user request)
+
+- New setting `r_aspect` = `16:9` | `4:3` | `fill` (archived in `config/sys_config.json`).
+  Defaults: Android `16:9`, desktop `fill` (unchanged desktop behaviour).
+- `CarnageGame::SetupScreenLayout` fits a centred game-view rectangle of that aspect
+  inside the screen. It pillarboxes on wider screens and letterboxes on taller ones. The camera
+  projection and HUD follow the rectangle automatically.
+- `RenderingManager::RenderFrame` clears the full screen black (bars), then each game view sky blue.
+- Switching:
+  - **F7** cycles 16:9 → 4:3 → fill and saves immediately
+    (`System::SaveConfiguration` made public).
+  - Console changes to `r_aspect` re-layout live.
+  - **Android touch button** under LOCK, labelled with the current ratio ("16:9" / "4:3" / "FILL").
+    Overlay font gained `1 3 4 6 9 :`.
+  - **Android launcher:** "View aspect ratio" choice: 16:9 / 4:3 / Fill screen. It writes
+    `r_aspect` into the engine config, and the value survives reinstall/asset re-extraction.
+- The launcher no longer auto-starts the game (so the settings are visible). Tests pass
+  `--ez autostart true` (`emu_test.sh` updated).
+- **Verified on emulator** (Android 8.0, 1920x1080):
+  - 16:9 fills the screen. 4:3 shows a centred 4:3 view with black side bars; the
+    controls sit in the bars and the HUD moves inside the view. Fill uses the whole screen.
+    Contact sheet: `android/shots/aspect_modes.png`.
+  - Forced 2400x1080 (20:9): 16:9 shows side bars.
+  - Button taps cycle the ratio and persist it. The launcher choice persists.
+- **Verified on desktop:** 1280x720 window with `r_aspect` 4:3 shows a centred 4:3 view with
+  black side bars and runs without errors.
+- **Build note:** on the exFAT T7, Gradle/ninja sometimes misses C++ changes (coarse timestamps).
+  Run `ninja` in `app/.cxx/...` or delete the `.cxx` folder before release builds, and check
+  for new strings in `libmain.so`.
+- **Bug found and fixed during release testing:** when the game was started from the launcher,
+  Android hid the status bar after the engine had read the screen size (1920x1017 → 1920x1080).
+  That left a strip at the top of the 4:3 view. On Android the engine now checks the surface
+  size every frame and redoes its layout on any change ("Surface resized to …" in logcat). The
+  same fix covers rotation, split screen and foldables. Verified: the 4:3 view is full height and centred.
+- **Release:** `android/dist/GTA-Perspective-Lock-0.2.0.apk` (versionCode 2), rebuilt clean with the fix.
+  SHA-256 `d979171448caf5a479c50e6165d05769f7942964a1616226d3fa19f43bff973f`.
+  Cumulative patch `engines/perspective-lock-android.patch` sha256 018a1147… (21 files, +1186/−46).

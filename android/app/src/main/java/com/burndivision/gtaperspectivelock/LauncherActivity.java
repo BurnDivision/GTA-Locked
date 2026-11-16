@@ -17,6 +17,8 @@ import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
 import android.widget.LinearLayout;
+import android.widget.RadioButton;
+import android.widget.RadioGroup;
 import android.widget.TextView;
 
 import java.io.File;
@@ -25,6 +27,9 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.Locale;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import org.json.JSONObject;
 
 /**
  * First screen. Makes sure both data sets are in place, then starts the game:
@@ -41,6 +46,9 @@ public class LauncherActivity extends Activity {
     private TextView status;
     private Button pickButton;
     private Button playButton;
+    private RadioGroup aspectGroup;
+    private static final String[] ASPECTS = { "16:9", "4:3", "fill" };
+    private static final String[] ASPECT_LABELS = { "16:9", "4:3", "Fill screen" };
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override
@@ -89,6 +97,29 @@ public class LauncherActivity extends Activity {
         pickButton.setOnClickListener(v -> pickFolder());
         root.addView(pickButton);
 
+        TextView aspectTitle = new TextView(this);
+        aspectTitle.setText("View aspect ratio (also switchable in game)");
+        aspectTitle.setTextColor(Color.rgb(200, 200, 200));
+        aspectTitle.setGravity(Gravity.CENTER);
+        root.addView(aspectTitle);
+
+        aspectGroup = new RadioGroup(this);
+        aspectGroup.setOrientation(RadioGroup.HORIZONTAL);
+        aspectGroup.setGravity(Gravity.CENTER);
+        for (int i = 0; i < ASPECTS.length; ++i) {
+            RadioButton rb = new RadioButton(this);
+            rb.setId(1000 + i);
+            rb.setText(ASPECT_LABELS[i]);
+            rb.setTextColor(Color.WHITE);
+            aspectGroup.addView(rb);
+        }
+        aspectGroup.setOnCheckedChangeListener((g, id) -> {
+            int i = id - 1000;
+            if (i >= 0 && i < ASPECTS.length) writeAspect(ASPECTS[i]);
+        });
+        aspectGroup.setVisibility(View.GONE);
+        root.addView(aspectGroup);
+
         playButton = new Button(this);
         playButton.setText("Play");
         playButton.setVisibility(View.GONE);
@@ -127,7 +158,8 @@ public class LauncherActivity extends Activity {
             pickButton.setText("Re-import GTA data folder");
             pickButton.setVisibility(View.VISIBLE);
             playButton.setVisibility(View.VISIBLE);
-            if (!getIntent().getBooleanExtra("stay", false) && !isFinishing()) startGame();
+            showAspect();
+            if (getIntent().getBooleanExtra("autostart", false) && !isFinishing()) startGame();
         } else {
             status.setText("This app needs your own copy of the original GTA (1997) PC data.\n\n"
                 + "Copy the game's GTADATA folder to this device, tap the button below and choose it.\n"
@@ -135,7 +167,44 @@ public class LauncherActivity extends Activity {
             pickButton.setText("Import GTA data folder");
             pickButton.setVisibility(View.VISIBLE);
             playButton.setVisibility(View.GONE);
+            aspectGroup.setVisibility(View.GONE);
         }
+    }
+
+    // ---------------------------------------------------------------- aspect ratio (r_aspect in the engine config)
+
+    private File configFile() {
+        return new File(getFilesDir(), "gamedata/config/sys_config.json");
+    }
+
+    private String readAspect() {
+        try {
+            JSONObject o = new JSONObject(new String(Files.readAllBytes(configFile().toPath()), StandardCharsets.UTF_8));
+            return o.optString("r_aspect", "16:9");
+        } catch (Exception e) {
+            return "16:9";
+        }
+    }
+
+    private void writeAspect(String value) {
+        try {
+            File f = configFile();
+            JSONObject o = f.exists()
+                ? new JSONObject(new String(Files.readAllBytes(f.toPath()), StandardCharsets.UTF_8))
+                : new JSONObject();
+            o.put("r_aspect", value);
+            Files.write(f.toPath(), o.toString(2).getBytes(StandardCharsets.UTF_8));
+        } catch (Exception e) {
+            Log.e(TAG, "cannot save aspect ratio", e);
+        }
+    }
+
+    private void showAspect() {
+        String cur = readAspect();
+        for (int i = 0; i < ASPECTS.length; ++i) {
+            if (ASPECTS[i].equals(cur)) aspectGroup.check(1000 + i);
+        }
+        aspectGroup.setVisibility(View.VISIBLE);
     }
 
     private void startGame() {
@@ -156,8 +225,10 @@ public class LauncherActivity extends Activity {
             want = "0";
         }
         if (marker.exists() && want.equals(readSmall(marker))) return;
+        String keepAspect = configFile().exists() ? readAspect() : null;
         setStatus("Unpacking engine data...");
         copyAssetDir(getAssets(), "gamedata", target);
+        if (keepAspect != null) writeAspect(keepAspect);
         try (OutputStream o = new FileOutputStream(marker)) {
             o.write(want.getBytes());
         }
