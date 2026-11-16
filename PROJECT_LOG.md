@@ -311,6 +311,17 @@ User report: "There are no cars. And I can't rotate on the unfolded screen."
 - Gap keeping uses each vehicle's chassis length plus a speed-dependent braking distance.
   `Vehicle` befriends `AiCharacterController` to read the chassis box.
   Test: traffic kept moving for about 25 s (up to 9 of 11 cars), then gridlocked.
-- Jam breaker: a car that has waited 5 s ignores the gap rule for 2 s. Not yet tested
-  (codebox went offline again).
+- Jam breaker: a car that has waited 5 s ignores the gap rule for 2 s, and pushes on slowly.
+- **Why traffic cars kept bursting into flames:** `Vehicle::ReceiveDamage` adds 1 damage on
+  every physics contact frame above impulse 100, so a car scraping along another, or pushing
+  a wall, reaches 100 (fire, then a chain explosion) within a couple of seconds. A damage
+  debug log showed nearly every hit was AI car against AI car at 3–5 m/s, mostly crossing
+  traffic at junctions.
+  - AI: when it accelerates but stays below 0.3 m/s for 0.8 s, it backs up for 1 s and
+    re-plans instead of pushing.
+  - AI: yields to vehicles inside a forward cone (crossing traffic), not just its own lane.
+    A fixed tie-break decides which of two mutually blocking cars waits.
+  - Damage rule, traffic only: car-to-car contacts below impulse 2000 cause no damage when
+    **both** cars have AI drivers. Collisions involving the player or a parked car keep the
+    original rules.
 - `TrafficManager` logs a debug-level "Traffic status" line to logcat (temporary).

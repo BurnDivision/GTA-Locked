@@ -1,5 +1,5 @@
 diff --git a/src/AiCharacterController.cpp b/src/AiCharacterController.cpp
-index 36bc041..b7e15b4 100644
+index 36bc041..605d4af 100644
 --- a/src/AiCharacterController.cpp
 +++ b/src/AiCharacterController.cpp
 @@ -5,6 +5,10 @@
@@ -24,7 +24,7 @@ index 36bc041..b7e15b4 100644
      mFollowPedestrian.reset();
  
      mCtlState.Clear();
-@@ -419,18 +427,223 @@ void AiCharacterController::UpdateDrivingCar()
+@@ -419,18 +427,252 @@ void AiCharacterController::UpdateDrivingCar()
      }
  }
  
@@ -194,6 +194,7 @@ index 36bc041..b7e15b4 100644
 +    if (mDriveIgnoreGapTime > 0.0f)
 +    {
 +        mDriveIgnoreGapTime -= gTimeManager.mGameFrameDelta;
++        targetSpeed = std::min(targetSpeed, slowSpeed); // push on gently
 +    }
 +    for (Vehicle* other: gGameObjectsManager.mVehiclesList)
 +    {
@@ -207,7 +208,20 @@ index 36bc041..b7e15b4 100644
 +            continue;
 +        const float side = fabsf(forward.x * toOther.y - forward.y * toOther.x);
 +        if (side > Convert::MapUnitsToMeters(0.6f))
-+            continue;
++        {
++            // crossing traffic: another vehicle close by, inside a forward cone (about 45 degrees)
++            const float distance = glm::length(toOther);
++            if (along < distance * 0.7f ||
++                distance > selfHalfLength + GetVehicleHalfLength(other) + margin + Convert::MapUnitsToMeters(0.5f))
++                continue;
++            // if we are in front of it as well, only one of the two waits (fixed tie-break) so they can't deadlock
++            const glm::vec2 otherForward = other->mTransform.GetDirectionVector();
++            const float otherAlong = glm::dot(-toOther, otherForward);
++            if (otherAlong > distance * 0.7f && car < other)
++                continue; // it yields to us
++            targetSpeed = 0.0f;
++            break;
++        }
 +        const float clearDistance = along - selfHalfLength - GetVehicleHalfLength(other);
 +        if (clearDistance < margin)
 +        {
@@ -218,6 +232,21 @@ index 36bc041..b7e15b4 100644
 +        {
 +            targetSpeed = std::min(targetSpeed, slowSpeed);
 +        }
++    }
++
++    // backing away from an obstacle
++    if (mDriveReverseTime > 0.0f)
++    {
++        mDriveReverseTime -= gTimeManager.mGameFrameDelta;
++        mCtlState.Clear();
++        mCtlState.mAcceleration = -1.0f;
++        mCtlState.mSteerDirection = -glm::clamp(diff * 2.0f, -1.0f, 1.0f);
++        if (mDriveReverseTime <= 0.0f)
++        {
++            mDriveHasWaypoint = false; // re-plan from where we ended up
++            return false;
++        }
++        return true;
 +    }
 +
 +    mCtlState.Clear();
@@ -245,14 +274,14 @@ index 36bc041..b7e15b4 100644
 +
 +    mDriveWaitTime = 0.0f;
 +
-+    // stuck (blocked by something): give up after a while
-+    if (fabsf(speed) < 0.2f) mDriveStuckTime += gTimeManager.mGameFrameDelta;
++    // stuck against something: don't keep pushing (every contact frame damages the car,
++    // so a few seconds of pushing would set it on fire), back off and re-plan instead
++    if (fabsf(speed) < 0.3f && mCtlState.mAcceleration > 0.0f) mDriveStuckTime += gTimeManager.mGameFrameDelta;
 +    else mDriveStuckTime = 0.0f;
-+    if (mDriveStuckTime > 4.0f)
++    if (mDriveStuckTime > 0.8f)
 +    {
 +        mDriveStuckTime = 0.0f;
-+        mDriveHasWaypoint = false;
-+        return false;
++        mDriveReverseTime = 1.0f;
 +    }
 +    return true;
 +}
@@ -261,10 +290,10 @@ index 36bc041..b7e15b4 100644
  {
      if (pedestrian == mCharacter || pedestrian == nullptr)
 diff --git a/src/AiCharacterController.h b/src/AiCharacterController.h
-index d2483f9..10ec748 100644
+index d2483f9..135e294 100644
 --- a/src/AiCharacterController.h
 +++ b/src/AiCharacterController.h
-@@ -91,4 +91,15 @@ private:
+@@ -91,4 +91,16 @@ private:
      float mFollowFarDistance;
  
      bool mRunToTarget = false;
@@ -279,6 +308,7 @@ index d2483f9..10ec748 100644
 +    int mDriveTargetY = 0;
 +    float mDriveWaitTime = 0.0f; // time spent waiting behind another vehicle
 +    float mDriveIgnoreGapTime = 0.0f; // > 0: pushing on after a long wait (breaks deadlocks)
++    float mDriveReverseTime = 0.0f; // > 0: backing away from an obstacle
  };
 \ No newline at end of file
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
@@ -948,6 +978,30 @@ index 7cc7edb..3fb7074 100644
  }
  
  void TrafficManager::RemoveOffscreenCars()
+diff --git a/src/Vehicle.cpp b/src/Vehicle.cpp
+index 3847938..6260526 100644
+--- a/src/Vehicle.cpp
++++ b/src/Vehicle.cpp
+@@ -674,6 +674,19 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
+         }
+         if (damageInfo.mContactImpulse < 100.0f) // todo: magic numbers
+             return false;
++        // traffic: scrapes between two AI-driven cars only count when the hit is hard
++        // (every contact frame adds damage, so long scrapes in traffic would set cars on fire);
++        // collisions with the player or with parked cars are unchanged
++        if (damageInfo.mDamageCause == eDamageCause_Collision && damageInfo.mContactImpulse < 2000.0f)
++        {
++            auto IsAiDriven = [](const Vehicle* vehicle)
++            {
++                Pedestrian* driver = vehicle->GetCarDriver();
++                return driver && !driver->IsHumanPlayerCharacter();
++            };
++            if (IsAiDriven(this) && IsAiDriven(static_cast<const Vehicle*>(damageInfo.mSourceObject)))
++                return false;
++        }
+ 
+         glm::vec2 localPoint = mPhysicsBody->GetLocalPoint(damageInfo.mContactPoint.mPosition);
+ 
 diff --git a/src/Vehicle.h b/src/Vehicle.h
 index 0d3a52f..e691f13 100644
 --- a/src/Vehicle.h
