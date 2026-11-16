@@ -1,5 +1,273 @@
+diff --git a/src/AiCharacterController.cpp b/src/AiCharacterController.cpp
+index 36bc041..6b217df 100644
+--- a/src/AiCharacterController.cpp
++++ b/src/AiCharacterController.cpp
+@@ -5,6 +5,10 @@
+ #include "CarnageGame.h"
+ #include "DebugRenderer.h"
+ #include "BroadcastEventsManager.h"
++#include "GameMapManager.h"
++#include "GameObjectsManager.h"
++#include "Vehicle.h"
++#include "TimeManager.h"
+ 
+ //////////////////////////////////////////////////////////////////////////
+ 
+@@ -367,6 +371,10 @@ bool AiCharacterController::ContinueWalkToWaypoint(float distance)
+ void AiCharacterController::StartDrivingCar()
+ {
+     mAiMode = ePedestrianAiMode_DrivingCar;
++    mDriveHasWaypoint = false;
++    mDriveDirX = 0;
++    mDriveDirY = 0;
++    mDriveStuckTime = 0.0f;
+     mFollowPedestrian.reset();
+ 
+     mCtlState.Clear();
+@@ -419,18 +427,210 @@ void AiCharacterController::UpdateDrivingCar()
+     }
+ }
+ 
+-bool AiCharacterController::ChooseDriveWaypoint()
+-{
+-    // todo: implement
+-    return false;
+-}
+-
+-bool AiCharacterController::ContinueDriveToWaypoint()
+-{
+-    // todo: implement
+-    return false;
+-}
+-
++// topmost solid block at map cell, or nullptr
++static const MapBlockInfo* GetTopBlock(int mapx, int mapy)
++{
++    for (int iz = (MAP_LAYERS_COUNT - 1); iz > 0; --iz)
++    {
++        const MapBlockInfo* mapBlock = gGameMap.GetBlockInfo(mapx, mapy, iz);
++        if (mapBlock->mGroundType != eGroundType_Air)
++            return mapBlock;
++    }
++    return nullptr;
++}
++
++static bool IsDrivableRoad(const MapBlockInfo* mapBlock)
++{
++    return mapBlock && (mapBlock->mGroundType == eGroundType_Road) && !mapBlock->mIsRailway;
++}
++
++// number of lane directions on a road block
++static int CountLaneDirections(const MapBlockInfo* mapBlock)
++{
++    if (!mapBlock)
++        return 0;
++    return (mapBlock->mRightDirection ? 1 : 0) + (mapBlock->mLeftDirection ? 1 : 0) +
++        (mapBlock->mDownDirection ? 1 : 0) + (mapBlock->mUpDirection ? 1 : 0);
++}
++
++// half of the chassis length, meters
++static float GetVehicleHalfLength(const Vehicle* vehicle)
++{
++    glm::vec2 corners[4];
++    vehicle->GetChassisCornersLocal(corners);
++    return fabsf(corners[1].x - corners[0].x) * 0.5f;
++}
++
++bool AiCharacterController::ChooseDriveWaypoint()
++{
++    mDriveHasWaypoint = false;
++    if (!mCharacter->IsCarDriver())
++        return false;
++
++    Vehicle* car = mCharacter->mCurrentCar;
++    const glm::vec3& carPos = car->mTransform.mPosition;
++    const int mapx = (int) floorf(Convert::MetersToMapUnits(carPos.x));
++    const int mapy = (int) floorf(Convert::MetersToMapUnits(carPos.z));
++
++    const MapBlockInfo* current = GetTopBlock(mapx, mapy);
++    if (!IsDrivableRoad(current))
++        return false;
++
++    if (mDriveDirX == 0 && mDriveDirY == 0)
++    {
++        // initial lane direction from the car heading (0 deg = +x, 90 deg = +y)
++        glm::vec2 dir = car->mTransform.GetDirectionVector();
++        if (fabsf(dir.x) > fabsf(dir.y)) mDriveDirX = (dir.x > 0.0f) ? 1 : -1;
++        else mDriveDirY = (dir.y > 0.0f) ? 1 : -1;
++    }
++
++    // lane directions allowed on this block: right = +x, left = -x, down = +y, up = -y
++    struct Dir { int x, y; };
++    Dir options[4];
++    int numOptions = 0;
++    if (current->mRightDirection) options[numOptions++] = { 1, 0 };
++    if (current->mLeftDirection)  options[numOptions++] = { -1, 0 };
++    if (current->mDownDirection)  options[numOptions++] = { 0, 1 };
++    if (current->mUpDirection)    options[numOptions++] = { 0, -1 };
++
++    cxx::randomizer& random = gCarnageGame.mGameRand;
++    Dir candidates[4];
++    int numCandidates = 0;
++    bool straightAllowed = false;
++    for (int i = 0; i < numOptions; ++i)
++    {
++        if (options[i].x == -mDriveDirX && options[i].y == -mDriveDirY)
++            continue; // no U-turns
++        if (!IsDrivableRoad(GetTopBlock(mapx + options[i].x, mapy + options[i].y)))
++            continue;
++        if (options[i].x == mDriveDirX && options[i].y == mDriveDirY)
++            straightAllowed = true;
++        candidates[numCandidates++] = options[i];
++    }
++
++    Dir chosen = { mDriveDirX, mDriveDirY };
++    if (numCandidates > 0)
++    {
++        // prefer going straight, sometimes turn at junctions
++        if (!(straightAllowed && random.random_chance(70)))
++        {
++            chosen = candidates[random.generate_int(0, numCandidates - 1)];
++        }
++    }
++    else if (!IsDrivableRoad(GetTopBlock(mapx + mDriveDirX, mapy + mDriveDirY)))
++    {
++        return false; // dead end
++    }
++
++    // aim at the centre of the next block; it is "reached" as soon as the car enters it,
++    // so the target always stays ahead of the car and it can't circle around it
++    mDriveDirX = chosen.x;
++    mDriveDirY = chosen.y;
++    mDriveTargetX = mapx + chosen.x;
++    mDriveTargetY = mapy + chosen.y;
++    mDestinationPoint.x = Convert::MapUnitsToMeters(mDriveTargetX + 0.5f);
++    mDestinationPoint.y = Convert::MapUnitsToMeters(mDriveTargetY + 0.5f);
++    mDriveSegmentTime = 0.0f;
++    mDriveHasWaypoint = true;
++    return true;
++}
++
++bool AiCharacterController::ContinueDriveToWaypoint()
++{
++    if (!mDriveHasWaypoint || !mCharacter->IsCarDriver())
++        return false;
++
++    Vehicle* car = mCharacter->mCurrentCar;
++    const glm::vec2 carPos2 (car->mTransform.mPosition.x, car->mTransform.mPosition.z);
++    const int mapx = (int) floorf(Convert::MetersToMapUnits(carPos2.x));
++    const int mapy = (int) floorf(Convert::MetersToMapUnits(carPos2.y));
++    if (mapx == mDriveTargetX && mapy == mDriveTargetY)
++    {
++        mDriveHasWaypoint = false; // entered the target block, pick the next one
++        return false;
++    }
++
++    mDriveSegmentTime += gTimeManager.mGameFrameDelta;
++    if (mDriveSegmentTime > 6.0f)
++    {
++        mDriveHasWaypoint = false; // took too long (pushed off course), re-plan from here
++        return false;
++    }
++
++    // steer towards the target (positive angle difference = steer towards increasing heading)
++    const glm::vec2 toTarget = mDestinationPoint - carPos2;
++    const float desired = atan2f(toTarget.y, toTarget.x);
++    float diff = desired - car->mTransform.mOrientation.to_radians();
++    while (diff > glm::pi<float>()) diff -= glm::two_pi<float>();
++    while (diff < -glm::pi<float>()) diff += glm::two_pi<float>();
++
++    const float speed = car->GetCurrentSpeed();
++    const float cruiseSpeed = Convert::MapUnitsToMeters(1.5f); // blocks per second
++    const float slowSpeed = Convert::MapUnitsToMeters(0.8f);
++
++    // slow down while turning and before junctions, so the car can make the corner
++    float targetSpeed = cruiseSpeed;
++    if (fabsf(diff) > 0.3f || CountLaneDirections(GetTopBlock(mDriveTargetX, mDriveTargetY)) > 1)
++    {
++        targetSpeed = slowSpeed;
++    }
++
++    // keep a gap to vehicles ahead (bumper to bumper, plus a braking distance that grows with speed)
++    const glm::vec2 forward = car->mTransform.GetDirectionVector();
++    const float selfHalfLength = GetVehicleHalfLength(car);
++    const float margin = Convert::MapUnitsToMeters(0.3f) + fabsf(speed) * 0.5f;
++    for (Vehicle* other: gGameObjectsManager.mVehiclesList)
++    {
++        if (other == car || other->IsMarkedForDeletion())
++            continue;
++        const glm::vec2 toOther (other->mTransform.mPosition.x - carPos2.x, other->mTransform.mPosition.z - carPos2.y);
++        const float along = glm::dot(toOther, forward);
++        if (along <= 0.0f)
++            continue;
++        const float side = fabsf(forward.x * toOther.y - forward.y * toOther.x);
++        if (side > Convert::MapUnitsToMeters(0.6f))
++            continue;
++        const float clearDistance = along - selfHalfLength - GetVehicleHalfLength(other);
++        if (clearDistance < margin)
++        {
++            targetSpeed = 0.0f;
++            break;
++        }
++        if (clearDistance < margin + Convert::MapUnitsToMeters(1.0f))
++        {
++            targetSpeed = std::min(targetSpeed, slowSpeed);
++        }
++    }
++
++    mCtlState.Clear();
++    mCtlState.mSteerDirection = glm::clamp(diff * 2.0f, -1.0f, 1.0f);
++    if (speed < targetSpeed) mCtlState.mAcceleration = 1.0f;
++    else if (speed > targetSpeed + 0.5f) mCtlState.mAcceleration = -1.0f; // brake
++    if (targetSpeed <= 0.0f)
++    {
++        mCtlState.mSteerDirection = 0.0f;
++        if (fabsf(speed) < 0.5f)
++        {
++            mCtlState.mAcceleration = 0.0f;
++            mCtlState.mHandBrake = true; // hold still, don't creep into the car ahead
++        }
++        mDriveSegmentTime = 0.0f; // waiting in traffic is not being stuck
++        mDriveStuckTime = 0.0f;
++        return true;
++    }
++
++    // stuck (blocked by something): give up after a while
++    if (fabsf(speed) < 0.2f) mDriveStuckTime += gTimeManager.mGameFrameDelta;
++    else mDriveStuckTime = 0.0f;
++    if (mDriveStuckTime > 4.0f)
++    {
++        mDriveStuckTime = 0.0f;
++        mDriveHasWaypoint = false;
++        return false;
++    }
++    return true;
++}
++
+ void AiCharacterController::FollowPedestrian(Pedestrian* pedestrian)
+ {
+     if (pedestrian == mCharacter || pedestrian == nullptr)
+diff --git a/src/AiCharacterController.h b/src/AiCharacterController.h
+index d2483f9..9c171e1 100644
+--- a/src/AiCharacterController.h
++++ b/src/AiCharacterController.h
+@@ -91,4 +91,13 @@ private:
+     float mFollowFarDistance;
+ 
+     bool mRunToTarget = false;
++
++    // traffic driving (perspective-lock builds)
++    bool mDriveHasWaypoint = false;
++    int mDriveDirX = 0; // current lane direction, map units (x)
++    int mDriveDirY = 0; // current lane direction, map units (y = world z)
++    float mDriveStuckTime = 0.0f;
++    float mDriveSegmentTime = 0.0f; // time spent heading to the current target block
++    int mDriveTargetX = 0; // target block, map units
++    int mDriveTargetY = 0;
+ };
+\ No newline at end of file
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
-index bb509f8..9d42c40 100644
+index bb509f8..debb9b8 100644
 --- a/src/CarnageGame.cpp
 +++ b/src/CarnageGame.cpp
 @@ -63,7 +63,9 @@ bool CarnageGame::Initialize()
@@ -63,7 +331,7 @@ index bb509f8..9d42c40 100644
      if (inputEvent.HasPressed(eKeycode_C))
      {
          gGameCheatsWindow.mWindowShown = !gGameCheatsWindow.mWindowShown;
-@@ -277,6 +315,39 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
+@@ -277,6 +315,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
      }
  }
  
@@ -96,6 +364,12 @@ index bb509f8..9d42c40 100644
 +    {
 +        area.h = static_cast<int>(screenResolution.x / targetAspect + 0.5f);
 +        area.y = (screenResolution.y - area.h) / 2;
++        if (screenResolution.y > screenResolution.x)
++        {
++            // portrait: keep only a small bar above the view, leave the space below it for touch controls
++            const int topMargin = static_cast<int>(0.12f * screenResolution.x);
++            area.y = std::min(area.y, topMargin);
++        }
 +    }
 +    return area;
 +}
@@ -103,7 +377,7 @@ index bb509f8..9d42c40 100644
  void CarnageGame::SetupScreenLayout()
  {   
      const int MaxCols = 2;
-@@ -284,7 +355,8 @@ void CarnageGame::SetupScreenLayout()
+@@ -284,7 +361,8 @@ void CarnageGame::SetupScreenLayout()
  
      debug_assert(playersCount > 0);
  
@@ -113,7 +387,7 @@ index bb509f8..9d42c40 100644
  
      int numRows = (playersCount + MaxCols - 1) / MaxCols;
      debug_assert(numRows > 0);
-@@ -303,10 +375,16 @@ void CarnageGame::SetupScreenLayout()
+@@ -303,10 +381,16 @@ void CarnageGame::SetupScreenLayout()
          debug_assert(colsOnCurrentRow > 0);
          int frameSizePerW = screenResolution.x / colsOnCurrentRow;
  
@@ -399,6 +673,19 @@ index 3e02e64..0fba3b4 100644
      }
  
      mOnScreenMapArea = areaBounds;
+diff --git a/src/GameCheatsWindow.h b/src/GameCheatsWindow.h
+index f2b5e03..158e417 100644
+--- a/src/GameCheatsWindow.h
++++ b/src/GameCheatsWindow.h
+@@ -15,7 +15,7 @@ public:
+     bool mEnableDrawVehicles = true;
+     bool mEnableDrawCityMesh = true;
+     bool mEnableTrafficPedsGeneration = true;
+-    bool mEnableTrafficCarsGeneration = false;
++    bool mEnableTrafficCarsGeneration = true; // on by default in perspective-lock builds (upstream ships it off)
+ 
+ public:
+     GameCheatsWindow();
 diff --git a/src/GpuBuffer.cpp b/src/GpuBuffer.cpp
 index 2b9f269..52c8066 100644
 --- a/src/GpuBuffer.cpp
@@ -617,6 +904,35 @@ index e0c0b12..e6ff6bb 100644
  
  private:
      bool mQuitRequested;
+diff --git a/src/TrafficManager.cpp b/src/TrafficManager.cpp
+index 7cc7edb..3fb7074 100644
+--- a/src/TrafficManager.cpp
++++ b/src/TrafficManager.cpp
+@@ -297,6 +297,16 @@ void TrafficManager::GenerateCars()
+     mLastGenCarsTime = gTimeManager.mGameTime;
+ 
+     RemoveOffscreenCars();
++    {
++        int trafficCars = 0, movingCars = 0;
++        for (Vehicle* car: gGameObjectsManager.mVehiclesList)
++        {
++            if (!car->IsTrafficFlag() || car->IsMarkedForDeletion()) continue;
++            ++trafficCars;
++            if (car->GetCurrentSpeed() > 0.5f) ++movingCars;
++        }
++        gConsole.LogMessage(eLogMessage_Debug, "Traffic status: %d cars, %d moving", trafficCars, movingCars);
++    }
+ 
+     if (!gGameCheatsWindow.mEnableTrafficCarsGeneration)
+         return;
+@@ -399,6 +409,7 @@ void TrafficManager::GenerateTrafficCars(int carsCount, GameCamera& view)
+ 
+         GenerateRandomTrafficCar(candidate.mMapX, candidate.mMapLayer, candidate.mMapY);
+     }
++    gConsole.LogMessage(eLogMessage_Debug, "Traffic: %d car(s) requested, %d road candidates", carsCount, (int) mCandidatePosArray.size() + numCarsGenerated);
+ }
+ 
+ void TrafficManager::RemoveOffscreenCars()
 diff --git a/src/android/gles_glew_compat.h b/src/android/gles_glew_compat.h
 new file mode 100644
 index 0000000..70113b2
@@ -647,10 +963,10 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..c7748aa
+index 0000000..2f5757c
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
-@@ -0,0 +1,707 @@
+@@ -0,0 +1,713 @@
 +// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
 +#include <SDL.h>
 +#include "glfw_sdl_shim.h"
@@ -783,6 +1099,12 @@ index 0000000..c7748aa
 +        gScreenW = w; gScreenH = h;
 +        float u = (float)((w < h) ? w : h); // short side
 +        float W = (float)w, H = (float)h;
++        // portrait with the game view near the top: size the controls to the space below it
++        if (gViewH > 0 && h > w)
++        {
++            const float bottomBar = (float)(h - (gViewY + gViewH));
++            if (bottomBar > 0.2f * u && bottomBar < 0.42f * u) u = bottomBar / 0.42f;
++        }
 +        gDPadR = 0.17f * u;
 +        gDPadX = 0.06f * u + gDPadR;
 +        gDPadY = H - 0.06f * u - gDPadR;

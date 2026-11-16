@@ -21,7 +21,7 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
-| **Android app** | **Working.** Release APK 0.3.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
+| **Android app** | **Working.** Release APK 0.3.1 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
 | **Aspect ratios** | **Auto, 16:9, 4:3 or fill**, with black bars as needed. Auto picks 4:3 on a foldable's unfolded screen and 16:9 when folded. Works on Android and desktop |
 
 ## Layout
@@ -57,7 +57,12 @@ Set `g_gtadata` in `gamedata/config/sys_config.json` to your `GTADATA` folder.
 * **Game data:** the APK does **not** contain GTA data. On first launch, tap
   **Import GTA data folder** and pick your `GTADATA` folder (or the game folder that holds it).
   It's copied into the app's storage.
-* **Requirements:** Android 8.0+ (API 26), GLES 3.0. Landscape only.
+* **Requirements:** Android 8.0+ (API 26), GLES 3.0.
+* **Orientation:** phones are landscape only. Tablets and unfolded foldables
+  (smallest width ≥ 600 dp) follow the system rotation setting, in portrait or landscape.
+* **Traffic:** AI traffic is on by default (upstream Carnage3D ships it off and has no car
+  driving AI). This build adds simple lane-following drivers: they follow the map's lane
+  directions, turn at junctions, slow down for corners and keep a gap to the car ahead.
 
 Touch layout:
 * **Left thumb pad:** Up = forward, Down = back, Left/Right = turn.

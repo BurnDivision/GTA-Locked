@@ -289,3 +289,24 @@ User intent: 4:3 is meant for the unfolded screen of foldables like their Galaxy
   - Screenshots: `android/shots/fold_auto_v2.png`.
 - Version 0.3.0 (versionCode 3). Cumulative patch sha256 2b75a533… (21 files, +1222/−46).
 - Release `android/dist/GTA-Perspective-Lock-0.3.0.apk`, SHA-256 `f374d7747a378882d6b8c49607c9f4e20989e017e0a5a3b39dcefc736478df10`; release smoke test at the Fold7 inner size: no crashes.
+
+## 2026-11-16 — Rotation on foldables + traffic, 0.3.1 (in progress)
+
+User report: "There are no cars. And I can't rotate on the unfolded screen."
+
+- **Rotation:** `OrientationPolicy` lets screens with smallest width ≥ 600 dp (an unfolded
+  Fold7, tablets) use `fullUser` orientation, so the system rotate button works there. Phones
+  stay landscape. SDL's own orientation hint is overridden in `GameActivity`. Emulator check at
+  the Fold7 inner size, rotated to portrait: "Surface resized to 1968x2184". The view sits at the
+  top with LOCK/AUTO in the top bar and the controls below it.
+- **No cars, cause:** upstream Carnage3D ships traffic generation off, and its AI car driving is
+  a TODO stub, so drivers left their cars at once.
+- **Fix:** traffic is on by default, and `AiCharacterController` gains a lane-following driver:
+  - follows the map's block lane directions, never U-turns, and goes straight 70% of the time at junctions;
+  - aims at the next block centre and picks a new target on entering it (an earlier
+    point-chasing version overshot corners and circled until the car wrecked);
+  - slows for corners and junctions, and keeps a length-aware gap to the vehicle ahead;
+  - re-plans after 6 s on one block or 4 s stuck.
+- Emulator traces confirm clean turns and lane following. The latest gap-keeping change
+  had not been tested on the device yet because codebox stopped responding.
+- `TrafficManager` logs a debug-level "Traffic status" line to logcat (temporary).
