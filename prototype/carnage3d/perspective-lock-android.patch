@@ -553,7 +553,7 @@ index feb69e3..4610835 100644
      if (gCvarCurrentBaseDir.mValue.empty())
      {
 diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
-index 4a53905..d95cd7f 100644
+index 4a53905..29b4261 100644
 --- a/src/FollowCameraController.cpp
 +++ b/src/FollowCameraController.cpp
 @@ -4,6 +4,62 @@
@@ -684,7 +684,7 @@ index 4a53905..d95cd7f 100644
  }
  
  void FollowCameraController::UpdateFrame()
-@@ -42,42 +136,173 @@ void FollowCameraController::UpdateFrame()
+@@ -42,42 +136,177 @@ void FollowCameraController::UpdateFrame()
      if (mFollowPedestrian == nullptr)
          return;
  
@@ -725,13 +725,7 @@ index 4a53905..d95cd7f 100644
 -    // todo: temporary implementation
 -    if (mFollowPedestrian->IsCarPassenger())
 +    if (rotating && dynamic)
-     {
--        glm::vec2 carVelocity = mFollowPedestrian->mCurrentCar->mPhysicsBody->GetLinearVelocity();
--        float carSpeed = glm::length(carVelocity);
--        carVelocity = glm::normalize(carVelocity);
--        position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
--        position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
--        catchSpeed *= 0.3f; // todo: magic numbers
++    {
 +        // look ahead along the body heading, so the player moves towards the bottom of the screen
 +        // as they speed up: up to ~35% of the half view height on foot, ~55% in a car
 +        const float viewHalfHeight = cameraHeight * 0.52f; // tan(55 deg fov / 2)
@@ -745,7 +739,13 @@ index 4a53905..d95cd7f 100644
 +        }
 +    }
 +    else
-+    {
+     {
+-        glm::vec2 carVelocity = mFollowPedestrian->mCurrentCar->mPhysicsBody->GetLinearVelocity();
+-        float carSpeed = glm::length(carVelocity);
+-        carVelocity = glm::normalize(carVelocity);
+-        position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
+-        position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
+-        catchSpeed *= 0.3f; // todo: magic numbers
 +        mLookAhead = 0.0f;
 +        // original follow behaviour
 +        if (inCar)
@@ -825,6 +825,10 @@ index 4a53905..d95cd7f 100644
 +    {
 +        const float carSpeed = glm::length(velocity);
 +        maxRate = glm::radians(glm::mix(120.0f, 400.0f, glm::clamp(carSpeed / 8.0f, 0.0f, 1.0f)));
++    }
++    else if (trackingTravel)
++    {
++        maxRate = glm::radians(240.0f); // on foot the view never swings faster than ~4 degrees per frame
      }
 +    mCameraHeading = reperspective::SmoothAngle(mCameraHeading, targetHeading, deltaTime, timeConstant, maxRate);
 +    ApplyHeading(mCameraHeading);
@@ -880,7 +884,7 @@ index 4a53905..d95cd7f 100644
  {
      mScrollHeightOffset = glm::clamp(mScrollHeightOffset - inputEvent.mScrollY, -3.0f, 23.0f);
  }
-@@ -85,6 +310,13 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -85,6 +314,13 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
  void FollowCameraController::SetFollowTarget(Pedestrian* pedestrian)
  {
      mFollowPedestrian = pedestrian;
@@ -1176,7 +1180,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..9ebaa40 100644
+index a13af22..3cb690f 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,5 +1,23 @@
@@ -1298,7 +1302,7 @@ index a13af22..9ebaa40 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +455,347 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +455,355 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -1551,16 +1555,20 @@ index a13af22..9ebaa40 100644
 +    ts.mMaxCameraStep = glm::max(ts.mMaxCameraStep, fabsf(reperspective::AngleDelta(ts.mLastCameraHeading, cameraHeading)));
 +    ts.mLastCameraHeading = cameraHeading;
 +
++    // new projectiles = alive now but not in the previous frame (objects get recycled, so compare frame to frame)
++    std::unordered_set<const void*> aliveProjectiles;
 +    for (GameObject* object: gGameObjectsManager.mAllObjects)
 +    {
-+        if (!object->IsProjectileClass())
++        if (!object->IsProjectileClass() || object->IsMarkedForDeletion())
 +            continue;
-+        if (ts.mSeenProjectiles.insert(object).second)
++        aliveProjectiles.insert(object);
++        if (ts.mSeenProjectiles.count(object) == 0)
 +        {
 +            ++ts.mShots;
 +            ts.mLastShotHeading = object->mTransform.mOrientation.to_degrees();
 +        }
 +    }
++    ts.mSeenProjectiles.swap(aliveProjectiles);
 +
 +    ts.mLogTimer += deltaTime;
 +    if (ts.mLogTimer >= ts.mLogInterval)
@@ -1572,8 +1580,8 @@ index a13af22..9ebaa40 100644
 +        const float speed = glm::length(velocity);
 +        const float bodyHeading = inCar ? mCharacter->mCurrentCar->mTransform.mOrientation.to_degrees() : mCharacter->mTransform.mOrientation.to_degrees();
 +        gConsole.LogMessage(eLogMessage_Debug,
-+            "RPT t=%.2f mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f pos=%.2f,%.2f",
-+            ts.mTime, gCvarCameraMode.mValue.c_str(), gCvarControlScheme.mValue.c_str(), ts.mTwinStick ? 1 : 0, inCar ? 1 : 0,
++            "RPT t=%.2f wpn=%d mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f pos=%.2f,%.2f",
++            ts.mTime, (int) mCharacter->mCurrentWeapon, gCvarCameraMode.mValue.c_str(), gCvarControlScheme.mValue.c_str(), ts.mTwinStick ? 1 : 0, inCar ? 1 : 0,
 +            glm::degrees(cameraHeading), bodyHeading, (speed > 0.05f) ? glm::degrees(atan2f(velocity.y, velocity.x)) : 0.0f, speed,
 +            ts.mMoving ? 1 : 0, glm::degrees(ts.mMoveHeading), mFollowCameraController.mHints.mAiming ? 1 : 0, ts.mFire ? 1 : 0,
 +            ts.mShots, ts.mLastShotHeading, glm::degrees(ts.mMaxCameraStep),
@@ -1618,7 +1626,11 @@ index a13af22..9ebaa40 100644
 +        glm::vec3 position = mCharacter->mTransform.mPosition;
 +        position.x -= side.y * 1.5f;
 +        position.z += side.x * 1.5f;
-+        Vehicle* car = gGameObjectsManager.CreateVehicle(position, mCharacter->mTransform.mOrientation, eVehicle_BeastGTS_1);
++        Vehicle* car = nullptr;
++        if (!gGameMap.mStyleData.mVehicles.empty())
++        {
++            car = gGameObjectsManager.CreateVehicle(position, mCharacter->mTransform.mOrientation, &gGameMap.mStyleData.mVehicles[0]);
++        }
 +        ts.mCar = car;
 +        gConsole.LogMessage(eLogMessage_Debug, "RPT car spawned=%d", car ? 1 : 0);
 +    }
@@ -1647,7 +1659,7 @@ index a13af22..9ebaa40 100644
  {
      const auto& mapping = mActionsMapping.mActionToKeys[action];
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..63994b5 100644
+index c272fba..9a12ff4 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
 @@ -5,6 +5,8 @@
@@ -1682,7 +1694,7 @@ index c272fba..63994b5 100644
 +    float mMaxCameraStep = 0.0f; // radians per frame since the last log line
 +    int mShots = 0;
 +    float mLastShotHeading = 0.0f;
-+    std::unordered_set<const void*> mSeenProjectiles;
++    std::unordered_set<const void*> mSeenProjectiles; // projectiles alive in the previous frame
 +    GamepadState mPad {};
 +    bool mTwinStick = false;
 +    bool mMoving = false;

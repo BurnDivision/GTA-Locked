@@ -258,12 +258,8 @@ public class LauncherActivity extends Activity {
             want = "0";
         }
         if (marker.exists() && want.equals(readSmall(marker))) return;
-        String keepAspect = configFile().exists() ? readAspect() : null;
-        String keepTouch = EngineConfig.get(this, "touch_controls", null);
         setStatus("Unpacking engine data...");
         copyAssetDir(getAssets(), "gamedata", target);
-        if (keepAspect != null) writeAspect(keepAspect);
-        if (keepTouch != null) EngineConfig.put(this, "touch_controls", keepTouch);
         try (OutputStream o = new FileOutputStream(marker)) {
             o.write(want.getBytes());
         }
@@ -284,6 +280,17 @@ public class LauncherActivity extends Activity {
         if (list == null || list.length == 0) {
             // a file
             dst.getParentFile().mkdirs();
+            if ("gamedata/config/sys_config.json".equals(path)) {
+                try (InputStream in = am.open(path)) {
+                    java.io.ByteArrayOutputStream defaults = new java.io.ByteArrayOutputStream();
+                    pipe(in, defaults);
+                    ConfigMerge.install(dst.toPath(),
+                            new String(defaults.toByteArray(), StandardCharsets.UTF_8),
+                            message -> Log.w(TAG, message));
+                }
+                return;
+            }
+            // inputs.json intentionally receives the new default layout on each update.
             try (InputStream in = am.open(path); OutputStream out = new FileOutputStream(dst)) {
                 pipe(in, out);
             }
