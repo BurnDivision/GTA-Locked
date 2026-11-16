@@ -458,3 +458,7 @@ Design notes and the full test list are in `docs/CAMERA_CONTROLS.md`.
 - **Engine sync method:** codebox rebuilds upstream plus the repo patch in a scratch tree and copies
   only differing files (`tools/sync_from_repo.sh`, with backups).
 - Version 0.5.0 (versionCode 7).
+- Release `android/dist/GTA-Perspective-Lock-0.5.0.apk` (versionCode 7), SHA-256
+  `30fe7aa3df329daf58599d2b87d039d8f24ccb8fcd3f086808ddc6d84118927f`. Built with the merged
+  fail-fast `tools/release.sh` (its first real run: Gradle OK, single APK, both ABIs present).
+- Handoff for other agents: `agent-coordination/STATE_HANDOFF.md` on the T7.
