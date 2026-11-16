@@ -1180,7 +1180,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..3cb690f 100644
+index a13af22..df03020 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,5 +1,23 @@
@@ -1258,7 +1258,7 @@ index a13af22..3cb690f 100644
 +
 +    // Analog sticks and triggers send no input events, so their motion starts input processing,
 +    // but only while the game has the input focus (not after a UI window or other handler took it).
-+    const bool uiCapture = IsUiCapturingInput() && !mTestScript.mActive;
++    const bool uiCapture = IsUiCapturingInput();
 +    if (!mInputFocusLost && !uiCapture)
 +    {
 +        const GamepadState& pad = GetPadState();
@@ -1302,7 +1302,7 @@ index a13af22..3cb690f 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +455,355 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +455,358 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -1543,7 +1543,10 @@ index a13af22..3cb690f 100644
 +
 +    const float deltaTime = gTimeManager.mGameFrameDelta;
 +    ts.mTime += deltaTime;
-+    mUpdateInputs = true;
++    if (!mInputFocusLost)
++    {
++        mUpdateInputs = true; // scripted sticks behave like real ones: no input while a UI has the focus
++    }
 +    mGamepadActive = true;
 +    while (ts.mActive && ts.mNextLine < ts.mLines.size() && ts.mLines[ts.mNextLine].mTime <= ts.mTime)
 +    {
@@ -1580,8 +1583,8 @@ index a13af22..3cb690f 100644
 +        const float speed = glm::length(velocity);
 +        const float bodyHeading = inCar ? mCharacter->mCurrentCar->mTransform.mOrientation.to_degrees() : mCharacter->mTransform.mOrientation.to_degrees();
 +        gConsole.LogMessage(eLogMessage_Debug,
-+            "RPT t=%.2f wpn=%d mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f pos=%.2f,%.2f",
-+            ts.mTime, (int) mCharacter->mCurrentWeapon, gCvarCameraMode.mValue.c_str(), gCvarControlScheme.mValue.c_str(), ts.mTwinStick ? 1 : 0, inCar ? 1 : 0,
++            "RPT t=%.2f wpn=%d ui=%d focus=%d mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f pos=%.2f,%.2f",
++            ts.mTime, (int) mCharacter->mCurrentWeapon, IsUiCapturingInput() ? 1 : 0, mInputFocusLost ? 0 : 1, gCvarCameraMode.mValue.c_str(), gCvarControlScheme.mValue.c_str(), ts.mTwinStick ? 1 : 0, inCar ? 1 : 0,
 +            glm::degrees(cameraHeading), bodyHeading, (speed > 0.05f) ? glm::degrees(atan2f(velocity.y, velocity.x)) : 0.0f, speed,
 +            ts.mMoving ? 1 : 0, glm::degrees(ts.mMoveHeading), mFollowCameraController.mHints.mAiming ? 1 : 0, ts.mFire ? 1 : 0,
 +            ts.mShots, ts.mLastShotHeading, glm::degrees(ts.mMaxCameraStep),

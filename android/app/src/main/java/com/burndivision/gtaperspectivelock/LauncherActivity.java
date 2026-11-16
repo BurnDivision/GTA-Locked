@@ -19,6 +19,7 @@ import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.RadioButton;
 import android.widget.RadioGroup;
+import android.widget.ScrollView;
 import android.widget.TextView;
 
 import java.io.File;
@@ -48,6 +49,16 @@ public class LauncherActivity extends Activity {
     private Button playButton;
     private RadioGroup aspectGroup;
     private RadioGroup touchGroup;
+    // engine settings shown as radio rows: {config key, default, values..., labels...}
+    private final java.util.List<RadioGroup> settingGroups = new java.util.ArrayList<>();
+    private final java.util.List<TextView> settingTitles = new java.util.ArrayList<>();
+    private static final String[][] SETTINGS = {
+        { "cam_mode", "reperspective", "Camera. Reperspective: you always face up and the city turns. Combat: the view follows your aim (experimental)",
+          "classic|reperspective|combat", "North-up|Reperspective|Combat" },
+        { "cam_smoothing", "fast", "Camera rotation smoothing", "instant|fast|smooth", "Instant|Fast|Smooth" },
+        { "g_controls", "auto", "On-foot controls. Auto: twin-stick with a game controller, classic otherwise",
+          "auto|classic|twinstick", "Auto|Classic|Twin-stick" },
+    };
     private static final String[] TOUCH_MODES = { "auto", "on", "off" };
     private static final String[] TOUCH_LABELS = { "Auto", "Always", "Off" };
     private static final String[] ASPECTS = { "auto", "16:9", "4:3", "fill" };
@@ -147,13 +158,48 @@ public class LauncherActivity extends Activity {
         touchGroup.setVisibility(View.GONE);
         root.addView(touchGroup);
 
+        for (int s = 0; s < SETTINGS.length; ++s) {
+            final String key = SETTINGS[s][0];
+            final String[] values = SETTINGS[s][3].split("\\|");
+            final String[] labels = SETTINGS[s][4].split("\\|");
+            TextView t = new TextView(this);
+            t.setText(SETTINGS[s][2]);
+            t.setTextColor(Color.rgb(200, 200, 200));
+            t.setGravity(Gravity.CENTER);
+            t.setVisibility(View.GONE);
+            root.addView(t);
+            settingTitles.add(t);
+            RadioGroup g = new RadioGroup(this);
+            g.setOrientation(RadioGroup.HORIZONTAL);
+            g.setGravity(Gravity.CENTER);
+            final int baseId = 3000 + s * 10;
+            for (int i = 0; i < values.length; ++i) {
+                RadioButton rb = new RadioButton(this);
+                rb.setId(baseId + i);
+                rb.setText(labels[i]);
+                rb.setTextColor(Color.WHITE);
+                g.addView(rb);
+            }
+            g.setOnCheckedChangeListener((group, id) -> {
+                int i = id - baseId;
+                if (i >= 0 && i < values.length) EngineConfig.put(this, key, values[i]);
+            });
+            g.setVisibility(View.GONE);
+            root.addView(g);
+            settingGroups.add(g);
+        }
+
         playButton = new Button(this);
         playButton.setText("Play");
         playButton.setVisibility(View.GONE);
         playButton.setOnClickListener(v -> startGame());
         root.addView(playButton);
 
-        setContentView(root);
+        ScrollView scroll = new ScrollView(this);
+        scroll.setFillViewport(true);
+        scroll.setBackgroundColor(Color.rgb(16, 16, 20));
+        scroll.addView(root);
+        setContentView(scroll);
     }
 
     private void setStatus(String s) {
@@ -196,6 +242,8 @@ public class LauncherActivity extends Activity {
             playButton.setVisibility(View.GONE);
             aspectGroup.setVisibility(View.GONE);
             touchGroup.setVisibility(View.GONE);
+            for (RadioGroup g : settingGroups) g.setVisibility(View.GONE);
+            for (TextView t : settingTitles) t.setVisibility(View.GONE);
         }
     }
 
@@ -238,6 +286,15 @@ public class LauncherActivity extends Activity {
             if (TOUCH_MODES[i].equals(touch)) touchGroup.check(2000 + i);
         }
         touchGroup.setVisibility(View.VISIBLE);
+        for (int s = 0; s < SETTINGS.length; ++s) {
+            String current = EngineConfig.get(this, SETTINGS[s][0], SETTINGS[s][1]);
+            String[] values = SETTINGS[s][3].split("\\|");
+            for (int i = 0; i < values.length; ++i) {
+                if (values[i].equals(current)) settingGroups.get(s).check(3000 + s * 10 + i);
+            }
+            settingGroups.get(s).setVisibility(View.VISIBLE);
+            settingTitles.get(s).setVisibility(View.VISIBLE);
+        }
     }
 
     private void startGame() {
