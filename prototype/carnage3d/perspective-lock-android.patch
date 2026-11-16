@@ -553,55 +553,92 @@ index feb69e3..4610835 100644
      if (gCvarCurrentBaseDir.mValue.empty())
      {
 diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
-index 4a53905..f0b39c3 100644
+index 4a53905..d4ef793 100644
 --- a/src/FollowCameraController.cpp
 +++ b/src/FollowCameraController.cpp
-@@ -4,6 +4,26 @@
+@@ -4,6 +4,62 @@
  #include "CarnageGame.h"
  #include "Pedestrian.h"
  #include "TimeManager.h"
 +#include "GameParams.h"
++#include "System.h"
 +
-+// GTA Classic Perspective Lock:
-+// The camera's screen-up vector follows the player's world heading (or the heading of the
-+// car they drive), so the player always faces 12 o'clock and the world rotates around them.
-+// Only the view matrix changes: world coordinates, physics, AI and collision are untouched.
++// GTA Classic Reperspective camera.
++// Modes (cam_mode; F9 or the LOCK touch button cycles them):
++//  - classic: the original north-up view;
++//  - reperspective: the travel heading points to the top of the screen and the world rotates around
++//    the player. With tank controls the body heading is the travel heading; with twin-stick controls a
++//    persistent travel heading is followed, and the view holds while the player aims independently;
++//  - combat (experimental): the view follows the aiming direction.
++// In a car the view follows the car's heading in both rotating modes. Only the view matrix changes:
++// world coordinates, physics, AI and collision are untouched.
 +//   ScreenPosition = R(-theta) * (WorldPosition - PlayerPosition)
++
++CvarString gCvarCameraMode("cam_mode", "reperspective", "Camera mode: classic, reperspective or combat", CvarFlags_Archive);
++CvarString gCvarCameraSmoothing("cam_smoothing", "fast", "Camera rotation smoothing: instant, fast or smooth", CvarFlags_Archive);
++CvarBoolean gCvarCameraDynamic("cam_dynamic", true, "Look ahead and trail turns slightly at speed", CvarFlags_Archive);
 +
 +namespace
 +{
-+    const float TwoPi = 6.2831853f;
++    const float NorthUpHeading = -reperspective::kPi * 0.5f; // screen-up = -Z, the original view
 +
-+    // wrap angle to [-pi, pi]
-+    inline float WrapPi(float a)
++    reperspective::Smoothing GetSmoothingPreset()
 +    {
-+        a = fmodf(a + 3.14159265f, TwoPi);
-+        if (a < 0.0f) a += TwoPi;
-+        return a - 3.14159265f;
++        const std::string& value = gCvarCameraSmoothing.mValue;
++        if (value == "instant") return reperspective::Smoothing::Instant;
++        if (value == "smooth") return reperspective::Smoothing::Smooth;
++        return reperspective::Smoothing::Fast;
 +    }
++
++    void PublishViewModeLabel()
++    {
++#ifdef __ANDROID__
++        ::glfwShimSetLockLabel(GetCameraViewModeLabel(GetCameraViewMode()));
++#endif
++    }
++}
++
++eCameraViewMode GetCameraViewMode()
++{
++    const std::string& value = gCvarCameraMode.mValue;
++    if (value == "classic") return eCameraViewMode_Classic;
++    if (value == "combat") return eCameraViewMode_Combat;
++    return eCameraViewMode_Reperspective;
++}
++
++const char* GetCameraViewModeLabel(eCameraViewMode viewMode)
++{
++    switch (viewMode)
++    {
++        case eCameraViewMode_Classic: return "NORTH";
++        case eCameraViewMode_Combat: return "AIM";
++        default: break;
++    }
++    return "LOCK";
 +}
  
  FollowCameraController::FollowCameraController()
      : mStartupCameraHeight(32.0f)
-@@ -11,6 +31,42 @@ FollowCameraController::FollowCameraController()
+@@ -11,6 +67,35 @@ FollowCameraController::FollowCameraController()
      , mFollowPedCameraCatchSpeed(20.0f)
      , mScrollHeightOffset()
  {
++    // test / comparison overrides (not saved)
 +    const char* lockEnv = getenv("C3D_LOCK");
 +    if (lockEnv && lockEnv[0] == '0')
 +    {
-+        mHeadingLockEnabled = false;
++        gCvarCameraMode.mValue = "classic";
 +    }
 +    const char* dynEnv = getenv("C3D_DYNCAM");
 +    if (dynEnv && dynEnv[0] == '0')
 +    {
-+        mDynamicCamera = false;
++        gCvarCameraDynamic.mValue = false;
 +    }
 +}
 +
 +float FollowCameraController::GetTargetHeading() const
 +{
-+    // heading in radians, world X/Z plane, direction = (cos, sin)
++    // body heading in radians, world X/Z plane, direction = (cos, sin)
 +    if (mFollowPedestrian->IsCarPassenger() && mFollowPedestrian->mCurrentCar)
 +        return mFollowPedestrian->mCurrentCar->mTransformSmooth.mOrientation.to_radians();
 +
@@ -611,41 +648,43 @@ index 4a53905..f0b39c3 100644
 +void FollowCameraController::ApplyHeading(float headingRadians)
 +{
 +    const glm::vec3 front = -SceneAxisY; // looking straight down
-+    glm::vec3 up;
-+    if (mHeadingLockEnabled)
-+    {
-+        // screen-up = player's forward direction in world space
-+        up = glm::vec3(cosf(headingRadians), 0.0f, sinf(headingRadians));
-+    }
-+    else
-+    {
-+        up = -SceneAxisZ; // original fixed north-up view
-+    }
-+    glm::vec3 right = glm::cross(front, up);
++    // screen-up = heading direction in world space (north-up classic view: heading = -90 degrees)
++    const glm::vec3 up = glm::vec3(cosf(headingRadians), 0.0f, sinf(headingRadians));
++    const glm::vec3 right = glm::cross(front, up);
 +    mCamera->SetOrientation(front, right, up);
  }
  
  void FollowCameraController::Setup(GameCamera* gameCamera)
-@@ -29,12 +85,18 @@ void FollowCameraController::Setup(GameCamera* gameCamera)
+@@ -24,17 +109,26 @@ void FollowCameraController::Setup(GameCamera* gameCamera)
+     // set camera defaults
+     mCamera->SetIdentity();
+     mCamera->SetPerspectiveProjection(screenAspect, 55.0f, 0.1f, 1000.0f);
+-    
++
++    const bool rotating = (GetCameraViewMode() != eCameraViewMode_Classic);
+     if (mFollowPedestrian)
      {
          glm::vec3 position = mFollowPedestrian->mTransformSmooth.mPosition;
-         mCamera->SetPosition({position.x, position.y + mStartupCameraHeight, position.z}); 
-+        mCameraHeading = GetTargetHeading();
+-        mCamera->SetPosition({position.x, position.y + mStartupCameraHeight, position.z}); 
++        mCamera->SetPosition({position.x, position.y + mStartupCameraHeight, position.z});
++        mCameraHeading = rotating ? GetTargetHeading() : NorthUpHeading;
      }
      else
      {
          mCamera->SetPosition({0.0f, mStartupCameraHeight, 0.0f});
-+        mCameraHeading = -3.14159265f * 0.5f; // north-up
++        mCameraHeading = NorthUpHeading;
      }
++    mTravelHeading.Reset(mCameraHeading);
      mCamera->SetTopDownOrientation();
 +    if (mFollowPedestrian)
 +    {
 +        ApplyHeading(mCameraHeading);
 +    }
++    PublishViewModeLabel();
  }
  
  void FollowCameraController::UpdateFrame()
-@@ -42,42 +104,120 @@ void FollowCameraController::UpdateFrame()
+@@ -42,42 +136,166 @@ void FollowCameraController::UpdateFrame()
      if (mFollowPedestrian == nullptr)
          return;
  
@@ -662,9 +701,12 @@ index 4a53905..f0b39c3 100644
 +        mFollowPedestrian->SetOrientation(a, eTransformSpace_World);
 +    }
 +
++    const eCameraViewMode viewMode = GetCameraViewMode();
++    const bool rotating = (viewMode != eCameraViewMode_Classic);
++    const bool dynamic = gCvarCameraDynamic.mValue;
 +    const bool inCar = mFollowPedestrian->IsCarPassenger() && mFollowPedestrian->mCurrentCar;
-+    const float target = GetTargetHeading();
-+    const glm::vec2 forward (cosf(target), sinf(target));
++    const float bodyHeading = GetTargetHeading();
++    const glm::vec2 forward (cosf(bodyHeading), sinf(bodyHeading));
 +
 +    // how fast are we moving forwards: 0 standing / reversing .. 1 running or driving fast
 +    PhysicsBody* body = inCar ? mFollowPedestrian->mCurrentCar->mPhysicsBody : mFollowPedestrian->mPhysicsBody;
@@ -682,10 +724,16 @@ index 4a53905..f0b39c3 100644
      float catchSpeed = mFollowPedCameraCatchSpeed;
 -    // todo: temporary implementation
 -    if (mFollowPedestrian->IsCarPassenger())
-+    if (mHeadingLockEnabled && mDynamicCamera)
-+    {
-+        // look ahead along the heading (screen-up), so the player moves towards the bottom
-+        // of the screen as they speed up: up to ~35% of the half view height on foot, ~55% in a car
++    if (rotating && dynamic)
+     {
+-        glm::vec2 carVelocity = mFollowPedestrian->mCurrentCar->mPhysicsBody->GetLinearVelocity();
+-        float carSpeed = glm::length(carVelocity);
+-        carVelocity = glm::normalize(carVelocity);
+-        position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
+-        position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
+-        catchSpeed *= 0.3f; // todo: magic numbers
++        // look ahead along the body heading, so the player moves towards the bottom of the screen
++        // as they speed up: up to ~35% of the half view height on foot, ~55% in a car
 +        const float viewHalfHeight = cameraHeight * 0.52f; // tan(55 deg fov / 2)
 +        const float maxLookAhead = viewHalfHeight * (inCar ? 0.55f : 0.35f);
 +        mLookAhead += (maxLookAhead * mSpeedFactor - mLookAhead) * glm::clamp(2.5f * deltaTime, 0.0f, 1.0f);
@@ -697,15 +745,9 @@ index 4a53905..f0b39c3 100644
 +        }
 +    }
 +    else
-     {
--        glm::vec2 carVelocity = mFollowPedestrian->mCurrentCar->mPhysicsBody->GetLinearVelocity();
--        float carSpeed = glm::length(carVelocity);
--        carVelocity = glm::normalize(carVelocity);
--        position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
--        position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
--        catchSpeed *= 0.3f; // todo: magic numbers
++    {
 +        mLookAhead = 0.0f;
-+        // todo: temporary implementation
++        // original follow behaviour
 +        if (inCar)
 +        {
 +            glm::vec2 carVelocity = velocity;
@@ -724,47 +766,94 @@ index 4a53905..f0b39c3 100644
      if (glm::length(mCamera->mPosition - position) > 0.01f)
      {
 -        position = mCamera->mPosition + (position - mCamera->mPosition) * catchSpeed * deltaTime;
+-        mCamera->SetPosition(position); 
 +        position = mCamera->mPosition + (position - mCamera->mPosition) * glm::clamp(catchSpeed * deltaTime, 0.0f, 1.0f);
-         mCamera->SetPosition(position); 
++        mCamera->SetPosition(position);
      }
 +
-+    // heading lock: shortest-arc exponential smoothing toward the player's heading
-+    float headingCatchSpeed = mHeadingCatchSpeed;
-+    float maxLag = glm::radians(1.5f);
-+    if (mDynamicCamera)
++    // ---- camera heading (separate from movement, facing and aim)
++    float targetHeading = NorthUpHeading;
++    if (rotating)
 +    {
-+        // at speed the view trails the heading a little, so turns show as a slight rotation
-+        // of the view (at most ~11 degrees) that settles once the turn ends
-+        headingCatchSpeed = glm::mix(mHeadingCatchSpeed, 3.5f, mSpeedFactor);
-+        maxLag += glm::radians(9.5f) * mSpeedFactor;
++        if (inCar)
++        {
++            targetHeading = bodyHeading; // the car's actual heading
++        }
++        else if (viewMode == eCameraViewMode_Combat)
++        {
++            targetHeading = mHints.mHasAim ? mHints.mAimHeading : bodyHeading;
++        }
++        else if (mHints.mTwinStick)
++        {
++            // persistent travel heading; the view holds while aiming independently (strafing)
++            if (mWasInCar || !mTravelHeading.mValid)
++            {
++                mTravelHeading.Reset(mCameraHeading);
++            }
++            if (!mHints.mAiming)
++            {
++                mTravelHeading.Update(velocity.x, velocity.y, deltaTime);
++            }
++            targetHeading = mHints.mAiming ? mCameraHeading : mTravelHeading.mHeading;
++        }
++        else
++        {
++            // tank controls: the body heading is the travel heading
++            targetHeading = bodyHeading;
++            mTravelHeading.Reset(bodyHeading);
++        }
 +    }
-+    // twin-stick on foot: the view holds still, so screen-relative sticks stay consistent
-+    float diff = mHoldHeading ? 0.0f : WrapPi(target - mCameraHeading);
-+    float t = glm::clamp(headingCatchSpeed * deltaTime, 0.0f, 1.0f);
-+    mCameraHeading = WrapPi(mCameraHeading + diff * t);
-+    if (mDynamicCamera && !mHoldHeading)
++    mWasInCar = inCar;
++
++    const reperspective::Smoothing preset = GetSmoothingPreset();
++    float timeConstant = reperspective::SmoothingTimeConstant(preset);
++    if (rotating && dynamic && preset != reperspective::Smoothing::Instant)
 +    {
-+        float lag = WrapPi(target - mCameraHeading);
-+        if (lag > maxLag) mCameraHeading = WrapPi(target - maxLag);
-+        else if (lag < -maxLag) mCameraHeading = WrapPi(target + maxLag);
++        timeConstant += 0.12f * mSpeedFactor; // trail turns a little more at speed
 +    }
++    // in a car the rotation rate is limited, more so at low speed, so spins from collisions and
++    // physics wobble at walking pace don't shake the view
++    float maxRate = 0.0f;
++    if (rotating && inCar)
++    {
++        const float carSpeed = glm::length(velocity);
++        maxRate = glm::radians(glm::mix(120.0f, 400.0f, glm::clamp(carSpeed / 8.0f, 0.0f, 1.0f)));
++    }
++    mCameraHeading = reperspective::SmoothAngle(mCameraHeading, targetHeading, deltaTime, timeConstant, maxRate);
 +    ApplyHeading(mCameraHeading);
  }
  
 -void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
-+void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
++void FollowCameraController::CycleViewMode()
  {
 -}
 -
 -void FollowCameraController::InputEvent(MouseButtonInputEvent& inputEvent)
++    switch (GetCameraViewMode())
++    {
++        case eCameraViewMode_Classic: gCvarCameraMode.mValue = "reperspective"; break;
++        case eCameraViewMode_Reperspective: gCvarCameraMode.mValue = "combat"; break;
++        default: gCvarCameraMode.mValue = "classic"; break;
++    }
++    gConsole.LogMessage(eLogMessage_Debug, "Camera mode: %s", gCvarCameraMode.mValue.c_str());
++    gSystem.SaveConfiguration();
++    PublishViewModeLabel();
++}
++
++void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
 +    if (inputEvent.mPressed && inputEvent.mKeycode == eKeycode_F9)
 +    {
-+        mHeadingLockEnabled = !mHeadingLockEnabled;
++        CycleViewMode();
 +        inputEvent.SetConsumed();
 +    }
 +    if (inputEvent.mPressed && inputEvent.mKeycode == eKeycode_F8)
 +    {
-+        mDynamicCamera = !mDynamicCamera;
++        gCvarCameraDynamic.mValue = !gCvarCameraDynamic.mValue;
++        gSystem.SaveConfiguration();
 +        inputEvent.SetConsumed();
 +    }
 +}
@@ -773,67 +862,111 @@ index 4a53905..f0b39c3 100644
  {
 -}
 -
--void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
+-void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
 +}
 +
 +void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
- {
--}
--
--void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
++{
 +}
 +
 +void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
  {
      mScrollHeightOffset = glm::clamp(mScrollHeightOffset - inputEvent.mScrollY, -3.0f, 23.0f);
  }
-@@ -85,6 +225,12 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -85,6 +303,13 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
  void FollowCameraController::SetFollowTarget(Pedestrian* pedestrian)
  {
      mFollowPedestrian = pedestrian;
 +    if (mFollowPedestrian)
 +    {
-+        mCameraHeading = GetTargetHeading();
++        mCameraHeading = (GetCameraViewMode() != eCameraViewMode_Classic) ? GetTargetHeading() : NorthUpHeading;
 +    }
++    mTravelHeading.Reset(mCameraHeading);
 +    mSpeedFactor = 0.0f;
 +    mLookAhead = 0.0f;
  }
  
  void FollowCameraController::InputEventLost()
 diff --git a/src/FollowCameraController.h b/src/FollowCameraController.h
-index 8640d19..911bd0d 100644
+index 8640d19..36e7307 100644
 --- a/src/FollowCameraController.h
 +++ b/src/FollowCameraController.h
-@@ -23,6 +23,9 @@ public:
+@@ -1,6 +1,32 @@
+ #pragma once
+ 
+ #include "CameraController.h"
++#include "ConsoleVar.h"
++#include "reperspective/CameraHeading.h"
++
++// GTA Classic Reperspective camera modes (cam_mode)
++enum eCameraViewMode
++{
++    eCameraViewMode_Classic,        // original north-up view
++    eCameraViewMode_Reperspective,  // travel heading points up, the world rotates around the player
++    eCameraViewMode_Combat,         // experimental: the view follows the aiming direction
++};
++
++extern CvarString gCvarCameraMode;      // cam_mode: classic, reperspective or combat
++extern CvarString gCvarCameraSmoothing; // cam_smoothing: instant, fast or smooth
++extern CvarBoolean gCvarCameraDynamic;  // cam_dynamic: look ahead / trail turns at speed
++
++eCameraViewMode GetCameraViewMode();
++const char* GetCameraViewModeLabel(eCameraViewMode viewMode);
++
++// per-frame hints from the player controller (input side) to the camera
++struct CameraControlHints
++{
++    bool mTwinStick = false; // free on-foot movement: follow the persistent travel heading
++    bool mAiming = false; // aiming independently of movement: hold the view (strafing)
++    bool mHasAim = false;
++    float mAimHeading = 0.0f; // radians, world
++};
+ 
+ class FollowCameraController final: public CameraController
+ {
+@@ -17,12 +43,20 @@ public:
+ 
+     // process input event
+     // @param inputEvent: Event data
+-    void InputEvent(KeyInputEvent& inputEvent) override;
+-    void InputEvent(MouseButtonInputEvent& inputEvent) override;
+-    void InputEvent(MouseMovedInputEvent& inputEvent) override;
++    void InputEvent(KeyInputEvent& inputEvent) override;
++    void InputEvent(MouseButtonInputEvent& inputEvent) override;
++    void InputEvent(MouseMovedInputEvent& inputEvent) override;
      void InputEvent(MouseScrollInputEvent& inputEvent) override;
      void InputEventLost() override;
  
-+    // set by the player controller: keep the current view rotation (twin-stick on foot)
-+    bool mHoldHeading = false;
++    // classic -> reperspective -> combat -> classic (F9 / LOCK button), saved in the config
++    void CycleViewMode();
++
++    float GetCameraHeading() const { return mCameraHeading; }
++
++    // set by the player controller every frame
++    CameraControlHints mHints;
 +
  private:
      // parameters
      float mStartupCameraHeight; // meters
-@@ -31,4 +34,18 @@ private:
+@@ -31,4 +65,16 @@ private:
      float mFollowPedCameraCatchSpeed; // meters per second
  
      Pedestrian* mFollowPedestrian = nullptr;
+-};
+\ No newline at end of file
 +
-+    // perspective lock (player always faces screen-up, world rotates)
-+    bool mHeadingLockEnabled = true; // F9 toggles
-+    float mCameraHeading = 0.0f; // radians, smoothed
-+    float mHeadingCatchSpeed = 12.0f; // 1/sec, higher = tighter lock
-+    // dynamic camera (F8 toggles, C3D_DYNCAM=0 starts with it off):
-+    // looks ahead along the heading as the player speeds up, so they sit lower on screen,
-+    // and lets the view trail the heading a little while turning at speed
-+    bool mDynamicCamera = true;
++    float mCameraHeading = 0.0f; // radians, smoothed; screen-up = (cos, sin) in the world X/Z plane
++    reperspective::TravelHeadingTracker mTravelHeading; // twin-stick on foot
++    bool mWasInCar = false;
++
++    // dynamic camera (cam_dynamic, F8 toggles): look ahead along the heading at speed and let the
++    // rotation trail a little more while moving fast
 +    float mSpeedFactor = 0.0f; // 0..1, smoothed forward speed
 +    float mLookAhead = 0.0f; // meters, smoothed
 +
 +    float GetTargetHeading() const;
 +    void ApplyHeading(float headingRadians);
- };
-\ No newline at end of file
++};
 diff --git a/src/GameCamera.cpp b/src/GameCamera.cpp
 index 3e02e64..0fba3b4 100644
 --- a/src/GameCamera.cpp
@@ -1036,10 +1169,34 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..3899a8b 100644
+index a13af22..6284e0a 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
-@@ -134,6 +134,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -1,5 +1,23 @@
+ #include "stdafx.h"
+ #include "HumanPlayer.h"
++#include "imgui.h"
++#include "GameObjectsManager.h"
++#include "FileSystem.h"
++#include <sstream>
++
++CvarString gCvarControlScheme("g_controls", "auto", "On-foot controls: auto (twin-stick when a gamepad is used), classic or twinstick", CvarFlags_Archive);
++CvarBoolean gCvarAutoFire("g_autoFire", true, "Twin-stick: fire when the aim stick is pushed past g_autoFireThreshold", CvarFlags_Archive);
++CvarFloat gCvarAutoFireThreshold("g_autoFireThreshold", 0.6f, "Twin-stick auto fire threshold (aim stick deflection 0..1)", CvarFlags_Archive);
++
++// a UI window (console, cheats) is taking keyboard input
++static bool IsUiCapturingInput()
++{
++    if (ImGui::GetCurrentContext() == nullptr)
++        return false;
++    const ImGuiIO& io = ImGui::GetIO();
++    return io.WantCaptureKeyboard || io.WantTextInput;
++}
++
+ #include "Pedestrian.h"
+ #include "PhysicsManager.h"
+ #include "PhysicsBody.h"
+@@ -134,6 +152,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
  void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
  {
      debug_assert(mCharacter);
@@ -1047,7 +1204,17 @@ index a13af22..3899a8b 100644
  
      if (mCameraController)
      {
-@@ -168,6 +169,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+@@ -151,7 +170,8 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
+     if (action != eInputAction_null)
+     {
+         ProcessInputAction(action, inputEvent.mPressed);
+-        inputEvent.SetConsumed();
++        inputEvent.SetConsumed();
++        mInputFocusLost = false;
+     }
+ 
+     // handle special keys
+@@ -168,6 +188,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
  
      if (inputEvent.mGamepad != mActionsMapping.mGamepadID)
          return;
@@ -1055,15 +1222,35 @@ index a13af22..3899a8b 100644
  
      eInputActionsGroup actionGroup = mCharacter->IsCarPassenger() ? eInputActionsGroup_InCar : eInputActionsGroup_OnFoot;
      eInputAction action = mActionsMapping.GetAction(actionGroup, inputEvent.mButton);
-@@ -354,6 +356,24 @@ void HumanPlayer::Respawn()
+@@ -181,6 +202,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+     {
+         ProcessInputAction(action, inputEvent.mPressed);
+         inputEvent.SetConsumed();
++        mInputFocusLost = false;
+     }
+ }
+ 
+@@ -194,6 +216,7 @@ void HumanPlayer::InputEventLost()
+     // reset actions
+     mCtlState.Clear();
+     mUpdateInputs = false;
++    mInputFocusLost = true;
+ }
+ 
+ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+@@ -354,12 +377,37 @@ void HumanPlayer::Respawn()
  
  void HumanPlayer::ProcessRepetitiveActions()
  {
-+    mFollowCameraController.mHoldHeading = false;
++    mFollowCameraController.mHints = CameraControlHints();
++    UpdateTestScript(); // test harness: no-op unless config/test_input.txt exists
 +
-+    // analog sticks and triggers send no input events: start processing inputs when they move
++    // Analog sticks and triggers send no input events, so their motion starts input processing,
++    // but only while the game has the input focus (not after a UI window or other handler took it).
++    const bool uiCapture = IsUiCapturingInput() && !mTestScript.mActive;
++    if (!mInputFocusLost && !uiCapture)
 +    {
-+        const GamepadState& pad = gInputs.mGamepadsState[mActionsMapping.mGamepadID];
++        const GamepadState& pad = GetPadState();
 +        if (pad.mPresent)
 +        {
 +            for (int iaxis = 0; iaxis < 6; ++iaxis)
@@ -1080,7 +1267,16 @@ index a13af22..3899a8b 100644
      if (!mUpdateInputs)
          return;
  
-@@ -384,10 +404,14 @@ void HumanPlayer::ProcessRepetitiveActions()
+     debug_assert(mCharacter);
+     mCtlState.Clear();
+ 
++    if (uiCapture)
++        return; // typing into a UI window must not move the player
++
+     // update in car
+     if (mCharacter->IsCarPassenger())
+     {
+@@ -384,10 +432,14 @@ void HumanPlayer::ProcessRepetitiveActions()
          }
  
          mCtlState.mHandBrake = GetActionState(eInputAction_HandBrake);
@@ -1095,92 +1291,180 @@ index a13af22..3899a8b 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +427,115 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +455,330 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
-+// on foot with a gamepad: the left stick (or d-pad) moves in a screen direction, the right stick
-+// aims in a screen direction and fires when pushed past half way; the right trigger fires too.
-+// The view holds its rotation meanwhile, so "up" on the stick keeps meaning up on the screen.
++// ---------------------------------------------------------------- Reperspective twin-stick
++
++const GamepadState& HumanPlayer::GetPadState() const
++{
++    if (mTestScript.mActive)
++        return mTestScript.mPad;
++    return gInputs.mGamepadsState[mActionsMapping.mGamepadID];
++}
++
++bool HumanPlayer::GetCursorWorldPosition(glm::vec2& worldPosition)
++{
++    glm::ivec2 screenPosition(gInputs.mCursorPositionX, gInputs.mCursorPositionY);
++    cxx::ray3d_t raycastResult;
++    if (!mViewCamera.CastRayFromScreenPoint(screenPosition, raycastResult))
++        return false;
++
++    float distanceFromCameraToCharacter = mViewCamera.mPosition.y - mCharacter->mTransform.mPosition.y;
++    worldPosition.x = raycastResult.mOrigin.x + (raycastResult.mDirection.x * distanceFromCameraToCharacter);
++    worldPosition.y = raycastResult.mOrigin.z + (raycastResult.mDirection.z * distanceFromCameraToCharacter);
++    return true;
++}
++
++// On foot, twin-stick (g_controls: auto = when a gamepad is in use, twinstick = also keyboard/mouse).
++// Movement, facing and aim are separate: the left stick / d-pad / arrows move in a screen direction,
++// the right stick (or the mouse) aims, the character faces the aim (the weapon fires along the facing,
++// as in the original game) or, without aiming, the direction of travel.
++// The camera heading is decided by FollowCameraController from the hints set here.
 +bool HumanPlayer::ProcessTwinStick()
 +{
-+    const GamepadState& pad = gInputs.mGamepadsState[mActionsMapping.mGamepadID];
-+    if (!pad.mPresent)
++    using namespace reperspective;
++
++    const std::string& scheme = gCvarControlScheme.mValue;
++    if (scheme == "classic")
 +        return false;
 +
-+    const float moveDeadZone = 0.25f;
-+    const float aimDeadZone = 0.3f;
-+    glm::vec2 moveStick (pad.mAxes[0], pad.mAxes[1]);
-+    const glm::vec2 aimStick (pad.mAxes[2], pad.mAxes[3]);
-+    if (glm::length(moveStick) > moveDeadZone || glm::length(aimStick) > aimDeadZone)
++    const GamepadState& pad = GetPadState();
++    const float deltaTime = gTimeManager.mGameFrameDelta;
++
++    TwinStickConfig config;
++    config.mAutoFire = gCvarAutoFire.mValue;
++    config.mAutoFireThreshold = gCvarAutoFireThreshold.mValue;
++
++    Vec2 moveStick;
++    Vec2 aimStick;
++    if (pad.mPresent)
 +    {
-+        mGamepadActive = true; // analog motion counts as gamepad use
++        moveStick = MakeVec2(pad.mAxes[0], pad.mAxes[1]);
++        aimStick = MakeVec2(pad.mAxes[2], pad.mAxes[3]);
++        if (Length(moveStick) > config.mMoveDeadZone || Length(aimStick) > config.mAimDeadZone)
++        {
++            mGamepadActive = true; // analog motion counts as gamepad use
++        }
 +    }
-+    if (!mGamepadActive)
++    const bool useGamepad = pad.mPresent && mGamepadActive;
++    const bool useKeyboard = !useGamepad && (scheme == "twinstick");
++    if (!useGamepad && !useKeyboard)
 +        return false;
 +
-+    // the d-pad moves in 8 directions when the left stick is centred
-+    if (glm::length(moveStick) <= moveDeadZone)
++    if (useGamepad)
 +    {
-+        moveStick = glm::vec2(0.0f, 0.0f);
-+        if (pad.mButtons[eGamepadButton_DPAD_Right]) moveStick.x += 1.0f;
-+        if (pad.mButtons[eGamepadButton_DPAD_Left]) moveStick.x -= 1.0f;
-+        if (pad.mButtons[eGamepadButton_DPAD_Down]) moveStick.y += 1.0f;
-+        if (pad.mButtons[eGamepadButton_DPAD_Up]) moveStick.y -= 1.0f;
++        // the d-pad moves in 8 directions when the left stick is centred
++        if (Length(moveStick) <= config.mMoveDeadZone)
++        {
++            moveStick = MakeVec2(0.0f, 0.0f);
++            if (pad.mButtons[eGamepadButton_DPAD_Right]) moveStick.x += 1.0f;
++            if (pad.mButtons[eGamepadButton_DPAD_Left]) moveStick.x -= 1.0f;
++            if (pad.mButtons[eGamepadButton_DPAD_Down]) moveStick.y += 1.0f;
++            if (pad.mButtons[eGamepadButton_DPAD_Up]) moveStick.y -= 1.0f;
++        }
++    }
++    else
++    {
++        // keyboard: the movement keys move in screen directions
++        moveStick = MakeVec2(0.0f, 0.0f);
++        aimStick = MakeVec2(0.0f, 0.0f);
++        if (GetActionState(eInputAction_TurnRight)) moveStick.x += 1.0f;
++        if (GetActionState(eInputAction_TurnLeft)) moveStick.x -= 1.0f;
++        if (GetActionState(eInputAction_WalkBackward)) moveStick.y += 1.0f;
++        if (GetActionState(eInputAction_Run)) moveStick.y -= 1.0f;
++        if (Length(moveStick) > 1.0f)
++        {
++            moveStick = Normalize(moveStick);
++        }
 +    }
 +
-+    // screen directions in the world X/Z plane: stick x = screen right, stick y = screen down
-+    const glm::vec2 screenUp (mViewCamera.mUpDirection.x, mViewCamera.mUpDirection.z);
-+    const glm::vec2 screenRight (mViewCamera.mRightDirection.x, mViewCamera.mRightDirection.z);
-+    auto ToWorld = [&screenUp, &screenRight](const glm::vec2& stick)
++    // the view's screen directions in the world X/Z plane, exactly as rendered
++    ScreenBasis view;
++    view.mUp = MakeVec2(mViewCamera.mUpDirection.x, mViewCamera.mUpDirection.z);
++    view.mRight = MakeVec2(mViewCamera.mRightDirection.x, mViewCamera.mRightDirection.z);
++
++    const eCameraViewMode viewMode = GetCameraViewMode();
++    bool aimWorldValid = false;
++    Vec2 aimWorld;
++    if (viewMode == eCameraViewMode_Combat)
 +    {
-+        return screenRight * stick.x - screenUp * stick.y;
-+    };
++        // experimental: the right stick's x turns the aim, and the view follows it
++        if (!mCombatAimValid)
++        {
++            mCombatAimHeading = mCharacter->mTransform.mOrientation.to_radians();
++            mCombatAimValid = true;
++        }
++        mCombatAimHeading = CombatTurnAim(mCombatAimHeading, aimStick.x, config.mAimDeadZone, glm::radians(200.0f), deltaTime);
++        aimWorldValid = true;
++        aimWorld = FromHeading(mCombatAimHeading);
++        aimStick = MakeVec2(0.0f, 0.0f);
++        config.mAutoFire = false; // the right stick turns; fire with the trigger
++    }
++    else
++    {
++        mCombatAimValid = false;
++        glm::vec2 cursorWorld;
++        if (useKeyboard && mMouseAimingEnabled && GetCursorWorldPosition(cursorWorld))
++        {
++            aimWorld = MakeVec2(cursorWorld.x - mCharacter->mTransform.mPosition.x, cursorWorld.y - mCharacter->mTransform.mPosition.z);
++            aimWorldValid = true;
++        }
++    }
++
++    const bool manualFire = GetActionState(eInputAction_Shoot) ||
++        (useKeyboard && gInputs.GetMouseButtonL()) ||
++        (mTestScript.mActive && mTestScript.mPad.mButtons[eGamepadButton_RightTrigger]);
++
++    // Reperspective follows the travel heading, so a held stick keeps the screen mapping it started
++    // with (no feedback loop while the view turns). Combat moves relative to the current view.
++    const Vec2 moveInput = ApplyDeadZone(moveStick, config.mMoveDeadZone);
++    ScreenBasis moveBasis = view;
++    if (viewMode == eCameraViewMode_Reperspective)
++    {
++        moveBasis = mMoveLatch.Update(moveInput, view);
++    }
++    else
++    {
++        mMoveLatch.Reset();
++    }
++
++    const TwinStickOutput out = EvaluateTwinStick(moveStick, moveBasis, aimStick, view, aimWorldValid, aimWorld, manualFire, config);
 +
 +    mCtlState.mJump = GetActionState(eInputAction_Jump);
-+    mCtlState.mShoot = GetActionState(eInputAction_Shoot);
-+
-+    const float moveAmount = glm::min(glm::length(moveStick), 1.0f);
-+    if (moveAmount > moveDeadZone)
++    mCtlState.mShoot = out.mFire;
++    if (out.mMoving)
 +    {
-+        const glm::vec2 moveWorld = ToWorld(moveStick);
-+        if (glm::length(moveWorld) > 0.001f)
++        mCtlState.mUseMoveDirection = true;
++        mCtlState.mMoveDirection = glm::vec2(out.mMoveDirection.x, out.mMoveDirection.y);
++        if (out.mRun)
 +        {
-+            mCtlState.mUseMoveDirection = true;
-+            mCtlState.mMoveDirection = glm::normalize(moveWorld);
-+            if (moveAmount > 0.7f)
-+            {
-+                mCtlState.mRun = true;
-+            }
-+            else
-+            {
-+                mCtlState.mWalkForward = true;
-+            }
++            mCtlState.mRun = true;
++        }
++        else
++        {
++            mCtlState.mWalkForward = true;
 +        }
 +    }
-+
-+    // face the aim direction; without aiming, face where we walk
-+    glm::vec2 faceWorld (0.0f, 0.0f);
-+    const float aimAmount = glm::length(aimStick);
-+    if (aimAmount > aimDeadZone)
-+    {
-+        faceWorld = ToWorld(aimStick);
-+        if (aimAmount > 0.6f)
-+        {
-+            mCtlState.mShoot = true;
-+        }
-+    }
-+    else if (mCtlState.mUseMoveDirection)
-+    {
-+        faceWorld = mCtlState.mMoveDirection;
-+    }
-+    if (glm::length(faceWorld) > 0.001f)
++    if (out.mHasFacing)
 +    {
 +        mCtlState.mRotateToDesiredAngle = true;
-+        mCtlState.mDesiredRotationAngle = cxx::angle_t::from_radians(::atan2f(faceWorld.y, faceWorld.x));
++        mCtlState.mDesiredRotationAngle = cxx::angle_t::from_radians(Heading(out.mFacingDirection));
 +    }
 +
-+    mFollowCameraController.mHoldHeading = true;
++    // camera hints: the view holds while aiming with the stick and shortly after firing
++    mAimHoldTimer = out.mFire ? 0.75f : glm::max(0.0f, mAimHoldTimer - deltaTime);
++    CameraControlHints& hints = mFollowCameraController.mHints;
++    hints.mTwinStick = true;
++    hints.mAiming = (out.mAiming && !(useKeyboard && aimWorldValid)) || (mAimHoldTimer > 0.0f);
++    hints.mHasAim = out.mAiming;
++    hints.mAimHeading = out.mAiming ? Heading(out.mAimDirection) : 0.0f;
++
++    mTestScript.mTwinStick = true;
++    mTestScript.mMoving = out.mMoving;
++    mTestScript.mMoveHeading = out.mMoving ? Heading(out.mMoveDirection) : 0.0f;
++    mTestScript.mFire = out.mFire;
 +    return true;
 +}
 +
@@ -1188,7 +1472,7 @@ index a13af22..3899a8b 100644
 +// and the left trigger brakes / reverses (the d-pad and stick-as-d-pad keep working too)
 +void HumanPlayer::ProcessGamepadDriving()
 +{
-+    const GamepadState& pad = gInputs.mGamepadsState[mActionsMapping.mGamepadID];
++    const GamepadState& pad = GetPadState();
 +    if (!pad.mPresent)
 +        return;
 +
@@ -1206,23 +1490,204 @@ index a13af22..3899a8b 100644
 +    {
 +        mCtlState.mAcceleration = glm::clamp(mCtlState.mAcceleration - pad.mAxes[4], -1.0f, 1.0f);
 +    }
++    mTestScript.mTwinStick = false;
++    mTestScript.mFire = false;
++}
++
++// ---------------------------------------------------------------- test harness (scripted input)
++// config/test_input.txt, one entry per line, times in seconds from the first game frame:
++//   <t> <leftX> <leftY> <rightX> <rightY> <leftTrigger> <rightTrigger>   sticks -1..1 (y down), triggers 0..1
++//   <t> @mode classic|reperspective|combat   @controls auto|classic|twinstick   @smoothing instant|fast|smooth
++//   <t> @autofire 0|1   @facing <degrees>   @car   @log <seconds>   @end
++// Telemetry lines start with "RPT" in the log.
++
++void HumanPlayer::UpdateTestScript()
++{
++    ReperspectiveTestScript& ts = mTestScript;
++    if (!ts.mLoaded)
++    {
++        ts.mLoaded = true;
++        std::string text;
++        if (!gFiles.IsFileExists("config/test_input.txt") || !gFiles.ReadTextFile("config/test_input.txt", text))
++            return;
++        std::istringstream lines(text);
++        std::string line;
++        while (std::getline(lines, line))
++        {
++            if (!line.empty() && line.back() == '\r') line.pop_back();
++            std::istringstream fields(line);
++            ReperspectiveTestScript::Line entry;
++            if (!(fields >> entry.mTime))
++                continue; // comment or empty
++            std::getline(fields, entry.mText);
++            ts.mLines.push_back(entry);
++        }
++        ts.mActive = !ts.mLines.empty();
++        ts.mPad.mPresent = true;
++        ts.mLastCameraHeading = mFollowCameraController.GetCameraHeading();
++        gConsole.LogMessage(eLogMessage_Debug, "RPT script loaded, %d lines", (int) ts.mLines.size());
++    }
++    if (!ts.mActive)
++        return;
++
++    const float deltaTime = gTimeManager.mGameFrameDelta;
++    ts.mTime += deltaTime;
++    mUpdateInputs = true;
++    mGamepadActive = true;
++    while (ts.mActive && ts.mNextLine < ts.mLines.size() && ts.mLines[ts.mNextLine].mTime <= ts.mTime)
++    {
++        ExecuteTestLine(ts.mLines[ts.mNextLine].mText);
++        ++ts.mNextLine;
++    }
++
++    const float cameraHeading = mFollowCameraController.GetCameraHeading();
++    ts.mMaxCameraStep = glm::max(ts.mMaxCameraStep, fabsf(reperspective::AngleDelta(ts.mLastCameraHeading, cameraHeading)));
++    ts.mLastCameraHeading = cameraHeading;
++
++    for (GameObject* object: gGameObjectsManager.mAllObjects)
++    {
++        if (!object->IsProjectileClass())
++            continue;
++        if (ts.mSeenProjectiles.insert(object).second)
++        {
++            ++ts.mShots;
++            ts.mLastShotHeading = object->mTransform.mOrientation.to_degrees();
++        }
++    }
++
++    ts.mLogTimer += deltaTime;
++    if (ts.mLogTimer >= ts.mLogInterval)
++    {
++        ts.mLogTimer = 0.0f;
++        const bool inCar = mCharacter->IsCarPassenger() && mCharacter->mCurrentCar;
++        PhysicsBody* body = inCar ? mCharacter->mCurrentCar->mPhysicsBody : mCharacter->mPhysicsBody;
++        const glm::vec2 velocity = body ? body->GetLinearVelocity() : glm::vec2(0.0f, 0.0f);
++        const float speed = glm::length(velocity);
++        const float bodyHeading = inCar ? mCharacter->mCurrentCar->mTransform.mOrientation.to_degrees() : mCharacter->mTransform.mOrientation.to_degrees();
++        gConsole.LogMessage(eLogMessage_Debug,
++            "RPT t=%.2f mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f pos=%.2f,%.2f",
++            ts.mTime, gCvarCameraMode.mValue.c_str(), gCvarControlScheme.mValue.c_str(), ts.mTwinStick ? 1 : 0, inCar ? 1 : 0,
++            glm::degrees(cameraHeading), bodyHeading, (speed > 0.05f) ? glm::degrees(atan2f(velocity.y, velocity.x)) : 0.0f, speed,
++            ts.mMoving ? 1 : 0, glm::degrees(ts.mMoveHeading), mFollowCameraController.mHints.mAiming ? 1 : 0, ts.mFire ? 1 : 0,
++            ts.mShots, ts.mLastShotHeading, glm::degrees(ts.mMaxCameraStep),
++            mCharacter->mTransform.mPosition.x, mCharacter->mTransform.mPosition.z);
++        ts.mMaxCameraStep = 0.0f;
++    }
++}
++
++void HumanPlayer::ExecuteTestLine(const std::string& line)
++{
++    ReperspectiveTestScript& ts = mTestScript;
++    std::istringstream fields(line);
++    std::string first;
++    if (!(fields >> first))
++        return;
++    if (first[0] != '@')
++    {
++        float values[6] = { 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
++        values[0] = (float) atof(first.c_str());
++        for (int i = 1; i < 6; ++i) fields >> values[i];
++        for (int i = 0; i < 6; ++i) ts.mPad.mAxes[i] = values[i];
++        ts.mPad.mButtons[eGamepadButton_LeftTrigger] = values[4] > 0.5f;
++        ts.mPad.mButtons[eGamepadButton_RightTrigger] = values[5] > 0.5f;
++        return;
++    }
++    std::string arg;
++    fields >> arg;
++    gConsole.LogMessage(eLogMessage_Debug, "RPT cmd t=%.2f %s %s", ts.mTime, first.c_str(), arg.c_str());
++    if (first == "@mode") gCvarCameraMode.mValue = arg;
++    else if (first == "@controls") gCvarControlScheme.mValue = arg;
++    else if (first == "@smoothing") gCvarCameraSmoothing.mValue = arg;
++    else if (first == "@autofire") gCvarAutoFire.mValue = (arg == "1");
++    else if (first == "@log") ts.mLogInterval = glm::max(0.05f, (float) atof(arg.c_str()));
++    else if (first == "@facing")
++    {
++        mCharacter->SetOrientation(cxx::angle_t::from_degrees((float) atof(arg.c_str())), eTransformSpace_World);
++    }
++    else if (first == "@car")
++    {
++        Vehicle* car = gGameObjectsManager.CreateVehicle(mCharacter->mTransform.mPosition, mCharacter->mTransform.mOrientation, eVehicle_BeastGTS_1);
++        if (car)
++        {
++            mCharacter->PutInsideCar(car, eCarSeat_Driver);
++        }
++    }
++    else if (first == "@end")
++    {
++        ts.mActive = false;
++        gConsole.LogMessage(eLogMessage_Debug, "RPT END shots=%d", ts.mShots);
++    }
 +}
 +
  bool HumanPlayer::GetActionState(eInputAction action) const
  {
      const auto& mapping = mActionsMapping.mActionToKeys[action];
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..78019ad 100644
+index c272fba..7ea5343 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
-@@ -90,6 +90,10 @@ private:
+@@ -5,6 +5,8 @@
+ #include "InputActionsMapping.h"
+ #include "AudioListener.h"
+ #include "FollowCameraController.h"
++#include "reperspective/TwinStick.h"
++#include <unordered_set>
+ #include "FreeLookCameraController.h"
+ #include "HUD.h"
+ 
+@@ -19,6 +21,33 @@ enum ePlayerCameraMode
+ //////////////////////////////////////////////////////////////////////////
+ 
+ // Contains human player related information but also processes character controller logic
++// test-only scripted gamepad input + telemetry (active only when config/test_input.txt exists)
++struct ReperspectiveTestScript
++{
++    struct Line
++    {
++        float mTime = 0.0f;
++        std::string mText;
++    };
++    bool mLoaded = false;
++    bool mActive = false;
++    std::vector<Line> mLines;
++    size_t mNextLine = 0;
++    float mTime = 0.0f;
++    float mLogInterval = 0.25f;
++    float mLogTimer = 0.0f;
++    float mLastCameraHeading = 0.0f;
++    float mMaxCameraStep = 0.0f; // radians per frame since the last log line
++    int mShots = 0;
++    float mLastShotHeading = 0.0f;
++    std::unordered_set<const void*> mSeenProjectiles;
++    GamepadState mPad {};
++    bool mTwinStick = false;
++    bool mMoving = false;
++    float mMoveHeading = 0.0f;
++    bool mFire = false;
++};
++
+ class HumanPlayer final: public CharacterController
+ {
+ public:
+@@ -90,6 +119,21 @@ private:
      float mRespawnTime = 0.0f;
      bool mUpdateInputs = false;
      bool mMouseAimingEnabled = false;
 +    bool mGamepadActive = false; // the last input came from the gamepad (not keyboard / touch)
 +
++    bool mInputFocusLost = false; // another input handler (UI) took the input focus
++    bool mCombatAimValid = false;
++    float mCombatAimHeading = 0.0f; // radians, combat camera mode
++    float mAimHoldTimer = 0.0f; // the view holds this long after firing (twin-stick)
++    reperspective::InputFrameLatch mMoveLatch;
++    ReperspectiveTestScript mTestScript;
++
 +    bool ProcessTwinStick();
 +    void ProcessGamepadDriving();
++    const GamepadState& GetPadState() const;
++    bool GetCursorWorldPosition(glm::vec2& worldPosition);
++    void UpdateTestScript();
++    void ExecuteTestLine(const std::string& line);
  
      FollowCameraController mFollowCameraController;
      FreeLookCameraController mFreeLookCameraController;
@@ -1404,10 +1869,10 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..d733603
+index 0000000..3af0cbf
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
-@@ -0,0 +1,732 @@
+@@ -0,0 +1,740 @@
 +// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
 +#include <SDL.h>
 +#include "glfw_sdl_shim.h"
@@ -1531,6 +1996,7 @@ index 0000000..d733603
 +        GLFW_KEY_UP, GLFW_KEY_DOWN, GLFW_KEY_LEFT, GLFW_KEY_RIGHT, GLFW_KEY_LEFT_CONTROL,
 +        GLFW_KEY_ENTER, GLFW_KEY_SPACE, GLFW_KEY_X, GLFW_KEY_TAB, GLFW_KEY_F9, GLFW_KEY_F7 };
 +    static char gAspectLabel[8] = "AUTO"; // set by the engine
++    static char gLockLabel[8] = "LOCK"; // camera mode, set by the engine
 +    static int gViewX = 0, gViewY = 0, gViewW = 0, gViewH = 0; // game view rect, set by the engine
 +    static bool gKeyState[K_COUNT] = {};
 +    static bool gVisible = true;
@@ -1557,7 +2023,7 @@ index 0000000..d733603
 +        gButtons[Control_Jump]   = { W - 0.15f * u, H - 0.40f * u, br, K_JUMP, "JUMP", 0.20f, 0.75f, 0.30f };
 +        gButtons[Control_Weapon] = { W - 0.36f * u, H - 0.34f * u, br * 0.85f, K_WPN, "WPN", 0.90f, 0.75f, 0.15f };
 +        gButtons[Control_Horn]   = { W - 0.58f * u, H - 0.10f * u, br * 0.75f, K_HORN, "HORN", 0.60f, 0.60f, 0.60f };
-+        gButtons[Control_Lock]   = { W - 0.09f * u, 0.09f * u, br * 0.65f, K_LOCK, "LOCK", 0.75f, 0.40f, 0.90f };
++        gButtons[Control_Lock]   = { W - 0.09f * u, 0.09f * u, br * 0.65f, K_LOCK, gLockLabel, 0.75f, 0.40f, 0.90f };
 +        gButtons[Control_Aspect] = { W - 0.09f * u, 0.25f * u, br * 0.65f, K_ASPECT, gAspectLabel, 0.25f, 0.65f, 0.80f };
 +
 +        // letterboxed view (bars above/below, little room at the sides): put the small
@@ -2127,6 +2593,13 @@ index 0000000..d733603
 +    SDL_strlcpy(touch::gAspectLabel, label, sizeof(touch::gAspectLabel));
 +}
 +
++void glfwShimSetLockLabel(const char* label)
++{
++    if (!label) return;
++    strncpy(touch::gLockLabel, label, sizeof(touch::gLockLabel) - 1);
++    touch::gLockLabel[sizeof(touch::gLockLabel) - 1] = 0;
++}
++
 +void glfwShimSetGameViewRect(int x, int y, int w, int h)
 +{
 +    touch::gViewX = x; touch::gViewY = y; touch::gViewW = w; touch::gViewH = h;
@@ -2142,10 +2615,10 @@ index 0000000..d733603
 +}
 diff --git a/src/android/glfw_sdl_shim.h b/src/android/glfw_sdl_shim.h
 new file mode 100644
-index 0000000..7d705dc
+index 0000000..f804711
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.h
-@@ -0,0 +1,180 @@
+@@ -0,0 +1,181 @@
 +#pragma once
 +// GTA Classic Perspective Lock - Android platform layer.
 +// Implements the small subset of the GLFW 3 API that Carnage3D uses, on top of SDL2,
@@ -2325,6 +2798,7 @@ index 0000000..7d705dc
 +const char* glfwShimInternalStoragePath(void);
 +const char* glfwShimExternalStoragePath(void);
 +void glfwShimSetAspectLabel(const char* label); // text on the aspect-ratio touch button
++void glfwShimSetLockLabel(const char* label); // text on the camera-mode (LOCK) touch button
 +void glfwShimSetGameViewRect(int x, int y, int w, int h); // game view inside the screen (top-left origin, pixels)
 diff --git a/src/cvars.h b/src/cvars.h
 index dfc0703..a985b77 100644
@@ -2420,6 +2894,354 @@ index 117d3a9..50017e4 100644
      {
          const filesystem::path& currentFile = iter_directory->path();
          enumproc(currentFile.filename().generic_string());
+diff --git a/src/reperspective/CameraHeading.h b/src/reperspective/CameraHeading.h
+new file mode 100644
+index 0000000..563135a
+--- /dev/null
++++ b/src/reperspective/CameraHeading.h
+@@ -0,0 +1,141 @@
++#pragma once
++
++// GTA Classic Reperspective: camera heading helpers.
++// Engine independent (plain floats, <cmath> only) so they can be unit tested natively
++// and reused by other top-down engines. Angles are radians in the world X/Z plane,
++// direction vector = (cos a, sin a).
++
++#include <cmath>
++
++namespace reperspective
++{
++    constexpr float kPi = 3.14159265358979f;
++    constexpr float kTwoPi = 6.28318530717959f;
++
++    // wrap angle to [-pi, pi)
++    inline float WrapPi(float a)
++    {
++        a = std::fmod(a + kPi, kTwoPi);
++        if (a < 0.0f) a += kTwoPi;
++        return a - kPi;
++    }
++
++    // shortest signed rotation from -> to, in [-pi, pi)
++    inline float AngleDelta(float from, float to)
++    {
++        return WrapPi(to - from);
++    }
++
++    // Frame-rate independent exponential approach along the shortest arc.
++    // timeConstant <= 0: instant. maxRate (radians/second) <= 0: unlimited.
++    inline float SmoothAngle(float current, float target, float dt, float timeConstant, float maxRate = 0.0f)
++    {
++        const float delta = AngleDelta(current, target);
++        float step = delta;
++        if (timeConstant > 0.0f && dt >= 0.0f)
++        {
++            step = delta * (1.0f - std::exp(-dt / timeConstant));
++        }
++        if (maxRate > 0.0f && dt >= 0.0f)
++        {
++            const float limit = maxRate * dt;
++            if (step > limit) step = limit;
++            else if (step < -limit) step = -limit;
++        }
++        return WrapPi(current + step);
++    }
++
++    // Camera rotation smoothing presets. The value is the time to cover 90% of a step change
++    // (settle time); the exponential time constant is settle / ln(10).
++    enum class Smoothing { Instant, Fast, Smooth };
++
++    inline float SmoothingSettleTime(Smoothing s)
++    {
++        switch (s)
++        {
++            case Smoothing::Instant: return 0.0f;
++            case Smoothing::Fast: return 0.125f;
++            case Smoothing::Smooth: return 0.25f;
++        }
++        return 0.125f;
++    }
++
++    inline float SmoothingTimeConstant(Smoothing s)
++    {
++        return SmoothingSettleTime(s) / 2.302585f;
++    }
++
++    // Persistent travel heading for on-foot movement with free (twin-stick) input.
++    // - holds while standing still or moving slowly (no oscillation when stationary);
++    // - a new direction must persist for commitTime before the heading starts to follow it,
++    //   so brief wiggles and rapid back-and-forth input don't rotate the view;
++    // - small adjustments (within deadband) are followed only slowly.
++    struct TravelHeadingTracker
++    {
++        // parameters
++        float mMinSpeed = 0.6f; // meters per second; slower movement holds the heading
++        float mDeadband = 0.20f; // radians (~11 degrees)
++        float mCommitTime = 0.25f; // seconds a new direction must persist
++        float mFollowTime = 0.12f; // time constant once committed (seconds)
++        float mDriftTime = 0.8f; // time constant for small adjustments (seconds)
++
++        // state
++        float mHeading = 0.0f;
++        bool mValid = false;
++        float mCandidate = 0.0f;
++        float mCandidateTime = 0.0f;
++        bool mFollowing = false; // committed to a new direction, catching up with it
++
++        void Reset(float heading)
++        {
++            mHeading = WrapPi(heading);
++            mValid = true;
++            mCandidate = mHeading;
++            mCandidateTime = 0.0f;
++            mFollowing = false;
++        }
++
++        // velocityX / velocityY: world velocity (meters per second)
++        void Update(float velocityX, float velocityY, float dt)
++        {
++            const float speed = std::sqrt(velocityX * velocityX + velocityY * velocityY);
++            if (speed < mMinSpeed)
++            {
++                mCandidateTime = 0.0f;
++                return;
++            }
++            const float direction = std::atan2(velocityY, velocityX);
++            if (!mValid)
++            {
++                Reset(direction);
++                return;
++            }
++            const float offset = AngleDelta(mHeading, direction);
++            if (mFollowing)
++            {
++                // finish catching up with a committed direction at the follow rate
++                mHeading = SmoothAngle(mHeading, direction, dt, mFollowTime);
++                if (std::fabs(AngleDelta(mHeading, direction)) < 0.02f) mFollowing = false;
++                mCandidateTime = 0.0f;
++                return;
++            }
++            if (std::fabs(offset) <= mDeadband)
++            {
++                mHeading = SmoothAngle(mHeading, direction, dt, mDriftTime);
++                mCandidateTime = 0.0f;
++                return;
++            }
++            if (std::fabs(AngleDelta(mCandidate, direction)) > mDeadband)
++            {
++                mCandidate = direction;
++                mCandidateTime = 0.0f;
++            }
++            mCandidateTime += dt;
++            if (mCandidateTime >= mCommitTime)
++            {
++                mFollowing = true;
++                mHeading = SmoothAngle(mHeading, direction, dt, mFollowTime);
++            }
++        }
++    };
++} // namespace reperspective
+diff --git a/src/reperspective/TwinStick.h b/src/reperspective/TwinStick.h
+new file mode 100644
+index 0000000..525ee21
+--- /dev/null
++++ b/src/reperspective/TwinStick.h
+@@ -0,0 +1,195 @@
++#pragma once
++
++// GTA Classic Reperspective: twin-stick input mapping.
++// Engine independent (plain floats) so it can be unit tested natively and reused.
++//
++// Three separate directions are produced: movement (where the character travels), facing
++// (where the character body points) and aim (where the weapon points). The camera heading
++// is not decided here; see CameraHeading.h.
++//
++// Screen conventions: stick x grows to the right, stick y grows downwards (SDL / GLFW).
++// World conventions: X/Z plane, direction vector (cos a, sin a).
++
++#include "CameraHeading.h"
++
++namespace reperspective
++{
++    struct Vec2
++    {
++        float x = 0.0f;
++        float y = 0.0f;
++    };
++
++    inline Vec2 MakeVec2(float x, float y) { Vec2 v; v.x = x; v.y = y; return v; }
++    inline float Length(const Vec2& v) { return std::sqrt(v.x * v.x + v.y * v.y); }
++    inline Vec2 Scale(const Vec2& v, float s) { return MakeVec2(v.x * s, v.y * s); }
++    inline Vec2 Normalize(const Vec2& v)
++    {
++        const float len = Length(v);
++        return (len > 1e-6f) ? Scale(v, 1.0f / len) : MakeVec2(0.0f, 0.0f);
++    }
++    inline float Heading(const Vec2& v) { return std::atan2(v.y, v.x); }
++    inline Vec2 FromHeading(float a) { return MakeVec2(std::cos(a), std::sin(a)); }
++
++    // world-space directions of the screen's up and right
++    struct ScreenBasis
++    {
++        Vec2 mUp = MakeVec2(0.0f, -1.0f);
++        Vec2 mRight = MakeVec2(1.0f, 0.0f);
++    };
++
++    // basis for a top-down camera whose screen-up points along heading
++    // (right = up rotated by +90 degrees in the X/Z plane, as the follow camera builds it)
++    inline ScreenBasis BasisFromHeading(float heading)
++    {
++        ScreenBasis b;
++        b.mUp = FromHeading(heading);
++        b.mRight = MakeVec2(-b.mUp.y, b.mUp.x);
++        return b;
++    }
++
++    // stick (x right, y down) -> world direction (not normalized)
++    inline Vec2 ScreenToWorld(const ScreenBasis& basis, const Vec2& stick)
++    {
++        return MakeVec2(basis.mRight.x * stick.x - basis.mUp.x * stick.y,
++                        basis.mRight.y * stick.x - basis.mUp.y * stick.y);
++    }
++
++    // radial dead zone, magnitude rescaled to 0..1 beyond it
++    inline Vec2 ApplyDeadZone(const Vec2& stick, float deadZone)
++    {
++        const float len = Length(stick);
++        if (len <= deadZone || len < 1e-6f)
++            return MakeVec2(0.0f, 0.0f);
++        float amount = (len - deadZone) / (1.0f - deadZone);
++        if (amount > 1.0f) amount = 1.0f;
++        return Scale(stick, amount / len);
++    }
++
++    // Holding a stick keeps the screen->world mapping it started with, so a camera that
++    // rotates meanwhile cannot turn a held "right" into a circle. The mapping is taken again
++    // when the stick is released or turned to a clearly new direction.
++    struct InputFrameLatch
++    {
++        float mRelatchAngle = 0.6f; // radians (~35 degrees)
++
++        bool mActive = false;
++        ScreenBasis mBasis;
++        float mStickHeading = 0.0f;
++
++        ScreenBasis Update(const Vec2& stick, const ScreenBasis& current)
++        {
++            if (Length(stick) < 1e-6f)
++            {
++                mActive = false;
++                return current;
++            }
++            const float stickHeading = Heading(stick);
++            if (!mActive || std::fabs(AngleDelta(mStickHeading, stickHeading)) > mRelatchAngle)
++            {
++                mActive = true;
++                mBasis = current;
++                mStickHeading = stickHeading;
++            }
++            return mBasis;
++        }
++
++        void Reset() { mActive = false; }
++    };
++
++    struct TwinStickConfig
++    {
++        float mMoveDeadZone = 0.25f;
++        float mRunThreshold = 0.7f; // raw stick deflection above which the character runs
++        float mAimDeadZone = 0.3f;
++        bool mAutoFire = true; // fire when the aim stick is pushed past mAutoFireThreshold
++        float mAutoFireThreshold = 0.6f; // raw stick deflection
++    };
++
++    struct TwinStickOutput
++    {
++        bool mMoving = false;
++        Vec2 mMoveDirection; // unit, world
++        bool mRun = false;
++
++        bool mAiming = false;
++        Vec2 mAimDirection; // unit, world
++
++        bool mHasFacing = false;
++        Vec2 mFacingDirection; // unit, world: aim while aiming, otherwise movement
++
++        bool mFire = false;
++    };
++
++    // moveStick / aimStick: raw sticks (x right, y down). The aim may instead come as a world
++    // direction (mouse): pass aimWorldValid = true and aimWorld.
++    inline TwinStickOutput EvaluateTwinStick(const Vec2& moveStick, const ScreenBasis& moveBasis,
++        const Vec2& aimStick, const ScreenBasis& aimBasis, bool aimWorldValid, const Vec2& aimWorld,
++        bool manualFire, const TwinStickConfig& config)
++    {
++        TwinStickOutput out;
++
++        const float moveRaw = Length(moveStick);
++        const Vec2 move = ApplyDeadZone(moveStick, config.mMoveDeadZone);
++        if (Length(move) > 0.0f)
++        {
++            const Vec2 world = Normalize(ScreenToWorld(moveBasis, move));
++            if (Length(world) > 0.0f)
++            {
++                out.mMoving = true;
++                out.mMoveDirection = world;
++                out.mRun = (moveRaw > config.mRunThreshold);
++            }
++        }
++
++        const float aimRaw = Length(aimStick);
++        if (aimWorldValid)
++        {
++            const Vec2 world = Normalize(aimWorld);
++            if (Length(world) > 0.0f)
++            {
++                out.mAiming = true;
++                out.mAimDirection = world;
++            }
++        }
++        else if (aimRaw > config.mAimDeadZone)
++        {
++            const Vec2 world = Normalize(ScreenToWorld(aimBasis, aimStick));
++            if (Length(world) > 0.0f)
++            {
++                out.mAiming = true;
++                out.mAimDirection = world;
++            }
++        }
++
++        if (out.mAiming)
++        {
++            out.mHasFacing = true;
++            out.mFacingDirection = out.mAimDirection;
++        }
++        else if (out.mMoving)
++        {
++            out.mHasFacing = true;
++            out.mFacingDirection = out.mMoveDirection;
++        }
++
++        out.mFire = manualFire;
++        if (config.mAutoFire && !aimWorldValid && aimRaw >= config.mAutoFireThreshold)
++        {
++            out.mFire = true;
++        }
++        return out;
++    }
++
++    // Combat-focused mode: the right stick's x turns the aim (and with it the camera) at up to
++    // turnRate radians per second; returns the new aim heading.
++    inline float CombatTurnAim(float aimHeading, float stickX, float deadZone, float turnRate, float dt)
++    {
++        const float mag = std::fabs(stickX);
++        if (mag <= deadZone)
++            return aimHeading;
++        const float amount = (mag - deadZone) / (1.0f - deadZone);
++        // stick right turns clockwise on screen = towards the screen's right = +angle (see BasisFromHeading)
++        return WrapPi(aimHeading + (stickX > 0.0f ? 1.0f : -1.0f) * amount * turnRate * dt);
++    }
++} // namespace reperspective
 diff --git a/src/stdafx.h b/src/stdafx.h
 index 7df6e72..da8f328 100644
 --- a/src/stdafx.h
