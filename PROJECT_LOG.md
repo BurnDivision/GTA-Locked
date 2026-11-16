@@ -167,3 +167,65 @@ Follow `FUN_00422900` error-code callers to the sprite/block-face renderers,
 find the zoom table → camera struct, then locate the world→screen transform and
 the tile-rectangle culling, and inject R(−θ). Testing the exe needs Windows
 (PowerStorm) or Wine.
+
+## 2026-11-16 — Android app (in progress checkpoint)
+
+Goal (user): turn the perspective-lock prototype into an Android app.
+
+### Approach
+- Engine: same patched Carnage3D source tree (`engines/carnage3d`), built with the NDK.
+  It already had an OpenGL ES 3.0 path (used by its WebAssembly build), reused via a new
+  `C3D_GLES` macro (`__EMSCRIPTEN__ || __ANDROID__`).
+- Windowing/input: `src/android/glfw_sdl_shim.{h,cpp}` implements the ~23 GLFW calls the
+  engine uses on top of **SDL2 2.30.9**, so engine code is nearly unchanged. Also has the
+  **touch overlay** (left thumb pad = arrows; FIRE=Ctrl, CAR=Enter, JUMP/BRAKE=Space,
+  WPN=X, HORN=Tab, LOCK=F9) drawn with GLES after each frame, and SDL GameController →
+  GLFW gamepad mapping (left stick also drives the d-pad).
+- `src/android/gles_glew_compat.h` stands in for GLEW.
+- Small engine edits (all `#ifdef`): GLES branches, fullscreen size from device, data paths
+  (engine data in internal storage, GTA data default `<external files>/GTADATA`),
+  `std::filesystem`, `SDL_main`, cheats window hidden by default, base-vertex draw → plain draw.
+- Audio: **OpenAL Soft 1.23.1** built from source. Physics: bundled Box2D. Math: **GLM 1.0.1**.
+- Deps live in `engines/android-deps/` (git clones).
+
+### Android project: `android/`
+- Gradle 8.9 + AGP 8.7.3 (both already cached on codebox), compileSdk 35, minSdk 26,
+  NDK 27.2, CMake 3.22.1, ABIs arm64-v8a + x86_64.
+- `LauncherActivity`: extracts engine data from the APK; if GTA data is missing, shows an
+  **Import GTA data folder** button (system folder picker; accepts GTADATA or its parent)
+  and copies it into the app's storage. GTA data is **never bundled** in the APK.
+- `GameActivity` (SDLActivity) runs `libmain.so`.
+- Package `com.burndivision.gtaperspectivelock`, landscape, debug-key signed (sideload).
+
+### Emulator
+- New AVD `GTALock_API35` (aosp_atd x86_64, pixel_6), run headless with swiftshader.
+  The pre-existing `MMCore_RMX_Perf_API35` AVD was not touched.
+
+### Android result (milestone)
+- **Release APK:** `android/dist/GTA-Perspective-Lock-0.1.0.apk` (10.4 MB, arm64-v8a + x86_64,
+  debug-key signed for sideload). SHA-256 `536f382a29e79668a068094151c36e5b4abcce11339db57ceb995bac27e1f51b`.
+- **Cumulative engine patch** (camera + Android port + fixes): `engines/perspective-lock-android.patch`
+  (sha256 7dba4b54…, 17 files, +1076/−39). The desktop build still compiles with it.
+- **Fixes found on device:**
+  - `path_utils` now uses the non-throwing `std::filesystem` overloads. Android denied a
+    path probe and crashed at config load.
+  - The engine's `src/strings.h` shadowed the system `<strings.h>` when `src/` was on the
+    include path, so it was dropped from the include path.
+  - The `CARNAGE3D_SRC` list is set with `PARENT_SCOPE`, so it's loaded through a CMake function.
+  - `glDrawElementsBaseVertex` (ES 3.2) → `glDrawElements` (base vertex is always 0).
+  - `GLFW_MOD_*` constants were added to the shim.
+- **`g_uiScale` is now functional:** the GUI is laid out at `pixels / scale` and magnified.
+  On Android it defaults to screen height / 720 (1.5 at 1080p). The engine console is
+  mirrored to logcat (tag `Carnage3D`).
+- **Emulator tests** (`GTALock_API26`, Android 8.0, SwiftShader GLES 3.0, 1920x1080). Script: `android/emu_test.sh`.
+  - Launcher shows the import screen when there's no data, and auto-starts the game when data is present.
+  - Engine log: GLES 3.0 OK, all 6 shaders compile, **OpenAL Soft audio initialised**,
+    NYC/SANB/MIAMI found.
+  - Touch: holding forward on the pad moves the player; holding left turns them and the world
+    rotates around the player (`shots/touch_test_grid.png`).
+  - The release APK runs the same.
+- API 35 ATD image: the app runs, but that image's `screencap` returns black frames, so
+  visual tests use API 26.
+- Not yet verified: driving and car entry via touch (the emulator has no easy way to spawn a
+  car next to the player), real-device performance, a real gamepad, and audio output (the
+  emulator runs `-no-audio`).

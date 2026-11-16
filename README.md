@@ -21,12 +21,15 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
+| **Android app** | **Working.** Release APK built (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
 
 ## Layout
 
 | Path | What |
 |---|---|
-| `prototype/carnage3d/perspective-lock.patch` | Camera patch for Carnage3D upstream `3dc03b2` |
+| `prototype/carnage3d/perspective-lock.patch` | Camera patch for Carnage3D upstream `3dc03b2` (desktop) |
+| `prototype/carnage3d/perspective-lock-android.patch` | Cumulative patch: camera + Android port (use this one) |
+| `android/` | Android app (Gradle/NDK), `setup_deps.sh`, `emu_test.sh` |
 | `prototype/verify_lock.sh` | Spins the player and screenshots lock ON vs OFF |
 | `re/scripts/CameraRecon.java` | Ghidra headless script: render/camera string xrefs + decompile |
 | `PROJECT_LOG.md` | Full history, hashes, findings, decisions |
@@ -42,6 +45,32 @@ cmake -B ../build -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_FLAGS=-Wno-error && mak
 ```
 
 Set `g_gtadata` in `gamedata/config/sys_config.json` to your `GTADATA` folder.
+
+## Android app
+
+`android/` is a Gradle/NDK project. It builds the same patched engine into an APK.
+
+* **Platform layer:** `src/android/glfw_sdl_shim.*` implements the GLFW calls the engine
+  uses, on top of SDL2. It also adds touch controls and gamepad support.
+* **Rendering:** OpenGL ES 3.0, using the engine's existing ES path. Audio is OpenAL Soft.
+* **Game data:** the APK does **not** contain GTA data. On first launch, tap
+  **Import GTA data folder** and pick your `GTADATA` folder (or the game folder that holds it).
+  It's copied into the app's storage.
+* **Requirements:** Android 8.0+ (API 26), GLES 3.0. Landscape only.
+
+Touch layout:
+* **Left thumb pad:** Up = forward, Down = back, Left/Right = turn.
+* **FIRE**, **CAR** (enter/exit), **JUMP** (handbrake in a car), **WPN** (next weapon),
+  **HORN**, **LOCK** (toggle the perspective lock).
+
+A connected gamepad works too, and hides the touch overlay.
+
+Build:
+```sh
+cd android
+./setup_deps.sh                # clones carnage3d (+ applies patch), SDL2, OpenAL Soft, GLM
+./gradlew assembleRelease      # needs Android SDK 35, NDK 27.2, CMake 3.22.1
+```
 
 ## Controls
 

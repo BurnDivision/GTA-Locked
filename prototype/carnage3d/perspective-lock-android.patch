@@ -1,0 +1,1425 @@
+diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
+index bb509f8..d2db0ab 100644
+--- a/src/CarnageGame.cpp
++++ b/src/CarnageGame.cpp
+@@ -63,7 +63,9 @@ bool CarnageGame::Initialize()
+ 
+     ::memset(mHumanPlayers, 0, sizeof(mHumanPlayers));
+ 
+-    gGameCheatsWindow.mWindowShown = true; // show by default
++#ifndef __ANDROID__
++    gGameCheatsWindow.mWindowShown = true; // show by default
++#endif
+ 
+     if (gCvarMapname.mValue.empty())
+     {
+diff --git a/src/Console.cpp b/src/Console.cpp
+index c6b1c2e..28adce0 100644
+--- a/src/Console.cpp
++++ b/src/Console.cpp
+@@ -1,4 +1,7 @@
+-#include "stdafx.h"
++#include "stdafx.h"
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
+ #include "Console.h"
+ #include "ConsoleVar.h"
+ #include "cvars.h"
+@@ -31,6 +34,10 @@ void Console::LogMessage(eLogMessage messageCat, const char* format, ...)
+     vsnprintf(ConsoleMessageBuffer, sizeof(ConsoleMessageBuffer), format, vaList);
+     VA_SCOPE_CLOSE(vaList)
+ 
++#ifdef __ANDROID__
++    __android_log_print(messageCat >= eLogMessage_Error ? ANDROID_LOG_ERROR :
++        (messageCat == eLogMessage_Warning ? ANDROID_LOG_WARN : ANDROID_LOG_INFO), "Carnage3D", "%s", ConsoleMessageBuffer);
++#endif
+     if (messageCat > eLogMessage_Debug)
+     {
+         printf("%s\n", ConsoleMessageBuffer);
+diff --git a/src/FileSystem.cpp b/src/FileSystem.cpp
+index feb69e3..4610835 100644
+--- a/src/FileSystem.cpp
++++ b/src/FileSystem.cpp
+@@ -25,7 +25,12 @@ bool FileSystem::Initialize()
+     {
+         mWorkingDirectoryPath.append("/");
+     }
+-    mWorkingDirectoryPath.append("gamedata");
++    mWorkingDirectoryPath.append("gamedata");
++#ifdef __ANDROID__
++    // engine data is extracted from the APK into internal storage by the Java activity
++    mWorkingDirectoryPath = ::glfwShimInternalStoragePath();
++    mWorkingDirectoryPath.append("/gamedata");
++#endif
+     AddSearchPlace(mWorkingDirectoryPath);
+ 
+     gConsole.LogMessage(eLogMessage_Info, "Working directory: '%s'", mWorkingDirectoryPath.c_str());
+@@ -244,7 +249,15 @@ bool FileSystem::GetFullPathToDirectory(const std::string& objectName, std::stri
+ }
+ 
+ bool FileSystem::SetupGtaDataLocation()
+-{
++{
++#ifdef __ANDROID__
++    // default location: <external app files>/GTADATA (filled by the in-app importer)
++    if (gCvarCurrentBaseDir.mValue.empty() && gCvarGtaDataPath.mValue.empty())
++    {
++        gCvarGtaDataPath.mValue = ::glfwShimExternalStoragePath();
++        gCvarGtaDataPath.mValue.append("/GTADATA");
++    }
++#endif
+     // override data location with startup param
+     if (gCvarCurrentBaseDir.mValue.empty())
+     {
+diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
+index 4a53905..888ee1f 100644
+--- a/src/FollowCameraController.cpp
++++ b/src/FollowCameraController.cpp
+@@ -5,12 +5,62 @@
+ #include "Pedestrian.h"
+ #include "TimeManager.h"
+ 
++// GTA Classic Perspective Lock:
++// The camera's screen-up vector follows the player's world heading (or the heading of the
++// car they drive), so the player always faces 12 o'clock and the world rotates around them.
++// Only the view matrix changes: world coordinates, physics, AI and collision are untouched.
++//   ScreenPosition = R(-theta) * (WorldPosition - PlayerPosition)
++
++namespace
++{
++    const float TwoPi = 6.2831853f;
++
++    // wrap angle to [-pi, pi]
++    inline float WrapPi(float a)
++    {
++        a = fmodf(a + 3.14159265f, TwoPi);
++        if (a < 0.0f) a += TwoPi;
++        return a - 3.14159265f;
++    }
++}
++
+ FollowCameraController::FollowCameraController()
+     : mStartupCameraHeight(32.0f)
+     , mFollowPedCameraHeight(20.0f)
+     , mFollowPedCameraCatchSpeed(20.0f)
+     , mScrollHeightOffset()
+ {
++    const char* lockEnv = getenv("C3D_LOCK");
++    if (lockEnv && lockEnv[0] == '0')
++    {
++        mHeadingLockEnabled = false;
++    }
++}
++
++float FollowCameraController::GetTargetHeading() const
++{
++    // heading in radians, world X/Z plane, direction = (cos, sin)
++    if (mFollowPedestrian->IsCarPassenger() && mFollowPedestrian->mCurrentCar)
++        return mFollowPedestrian->mCurrentCar->mTransformSmooth.mOrientation.to_radians();
++
++    return mFollowPedestrian->mTransformSmooth.mOrientation.to_radians();
++}
++
++void FollowCameraController::ApplyHeading(float headingRadians)
++{
++    const glm::vec3 front = -SceneAxisY; // looking straight down
++    glm::vec3 up;
++    if (mHeadingLockEnabled)
++    {
++        // screen-up = player's forward direction in world space
++        up = glm::vec3(cosf(headingRadians), 0.0f, sinf(headingRadians));
++    }
++    else
++    {
++        up = -SceneAxisZ; // original fixed north-up view
++    }
++    glm::vec3 right = glm::cross(front, up);
++    mCamera->SetOrientation(front, right, up);
+ }
+ 
+ void FollowCameraController::Setup(GameCamera* gameCamera)
+@@ -29,12 +79,18 @@ void FollowCameraController::Setup(GameCamera* gameCamera)
+     {
+         glm::vec3 position = mFollowPedestrian->mTransformSmooth.mPosition;
+         mCamera->SetPosition({position.x, position.y + mStartupCameraHeight, position.z}); 
++        mCameraHeading = GetTargetHeading();
+     }
+     else
+     {
+         mCamera->SetPosition({0.0f, mStartupCameraHeight, 0.0f});
++        mCameraHeading = -3.14159265f * 0.5f; // north-up
+     }
+     mCamera->SetTopDownOrientation();
++    if (mFollowPedestrian)
++    {
++        ApplyHeading(mCameraHeading);
++    }
+ }
+ 
+ void FollowCameraController::UpdateFrame()
+@@ -51,9 +107,12 @@ void FollowCameraController::UpdateFrame()
+     {
+         glm::vec2 carVelocity = mFollowPedestrian->mCurrentCar->mPhysicsBody->GetLinearVelocity();
+         float carSpeed = glm::length(carVelocity);
+-        carVelocity = glm::normalize(carVelocity);
+-        position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
+-        position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
++        if (carSpeed > 0.001f)
++        {
++            carVelocity = carVelocity / carSpeed;
++            position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
++            position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
++        }
+         catchSpeed *= 0.3f; // todo: magic numbers
+     }
+ 
+@@ -63,21 +122,44 @@ void FollowCameraController::UpdateFrame()
+         position = mCamera->mPosition + (position - mCamera->mPosition) * catchSpeed * deltaTime;
+         mCamera->SetPosition(position); 
+     }
++
++    // TEST ONLY: C3D_TEST_SPIN=<deg/sec> turns the on-foot player continuously so the
++    // lock can be verified from screenshots without keyboard input. Never set in normal play.
++    static const char* testSpin = getenv("C3D_TEST_SPIN");
++    if (testSpin && !mFollowPedestrian->IsCarPassenger())
++    {
++        float degPerSec = (float) atof(testSpin);
++        cxx::angle_t a = mFollowPedestrian->mTransform.mOrientation;
++        a = a + cxx::angle_t::from_degrees(degPerSec * deltaTime);
++        mFollowPedestrian->SetOrientation(a, eTransformSpace_World);
++    }
++
++    // heading lock: shortest-arc exponential smoothing toward the player's heading
++    float target = GetTargetHeading();
++    float diff = WrapPi(target - mCameraHeading);
++    float t = glm::clamp(mHeadingCatchSpeed * deltaTime, 0.0f, 1.0f);
++    mCameraHeading = WrapPi(mCameraHeading + diff * t);
++    ApplyHeading(mCameraHeading);
+ }
+ 
+-void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
++void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseButtonInputEvent& inputEvent)
++    if (inputEvent.mPressed && inputEvent.mKeycode == eKeycode_F9)
++    {
++        mHeadingLockEnabled = !mHeadingLockEnabled;
++        inputEvent.SetConsumed();
++    }
++}
++
++void FollowCameraController::InputEvent(MouseButtonInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
++}
++
++void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
++}
++
++void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+ {
+     mScrollHeightOffset = glm::clamp(mScrollHeightOffset - inputEvent.mScrollY, -3.0f, 23.0f);
+ }
+@@ -85,6 +167,10 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+ void FollowCameraController::SetFollowTarget(Pedestrian* pedestrian)
+ {
+     mFollowPedestrian = pedestrian;
++    if (mFollowPedestrian)
++    {
++        mCameraHeading = GetTargetHeading();
++    }
+ }
+ 
+ void FollowCameraController::InputEventLost()
+diff --git a/src/FollowCameraController.h b/src/FollowCameraController.h
+index 8640d19..bca9ea0 100644
+--- a/src/FollowCameraController.h
++++ b/src/FollowCameraController.h
+@@ -31,4 +31,12 @@ private:
+     float mFollowPedCameraCatchSpeed; // meters per second
+ 
+     Pedestrian* mFollowPedestrian = nullptr;
++
++    // perspective lock (player always faces screen-up, world rotates)
++    bool mHeadingLockEnabled = true; // F9 toggles
++    float mCameraHeading = 0.0f; // radians, smoothed
++    float mHeadingCatchSpeed = 12.0f; // 1/sec, higher = tighter lock
++
++    float GetTargetHeading() const;
++    void ApplyHeading(float headingRadians);
+ };
+\ No newline at end of file
+diff --git a/src/GameCamera.cpp b/src/GameCamera.cpp
+index 3e02e64..0fba3b4 100644
+--- a/src/GameCamera.cpp
++++ b/src/GameCamera.cpp
+@@ -181,10 +181,14 @@ void GameCamera::ComputeViewBounds2()
+         const float Hfar = tan(mPerspectiveParams.mFovy * PiDiv180 * 0.5f) * mPosition.y;
+         const float Wfar = Hfar * mPerspectiveParams.mAspect;
+ 
+-        areaBounds.mMin.x = mPosition.x - Wfar;
+-        areaBounds.mMin.y = mPosition.z - Hfar;
+-        areaBounds.mMax.x = mPosition.x + Wfar;
+-        areaBounds.mMax.y = mPosition.z + Hfar;
++        // perspective lock: the view may be yaw-rotated, so cover the rotated
++        // screen rectangle with its bounding circle (axis-aligned square of radius R)
++        const float R = sqrtf(Wfar * Wfar + Hfar * Hfar);
++
++        areaBounds.mMin.x = mPosition.x - R;
++        areaBounds.mMin.y = mPosition.z - R;
++        areaBounds.mMax.x = mPosition.x + R;
++        areaBounds.mMax.y = mPosition.z + R;
+     }
+ 
+     mOnScreenMapArea = areaBounds;
+diff --git a/src/GpuBuffer.cpp b/src/GpuBuffer.cpp
+index 2b9f269..52c8066 100644
+--- a/src/GpuBuffer.cpp
++++ b/src/GpuBuffer.cpp
+@@ -87,7 +87,7 @@ bool GpuBuffer::Setup(eBufferUsage bufferUsage, unsigned int bufferLength, const
+     {
+         void* pMappedData = nullptr;
+ 
+-#ifdef __EMSCRIPTEN__
++#ifdef C3D_GLES
+         pMappedData = ::glMapBufferRange(bufferTargetGL, 0, mBufferCapacity, GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT);
+ #else
+         pMappedData = ::glMapBufferRange(bufferTargetGL, 0, mBufferCapacity, GL_MAP_WRITE_BIT | GL_MAP_INVALIDATE_BUFFER_BIT | GL_MAP_UNSYNCHRONIZED_BIT);
+@@ -200,7 +200,7 @@ void* GpuBuffer::Lock(BufferAccessBits accessBits)
+     GLenum bufferTargetGL = EnumToGL(mContent);
+ 
+     void* pMappedData = nullptr;
+-#ifdef __EMSCRIPTEN__
++#ifdef C3D_GLES
+     if ((accessBits & BufferAccess_Read) > 0)
+     {
+         debug_assert(false); // reading is not supported
+diff --git a/src/GpuProgram.cpp b/src/GpuProgram.cpp
+index cae3819..1ac82a5 100644
+--- a/src/GpuProgram.cpp
++++ b/src/GpuProgram.cpp
+@@ -3,7 +3,7 @@
+ #include "GraphicsContext.h"
+ #include "OpenGLDefs.h"
+ 
+-#ifdef __EMSCRIPTEN__
++#ifdef C3D_GLES
+ static const char* gGLSL_version_string = 
+     "#version 300 es\n"
+     "precision highp float;\n"
+diff --git a/src/GraphicsDevice.cpp b/src/GraphicsDevice.cpp
+index 2329731..f345936 100644
+--- a/src/GraphicsDevice.cpp
++++ b/src/GraphicsDevice.cpp
+@@ -213,6 +213,15 @@ bool GraphicsDevice::Initialize()
+     }
+     // setup current opengl context and register callback handlers
+     ::glfwMakeContextCurrent(graphicsWindow);
++#ifdef __ANDROID__
++    // fullscreen on device: use the real drawable size
++    ::glfwShimGetDisplaySize(&mScreenResolution.x, &mScreenResolution.y);
++    gCvarGraphicsScreenDims.mValue = mScreenResolution;
++    if (gCvarUiScale.mValue == 1.0f) // not set by the user: size the HUD for the phone screen
++    {
++        gCvarUiScale.mValue = glm::max(1.0f, mScreenResolution.y / 720.0f);
++    }
++#endif
+     ::glfwSetMouseButtonCallback(graphicsWindow, [](GLFWwindow*, int button, int action, int mods)
+         {
+             if (action == GLFW_REPEAT)
+@@ -375,7 +384,7 @@ void GraphicsDevice::EnableVSync(bool vsyncEnabled)
+ 
+ void GraphicsDevice::EnableFullscreen(bool fullscreenEnabled)
+ {
+-#ifdef __EMSCRIPTEN__
++#ifdef C3D_GLES
+     return; // fullscreen mode is not available
+ #endif
+ 
+@@ -729,7 +738,13 @@ void GraphicsDevice::RenderIndexedPrimitives(ePrimitiveType primitive, eIndicesT
+ 
+     GLenum primitives = EnumToGL(primitive);
+     GLenum indicesTypeGL = EnumToGL(indices);
++#ifdef C3D_GLES
++    // GLES 3.0 has no base-vertex draws; no caller uses a non-zero base vertex
++    debug_assert(baseVertex == 0);
++    ::glDrawElements(primitives, numIndices, indicesTypeGL, BUFFER_OFFSET(offset));
++#else
+     ::glDrawElementsBaseVertex(primitives, numIndices, indicesTypeGL, BUFFER_OFFSET(offset), baseVertex);
++#endif
+     glCheckError();
+ }
+ 
+@@ -966,7 +981,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
+     if (mCurrentStates == renderStates && !forceState)
+         return;
+ 
+-#ifndef __EMSCRIPTEN__
++#ifndef C3D_GLES
+     // polygon mode
+     if (forceState || (mCurrentStates.mFillMode != renderStates.mFillMode))
+     {
+diff --git a/src/GuiContext.cpp b/src/GuiContext.cpp
+index ac669f9..04ff34f 100644
+--- a/src/GuiContext.cpp
++++ b/src/GuiContext.cpp
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+-#include "GuiContext.h"
++#include "GuiContext.h"
++#include "cvars.h"
+ 
+ bool GuiContext::EnterChildClipArea(const Rect& rcLocal)
+ {
+@@ -42,7 +43,14 @@ void GuiContext::LeaveChildClipArea()
+ }
+ 
+ void GuiContext::TransformClipRect(Rect& rectangle) const
+-{
++{
++    // logical (g_uiScale) units -> pixels
++    const float uiScale = glm::clamp(gCvarUiScale.mValue, 0.25f, 8.0f);
++    rectangle.x = static_cast<int>(rectangle.x * uiScale);
++    rectangle.y = static_cast<int>(rectangle.y * uiScale);
++    rectangle.w = static_cast<int>(rectangle.w * uiScale);
++    rectangle.h = static_cast<int>(rectangle.h * uiScale);
++
+     rectangle.x += mCamera.mViewportRect.x;
+     rectangle.y = gGraphicsDevice.mScreenResolution.y - (mCamera.mViewportRect.y + rectangle.y + rectangle.h);
+    // rectangle.y = gGraphicsDevice.mScreenResolution.y - (rectangle.y + rectangle.h);
+diff --git a/src/GuiManager.cpp b/src/GuiManager.cpp
+index a68fe52..3b05e55 100644
+--- a/src/GuiManager.cpp
++++ b/src/GuiManager.cpp
+@@ -65,10 +65,14 @@ void GuiManager::RenderFrame()
+         for (GuiScreen* currScreen: mScreensList)
+         {
+             mCamera2D.SetIdentity();
++            // g_uiScale: lay the GUI out in a smaller logical screen, magnified to the real one
++            const float uiScale = glm::clamp(gCvarUiScale.mValue, 0.25f, 8.0f);
+             mCamera2D.mViewportRect = currScreen->mScreenArea;
++            mCamera2D.mViewportRect.w = static_cast<int>(currScreen->mScreenArea.w / uiScale);
++            mCamera2D.mViewportRect.h = static_cast<int>(currScreen->mScreenArea.h / uiScale);
+             mCamera2D.SetProjection(0.0f, mCamera2D.mViewportRect.w * 1.0f, mCamera2D.mViewportRect.h * 1.0f, 0.0f);
+ 
+-            gGraphicsDevice.SetViewportRect(mCamera2D.mViewportRect);
++            gGraphicsDevice.SetViewportRect(currScreen->mScreenArea);
+             gRenderManager.mSpritesProgram.UploadCameraTransformMatrices(mCamera2D);
+ 
+             GuiContext uiContext ( mCamera2D, mSpriteBatch );
+diff --git a/src/Main.cpp b/src/Main.cpp
+index 068fae5..435924d 100644
+--- a/src/Main.cpp
++++ b/src/Main.cpp
+@@ -1,4 +1,7 @@
+-#include "stdafx.h"
++#include "stdafx.h"
++#ifdef __ANDROID__
++#include <SDL.h> // renames main() to SDL_main()
++#endif
+ 
+ int main(int argc, char *argv[])
+ {
+diff --git a/src/android/gles_glew_compat.h b/src/android/gles_glew_compat.h
+new file mode 100644
+index 0000000..70113b2
+--- /dev/null
++++ b/src/android/gles_glew_compat.h
+@@ -0,0 +1,22 @@
++#pragma once
++// GTA Classic Perspective Lock - Android: stand-in for GLEW.
++// OpenGL ES 3.0 entry points are linked directly from libGLESv3, so no extension loader is needed.
++
++#include <GLES3/gl3.h>
++#include <GLES2/gl2ext.h>
++
++#define GLEW_OK 0
++static int glewExperimental = 1;
++inline int glewInit() { return GLEW_OK; }
++inline const char* glewGetErrorString(int) { return "n/a"; }
++
++#define GLEW_VERSION_3_2 1
++#define GLEW_ARB_texture_non_power_of_two 1 // core in ES 3.0
++#define GLEW_EXT_abgr 0
++
++#ifndef GL_MAX_TEXTURE_BUFFER_SIZE
++#define GL_MAX_TEXTURE_BUFFER_SIZE 0x8C2B // ES 3.2 only; query fails harmlessly on 3.0
++#endif
++#ifndef GL_PROGRAM_POINT_SIZE
++#define GL_PROGRAM_POINT_SIZE 0x8642 // always on in ES; glEnable is a harmless no-op error
++#endif
+diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
+new file mode 100644
+index 0000000..58ff83b
+--- /dev/null
++++ b/src/android/glfw_sdl_shim.cpp
+@@ -0,0 +1,670 @@
++// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
++#include <SDL.h>
++#include "glfw_sdl_shim.h"
++#include <cmath>
++#include <cstring>
++#include <vector>
++
++struct GLFWwindow
++{
++    SDL_Window* mSdlWindow = nullptr;
++    SDL_GLContext mContext = nullptr;
++    bool mShouldClose = false;
++};
++struct GLFWmonitor
++{
++    int mDummy = 0;
++};
++
++static GLFWwindow gWindow;
++static GLFWmonitor gMonitor;
++static GLFWerrorfun gErrorCb = nullptr;
++static GLFWmousebuttonfun gMouseButtonCb = nullptr;
++static GLFWkeyfun gKeyCb = nullptr;
++static GLFWcharfun gCharCb = nullptr;
++static GLFWscrollfun gScrollCb = nullptr;
++static GLFWcursorposfun gCursorCb = nullptr;
++static GLFWjoystickfun gJoystickCb = nullptr;
++static SDL_GameController* gPads[GLFW_JOYSTICK_LAST + 1] = {};
++static Uint64 gTimeStart = 0;
++
++static void ReportError(const char* what)
++{
++    SDL_Log("[shim] %s: %s", what, SDL_GetError());
++    if (gErrorCb) gErrorCb(0, SDL_GetError());
++}
++
++//////////////////////////////////////////////////////////////////////////
++// keyboard mapping
++
++static int SdlKeyToGlfw(SDL_Keycode k)
++{
++    if (k >= SDLK_a && k <= SDLK_z) return GLFW_KEY_A + (int)(k - SDLK_a);
++    if (k >= SDLK_0 && k <= SDLK_9) return GLFW_KEY_0 + (int)(k - SDLK_0);
++    if (k >= SDLK_F1 && k <= SDLK_F12) return GLFW_KEY_F1 + (int)(k - SDLK_F1);
++    switch (k)
++    {
++        case SDLK_SPACE: return GLFW_KEY_SPACE;
++        case SDLK_BACKQUOTE: return GLFW_KEY_GRAVE_ACCENT;
++        case SDLK_ESCAPE: return GLFW_KEY_ESCAPE;
++        case SDLK_RETURN: return GLFW_KEY_ENTER;
++        case SDLK_KP_ENTER: return GLFW_KEY_ENTER;
++        case SDLK_TAB: return GLFW_KEY_TAB;
++        case SDLK_BACKSPACE: return GLFW_KEY_BACKSPACE;
++        case SDLK_INSERT: return GLFW_KEY_INSERT;
++        case SDLK_DELETE: return GLFW_KEY_DELETE;
++        case SDLK_RIGHT: return GLFW_KEY_RIGHT;
++        case SDLK_LEFT: return GLFW_KEY_LEFT;
++        case SDLK_DOWN: return GLFW_KEY_DOWN;
++        case SDLK_UP: return GLFW_KEY_UP;
++        case SDLK_PAGEUP: return GLFW_KEY_PAGE_UP;
++        case SDLK_PAGEDOWN: return GLFW_KEY_PAGE_DOWN;
++        case SDLK_HOME: return GLFW_KEY_HOME;
++        case SDLK_END: return GLFW_KEY_END;
++        case SDLK_LSHIFT: return GLFW_KEY_LEFT_SHIFT;
++        case SDLK_RSHIFT: return GLFW_KEY_RIGHT_SHIFT;
++        case SDLK_LCTRL: return GLFW_KEY_LEFT_CONTROL;
++        case SDLK_RCTRL: return GLFW_KEY_RIGHT_CONTROL;
++        default: break;
++    }
++    return -1;
++}
++
++static void EmitKey(int glfwKey, bool pressed)
++{
++    if (gKeyCb && glfwKey >= 0)
++        gKeyCb(&gWindow, glfwKey, 0, pressed ? GLFW_PRESS : GLFW_RELEASE, 0);
++}
++
++//////////////////////////////////////////////////////////////////////////
++// touch controls
++
++namespace touch
++{
++    enum Control
++    {
++        Control_None = -1,
++        Control_DPad = 0,
++        Control_Fire,
++        Control_Car,
++        Control_Jump,
++        Control_Weapon,
++        Control_Horn,
++        Control_Lock,
++        Control_COUNT
++    };
++
++    struct Button
++    {
++        float x, y, r;
++        int key;
++        const char* label;
++        float cr, cg, cb;
++    };
++
++    static Button gButtons[Control_COUNT];
++    static float gDPadX = 0, gDPadY = 0, gDPadR = 0;
++    static int gScreenW = 0, gScreenH = 0;
++
++    struct Finger
++    {
++        SDL_FingerID id;
++        int control;
++        float x, y; // pixels
++    };
++    static std::vector<Finger> gFingers;
++
++    // current key state produced by touch
++    enum { K_UP, K_DOWN, K_LEFT, K_RIGHT, K_FIRE, K_CAR, K_JUMP, K_WPN, K_HORN, K_LOCK, K_COUNT };
++    static const int gKeyMap[K_COUNT] = {
++        GLFW_KEY_UP, GLFW_KEY_DOWN, GLFW_KEY_LEFT, GLFW_KEY_RIGHT, GLFW_KEY_LEFT_CONTROL,
++        GLFW_KEY_ENTER, GLFW_KEY_SPACE, GLFW_KEY_X, GLFW_KEY_TAB, GLFW_KEY_F9 };
++    static bool gKeyState[K_COUNT] = {};
++    static bool gVisible = true;
++
++    static void Layout(int w, int h)
++    {
++        gScreenW = w; gScreenH = h;
++        float u = (float)((w < h) ? w : h); // short side
++        float W = (float)w, H = (float)h;
++        gDPadR = 0.17f * u;
++        gDPadX = 0.06f * u + gDPadR;
++        gDPadY = H - 0.06f * u - gDPadR;
++
++        float br = 0.075f * u;
++        gButtons[Control_Fire]   = { W - 0.15f * u, H - 0.15f * u, 0.095f * u, K_FIRE, "FIRE", 0.85f, 0.20f, 0.20f };
++        gButtons[Control_Car]    = { W - 0.38f * u, H - 0.12f * u, br, K_CAR,  "CAR",  0.20f, 0.45f, 0.90f };
++        gButtons[Control_Jump]   = { W - 0.15f * u, H - 0.40f * u, br, K_JUMP, "JUMP", 0.20f, 0.75f, 0.30f };
++        gButtons[Control_Weapon] = { W - 0.36f * u, H - 0.34f * u, br * 0.85f, K_WPN, "WPN", 0.90f, 0.75f, 0.15f };
++        gButtons[Control_Horn]   = { W - 0.58f * u, H - 0.10f * u, br * 0.75f, K_HORN, "HORN", 0.60f, 0.60f, 0.60f };
++        gButtons[Control_Lock]   = { W - 0.09f * u, 0.09f * u, br * 0.65f, K_LOCK, "LOCK", 0.75f, 0.40f, 0.90f };
++        gButtons[Control_DPad]   = { gDPadX, gDPadY, gDPadR, -1, "", 1, 1, 1 };
++    }
++
++    static int HitTest(float x, float y)
++    {
++        float dx = x - gDPadX, dy = y - gDPadY;
++        if (dx * dx + dy * dy <= (gDPadR * 1.6f) * (gDPadR * 1.6f)) return Control_DPad;
++        for (int i = Control_Fire; i < Control_COUNT; ++i)
++        {
++            const Button& b = gButtons[i];
++            float bx = x - b.x, by = y - b.y;
++            float rr = b.r * 1.35f;
++            if (bx * bx + by * by <= rr * rr) return i;
++        }
++        return Control_None;
++    }
++
++    static void Recompute()
++    {
++        bool desired[K_COUNT] = {};
++        for (const Finger& f : gFingers)
++        {
++            if (f.control == Control_DPad)
++            {
++                float dx = f.x - gDPadX, dy = f.y - gDPadY;
++                float t = gDPadR * 0.35f;
++                if (dy < -t) desired[K_UP] = true;
++                if (dy > t) desired[K_DOWN] = true;
++                if (dx < -t) desired[K_LEFT] = true;
++                if (dx > t) desired[K_RIGHT] = true;
++            }
++            else if (f.control > Control_DPad)
++            {
++                desired[gButtons[f.control].key] = true;
++            }
++        }
++        for (int k = 0; k < K_COUNT; ++k)
++        {
++            if (desired[k] != gKeyState[k])
++            {
++                gKeyState[k] = desired[k];
++                EmitKey(gKeyMap[k], desired[k]);
++            }
++        }
++    }
++
++    static void OnFinger(const SDL_TouchFingerEvent& e, Uint32 type)
++    {
++        gVisible = true;
++        float x = e.x * gScreenW, y = e.y * gScreenH;
++        if (type == SDL_FINGERDOWN)
++        {
++            int c = HitTest(x, y);
++            if (c != Control_None) gFingers.push_back({ e.fingerId, c, x, y });
++        }
++        else
++        {
++            for (size_t i = 0; i < gFingers.size(); ++i)
++            {
++                if (gFingers[i].id != e.fingerId) continue;
++                if (type == SDL_FINGERUP) gFingers.erase(gFingers.begin() + i);
++                else { gFingers[i].x = x; gFingers[i].y = y; }
++                break;
++            }
++        }
++        Recompute();
++    }
++
++    static void ReleaseAll()
++    {
++        gFingers.clear();
++        Recompute();
++    }
++
++    //////////////////////////////////////////////////////////////////////
++    // rendering
++
++    // 5x7 glyphs for the labels used above
++    struct Glyph { char c; unsigned char rows[7]; };
++    static const Glyph gFont[] = {
++        {'A', {0x0E,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'C', {0x0E,0x11,0x10,0x10,0x10,0x11,0x0E}},
++        {'E', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x1F}}, {'F', {0x1F,0x10,0x10,0x1E,0x10,0x10,0x10}},
++        {'H', {0x11,0x11,0x11,0x1F,0x11,0x11,0x11}}, {'I', {0x0E,0x04,0x04,0x04,0x04,0x04,0x0E}},
++        {'J', {0x07,0x02,0x02,0x02,0x02,0x12,0x0C}}, {'K', {0x11,0x12,0x14,0x18,0x14,0x12,0x11}},
++        {'L', {0x10,0x10,0x10,0x10,0x10,0x10,0x1F}}, {'M', {0x11,0x1B,0x15,0x15,0x11,0x11,0x11}},
++        {'N', {0x11,0x11,0x19,0x15,0x13,0x11,0x11}}, {'O', {0x0E,0x11,0x11,0x11,0x11,0x11,0x0E}},
++        {'P', {0x1E,0x11,0x11,0x1E,0x10,0x10,0x10}}, {'R', {0x1E,0x11,0x11,0x1E,0x14,0x12,0x11}},
++        {'U', {0x11,0x11,0x11,0x11,0x11,0x11,0x0E}}, {'W', {0x11,0x11,0x11,0x15,0x15,0x15,0x0A}},
++    };
++
++    static std::vector<float> gVerts; // x,y,r,g,b,a
++    static GLuint gProgram = 0, gVao = 0, gVbo = 0;
++    static GLint gLocScreen = -1;
++
++    static void Tri(float x0, float y0, float x1, float y1, float x2, float y2, float r, float g, float b, float a)
++    {
++        const float v[] = { x0,y0,r,g,b,a, x1,y1,r,g,b,a, x2,y2,r,g,b,a };
++        gVerts.insert(gVerts.end(), v, v + 18);
++    }
++    static void Quad(float x, float y, float w, float h, float r, float g, float b, float a)
++    {
++        Tri(x, y, x + w, y, x + w, y + h, r, g, b, a);
++        Tri(x, y, x + w, y + h, x, y + h, r, g, b, a);
++    }
++    static void Disc(float cx, float cy, float rad, float r, float g, float b, float a)
++    {
++        const int N = 32;
++        for (int i = 0; i < N; ++i)
++        {
++            float a0 = 6.2831853f * i / N, a1 = 6.2831853f * (i + 1) / N;
++            Tri(cx, cy, cx + cosf(a0) * rad, cy + sinf(a0) * rad, cx + cosf(a1) * rad, cy + sinf(a1) * rad, r, g, b, a);
++        }
++    }
++    static void Ring(float cx, float cy, float rad, float th, float r, float g, float b, float a)
++    {
++        const int N = 40;
++        for (int i = 0; i < N; ++i)
++        {
++            float a0 = 6.2831853f * i / N, a1 = 6.2831853f * (i + 1) / N;
++            float ix0 = cx + cosf(a0) * (rad - th), iy0 = cy + sinf(a0) * (rad - th);
++            float ox0 = cx + cosf(a0) * rad, oy0 = cy + sinf(a0) * rad;
++            float ix1 = cx + cosf(a1) * (rad - th), iy1 = cy + sinf(a1) * (rad - th);
++            float ox1 = cx + cosf(a1) * rad, oy1 = cy + sinf(a1) * rad;
++            Tri(ix0, iy0, ox0, oy0, ox1, oy1, r, g, b, a);
++            Tri(ix0, iy0, ox1, oy1, ix1, iy1, r, g, b, a);
++        }
++    }
++    static void Text(const char* s, float cx, float cy, float px, float a)
++    {
++        int n = (int)strlen(s);
++        float w = (n * 6 - 1) * px, h = 7 * px;
++        float x0 = cx - w * 0.5f, y0 = cy - h * 0.5f;
++        for (int i = 0; i < n; ++i)
++        {
++            const Glyph* gl = nullptr;
++            for (const Glyph& g : gFont) if (g.c == s[i]) { gl = &g; break; }
++            if (!gl) continue;
++            for (int row = 0; row < 7; ++row)
++                for (int col = 0; col < 5; ++col)
++                    if (gl->rows[row] & (0x10 >> col))
++                        Quad(x0 + (i * 6 + col) * px, y0 + row * px, px, px, 1, 1, 1, a);
++        }
++    }
++
++    static GLuint Compile(GLenum type, const char* src)
++    {
++        GLuint s = glCreateShader(type);
++        glShaderSource(s, 1, &src, nullptr);
++        glCompileShader(s);
++        GLint ok = 0;
++        glGetShaderiv(s, GL_COMPILE_STATUS, &ok);
++        if (!ok)
++        {
++            char log[512]; glGetShaderInfoLog(s, 512, nullptr, log);
++            SDL_Log("[shim] overlay shader error: %s", log);
++        }
++        return s;
++    }
++
++    static bool InitGL()
++    {
++        const char* vs =
++            "#version 300 es\n"
++            "layout(location=0) in vec2 inPos;\n"
++            "layout(location=1) in vec4 inCol;\n"
++            "uniform vec2 uScreen;\n"
++            "out vec4 vCol;\n"
++            "void main(){ vCol = inCol; gl_Position = vec4(inPos.x / uScreen.x * 2.0 - 1.0, 1.0 - inPos.y / uScreen.y * 2.0, 0.0, 1.0); }\n";
++        const char* fs =
++            "#version 300 es\n"
++            "precision mediump float;\n"
++            "in vec4 vCol; out vec4 outCol;\n"
++            "void main(){ outCol = vCol; }\n";
++        GLuint v = Compile(GL_VERTEX_SHADER, vs), f = Compile(GL_FRAGMENT_SHADER, fs);
++        gProgram = glCreateProgram();
++        glAttachShader(gProgram, v); glAttachShader(gProgram, f);
++        glLinkProgram(gProgram);
++        glDeleteShader(v); glDeleteShader(f);
++        GLint ok = 0; glGetProgramiv(gProgram, GL_LINK_STATUS, &ok);
++        if (!ok) { SDL_Log("[shim] overlay program link failed"); return false; }
++        gLocScreen = glGetUniformLocation(gProgram, "uScreen");
++
++        GLint prevVao = 0, prevBuf = 0;
++        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
++        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
++        glGenVertexArrays(1, &gVao);
++        glGenBuffers(1, &gVbo);
++        glBindVertexArray(gVao);
++        glBindBuffer(GL_ARRAY_BUFFER, gVbo);
++        glEnableVertexAttribArray(0);
++        glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)0);
++        glEnableVertexAttribArray(1);
++        glVertexAttribPointer(1, 4, GL_FLOAT, GL_FALSE, 6 * sizeof(float), (void*)(2 * sizeof(float)));
++        glBindVertexArray((GLuint)prevVao);
++        glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
++        return true;
++    }
++
++    static void Build()
++    {
++        gVerts.clear();
++        // d-pad
++        Disc(gDPadX, gDPadY, gDPadR, 0, 0, 0, 0.22f);
++        Ring(gDPadX, gDPadY, gDPadR, gDPadR * 0.06f, 1, 1, 1, 0.45f);
++        float s = gDPadR * 0.22f, o = gDPadR * 0.62f;
++        float aU = gKeyState[K_UP] ? 0.9f : 0.5f, aD = gKeyState[K_DOWN] ? 0.9f : 0.5f;
++        float aL = gKeyState[K_LEFT] ? 0.9f : 0.5f, aR = gKeyState[K_RIGHT] ? 0.9f : 0.5f;
++        Tri(gDPadX, gDPadY - o - s, gDPadX - s, gDPadY - o + s * 0.6f, gDPadX + s, gDPadY - o + s * 0.6f, 1, 1, 1, aU);
++        Tri(gDPadX, gDPadY + o + s, gDPadX + s, gDPadY + o - s * 0.6f, gDPadX - s, gDPadY + o - s * 0.6f, 1, 1, 1, aD);
++        Tri(gDPadX - o - s, gDPadY, gDPadX - o + s * 0.6f, gDPadY + s, gDPadX - o + s * 0.6f, gDPadY - s, 1, 1, 1, aL);
++        Tri(gDPadX + o + s, gDPadY, gDPadX + o - s * 0.6f, gDPadY - s, gDPadX + o - s * 0.6f, gDPadY + s, 1, 1, 1, aR);
++        // finger knob on d-pad
++        for (const Finger& f : gFingers)
++        {
++            if (f.control != Control_DPad) continue;
++            float dx = f.x - gDPadX, dy = f.y - gDPadY;
++            float len = sqrtf(dx * dx + dy * dy), mx = gDPadR * 0.8f;
++            if (len > mx) { dx *= mx / len; dy *= mx / len; }
++            Disc(gDPadX + dx, gDPadY + dy, gDPadR * 0.28f, 1, 1, 1, 0.35f);
++        }
++        // buttons
++        for (int i = Control_Fire; i < Control_COUNT; ++i)
++        {
++            const Button& b = gButtons[i];
++            bool down = gKeyState[b.key];
++            Disc(b.x, b.y, b.r, b.cr, b.cg, b.cb, down ? 0.70f : 0.38f);
++            Ring(b.x, b.y, b.r, b.r * 0.08f, 1, 1, 1, 0.55f);
++            float px = (b.r * 1.3f) / (strlen(b.label) * 6.0f);
++            if (px > b.r * 0.13f) px = b.r * 0.13f;
++            Text(b.label, b.x, b.y, px, 0.9f);
++        }
++    }
++
++    static void Draw(int w, int h)
++    {
++        if (!gVisible) return;
++        if (w != gScreenW || h != gScreenH) Layout(w, h);
++        if (!gProgram && !InitGL()) { gVisible = false; return; }
++        Build();
++        if (gVerts.empty()) return;
++
++        // save state touched by the overlay
++        GLint prevProg = 0, prevVao = 0, prevBuf = 0, vp[4], sc[4];
++        GLint bSrcRGB, bDstRGB, bSrcA, bDstA, bEqRGB, bEqA;
++        GLboolean blend = glIsEnabled(GL_BLEND), depth = glIsEnabled(GL_DEPTH_TEST);
++        GLboolean scissor = glIsEnabled(GL_SCISSOR_TEST), cull = glIsEnabled(GL_CULL_FACE);
++        GLboolean depthMask = GL_TRUE;
++        glGetBooleanv(GL_DEPTH_WRITEMASK, &depthMask);
++        glGetIntegerv(GL_CURRENT_PROGRAM, &prevProg);
++        glGetIntegerv(GL_VERTEX_ARRAY_BINDING, &prevVao);
++        glGetIntegerv(GL_ARRAY_BUFFER_BINDING, &prevBuf);
++        glGetIntegerv(GL_VIEWPORT, vp);
++        glGetIntegerv(GL_SCISSOR_BOX, sc);
++        glGetIntegerv(GL_BLEND_SRC_RGB, &bSrcRGB); glGetIntegerv(GL_BLEND_DST_RGB, &bDstRGB);
++        glGetIntegerv(GL_BLEND_SRC_ALPHA, &bSrcA); glGetIntegerv(GL_BLEND_DST_ALPHA, &bDstA);
++        glGetIntegerv(GL_BLEND_EQUATION_RGB, &bEqRGB); glGetIntegerv(GL_BLEND_EQUATION_ALPHA, &bEqA);
++
++        glViewport(0, 0, w, h);
++        glDisable(GL_SCISSOR_TEST);
++        glDisable(GL_DEPTH_TEST);
++        glDisable(GL_CULL_FACE);
++        glDepthMask(GL_FALSE);
++        glEnable(GL_BLEND);
++        glBlendEquation(GL_FUNC_ADD);
++        glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
++        glUseProgram(gProgram);
++        glUniform2f(gLocScreen, (float)w, (float)h);
++        glBindVertexArray(gVao);
++        glBindBuffer(GL_ARRAY_BUFFER, gVbo);
++        glBufferData(GL_ARRAY_BUFFER, gVerts.size() * sizeof(float), gVerts.data(), GL_STREAM_DRAW);
++        glDrawArrays(GL_TRIANGLES, 0, (GLsizei)(gVerts.size() / 6));
++
++        // restore
++        glBindVertexArray((GLuint)prevVao);
++        glBindBuffer(GL_ARRAY_BUFFER, (GLuint)prevBuf);
++        glUseProgram((GLuint)prevProg);
++        glViewport(vp[0], vp[1], vp[2], vp[3]);
++        glScissor(sc[0], sc[1], sc[2], sc[3]);
++        glBlendEquationSeparate(bEqRGB, bEqA);
++        glBlendFuncSeparate(bSrcRGB, bDstRGB, bSrcA, bDstA);
++        glDepthMask(depthMask);
++        if (blend) glEnable(GL_BLEND); else glDisable(GL_BLEND);
++        if (depth) glEnable(GL_DEPTH_TEST); else glDisable(GL_DEPTH_TEST);
++        if (scissor) glEnable(GL_SCISSOR_TEST); else glDisable(GL_SCISSOR_TEST);
++        if (cull) glEnable(GL_CULL_FACE); else glDisable(GL_CULL_FACE);
++    }
++} // namespace touch
++
++//////////////////////////////////////////////////////////////////////////
++// GLFW API
++
++int glfwInit(void)
++{
++    SDL_SetHint(SDL_HINT_ORIENTATIONS, "LandscapeLeft LandscapeRight");
++    SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
++    SDL_SetHint(SDL_HINT_MOUSE_TOUCH_EVENTS, "0");
++    SDL_SetHint(SDL_HINT_ANDROID_TRAP_BACK_BUTTON, "1");
++    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0)
++    {
++        ReportError("SDL_Init");
++        return GLFW_FALSE;
++    }
++    gTimeStart = SDL_GetPerformanceCounter();
++    return GLFW_TRUE;
++}
++
++void glfwTerminate(void)
++{
++    for (SDL_GameController*& p : gPads)
++    {
++        if (p) SDL_GameControllerClose(p);
++        p = nullptr;
++    }
++    SDL_Quit();
++}
++
++const char* glfwGetVersionString(void) { return "GLFW-on-SDL2 shim (Android)"; }
++GLFWerrorfun glfwSetErrorCallback(GLFWerrorfun cb) { GLFWerrorfun p = gErrorCb; gErrorCb = cb; return p; }
++void glfwWindowHint(int, int) {}
++GLFWmonitor* glfwGetPrimaryMonitor(void) { return &gMonitor; }
++
++GLFWwindow* glfwCreateWindow(int width, int height, const char* title, GLFWmonitor*, GLFWwindow*)
++{
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 3);
++    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
++    SDL_GL_SetAttribute(SDL_GL_RED_SIZE, 8);
++    SDL_GL_SetAttribute(SDL_GL_GREEN_SIZE, 8);
++    SDL_GL_SetAttribute(SDL_GL_BLUE_SIZE, 8);
++    SDL_GL_SetAttribute(SDL_GL_ALPHA_SIZE, 8);
++    SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 24);
++    SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
++
++    gWindow.mSdlWindow = SDL_CreateWindow(title, SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, width, height,
++        SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI);
++    if (!gWindow.mSdlWindow)
++    {
++        ReportError("SDL_CreateWindow");
++        return nullptr;
++    }
++    gWindow.mContext = SDL_GL_CreateContext(gWindow.mSdlWindow);
++    if (!gWindow.mContext)
++    {
++        // some devices refuse a 24-bit depth buffer
++        SDL_GL_SetAttribute(SDL_GL_DEPTH_SIZE, 16);
++        gWindow.mContext = SDL_GL_CreateContext(gWindow.mSdlWindow);
++    }
++    if (!gWindow.mContext)
++    {
++        ReportError("SDL_GL_CreateContext");
++        SDL_DestroyWindow(gWindow.mSdlWindow);
++        gWindow.mSdlWindow = nullptr;
++        return nullptr;
++    }
++    gWindow.mShouldClose = false;
++    int w = 0, h = 0;
++    SDL_GL_GetDrawableSize(gWindow.mSdlWindow, &w, &h);
++    touch::Layout(w, h);
++    SDL_Log("[shim] window %dx%d, GL %s", w, h, (const char*)glGetString(GL_VERSION));
++    return &gWindow;
++}
++
++void glfwDestroyWindow(GLFWwindow* window)
++{
++    if (!window) return;
++    if (window->mContext) SDL_GL_DeleteContext(window->mContext);
++    if (window->mSdlWindow) SDL_DestroyWindow(window->mSdlWindow);
++    window->mContext = nullptr;
++    window->mSdlWindow = nullptr;
++}
++
++void glfwMakeContextCurrent(GLFWwindow* window)
++{
++    if (window && window->mSdlWindow) SDL_GL_MakeCurrent(window->mSdlWindow, window->mContext);
++}
++
++void glfwSwapBuffers(GLFWwindow* window)
++{
++    if (!window || !window->mSdlWindow) return;
++    int w = 0, h = 0;
++    SDL_GL_GetDrawableSize(window->mSdlWindow, &w, &h);
++    touch::Draw(w, h);
++    SDL_GL_SwapWindow(window->mSdlWindow);
++}
++
++void glfwSwapInterval(int interval) { SDL_GL_SetSwapInterval(interval); }
++
++void glfwPollEvents(void)
++{
++    SDL_Event e;
++    while (SDL_PollEvent(&e))
++    {
++        switch (e.type)
++        {
++            case SDL_QUIT:
++                gWindow.mShouldClose = true;
++                break;
++            case SDL_APP_WILLENTERBACKGROUND:
++                touch::ReleaseAll();
++                break;
++            case SDL_KEYDOWN:
++            case SDL_KEYUP:
++                if (e.key.repeat) break;
++                if (e.key.keysym.sym == SDLK_AC_BACK) break; // back button: ignore (no accidental quit)
++                EmitKey(SdlKeyToGlfw(e.key.keysym.sym), e.type == SDL_KEYDOWN);
++                break;
++            case SDL_TEXTINPUT:
++                if (gCharCb)
++                    for (const char* p = e.text.text; *p; ++p)
++                        if ((unsigned char)*p < 128) gCharCb(&gWindow, (unsigned int)*p);
++                break;
++            case SDL_MOUSEMOTION:
++                if (e.motion.which == SDL_TOUCH_MOUSEID) break;
++                if (gCursorCb) gCursorCb(&gWindow, e.motion.x, e.motion.y);
++                break;
++            case SDL_MOUSEBUTTONDOWN:
++            case SDL_MOUSEBUTTONUP:
++            {
++                if (e.button.which == SDL_TOUCH_MOUSEID) break;
++                int b = (e.button.button == SDL_BUTTON_LEFT) ? GLFW_MOUSE_BUTTON_LEFT :
++                        (e.button.button == SDL_BUTTON_RIGHT) ? GLFW_MOUSE_BUTTON_RIGHT : GLFW_MOUSE_BUTTON_MIDDLE;
++                if (gMouseButtonCb) gMouseButtonCb(&gWindow, b, e.type == SDL_MOUSEBUTTONDOWN ? GLFW_PRESS : GLFW_RELEASE, 0);
++                break;
++            }
++            case SDL_MOUSEWHEEL:
++                if (gScrollCb) gScrollCb(&gWindow, e.wheel.x, e.wheel.y);
++                break;
++            case SDL_FINGERDOWN:
++            case SDL_FINGERUP:
++            case SDL_FINGERMOTION:
++                touch::OnFinger(e.tfinger, e.type);
++                break;
++            case SDL_CONTROLLERDEVICEADDED:
++            {
++                int idx = e.cdevice.which;
++                if (idx >= 0 && idx <= GLFW_JOYSTICK_LAST && !gPads[idx])
++                {
++                    gPads[idx] = SDL_GameControllerOpen(idx);
++                    if (gPads[idx])
++                    {
++                        touch::gVisible = false; // controller in use: hide touch overlay until next touch
++                        if (gJoystickCb) gJoystickCb(idx, GLFW_CONNECTED);
++                    }
++                }
++                break;
++            }
++            case SDL_CONTROLLERDEVICEREMOVED:
++            {
++                for (int i = 0; i <= GLFW_JOYSTICK_LAST; ++i)
++                {
++                    if (gPads[i] && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(gPads[i])) == e.cdevice.which)
++                    {
++                        SDL_GameControllerClose(gPads[i]);
++                        gPads[i] = nullptr;
++                        touch::gVisible = true;
++                        if (gJoystickCb) gJoystickCb(i, GLFW_DISCONNECTED);
++                    }
++                }
++                break;
++            }
++            default:
++                break;
++        }
++    }
++}
++
++int glfwWindowShouldClose(GLFWwindow* window) { return (window && window->mShouldClose) ? GLFW_TRUE : GLFW_FALSE; }
++void glfwSetWindowMonitor(GLFWwindow*, GLFWmonitor*, int, int, int, int, int) {}
++
++double glfwGetTime(void)
++{
++    return (double)(SDL_GetPerformanceCounter() - gTimeStart) / (double)SDL_GetPerformanceFrequency();
++}
++
++GLFWmousebuttonfun glfwSetMouseButtonCallback(GLFWwindow*, GLFWmousebuttonfun cb) { GLFWmousebuttonfun p = gMouseButtonCb; gMouseButtonCb = cb; return p; }
++GLFWkeyfun glfwSetKeyCallback(GLFWwindow*, GLFWkeyfun cb) { GLFWkeyfun p = gKeyCb; gKeyCb = cb; return p; }
++GLFWcharfun glfwSetCharCallback(GLFWwindow*, GLFWcharfun cb) { GLFWcharfun p = gCharCb; gCharCb = cb; return p; }
++GLFWscrollfun glfwSetScrollCallback(GLFWwindow*, GLFWscrollfun cb) { GLFWscrollfun p = gScrollCb; gScrollCb = cb; return p; }
++GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow*, GLFWcursorposfun cb) { GLFWcursorposfun p = gCursorCb; gCursorCb = cb; return p; }
++GLFWjoystickfun glfwSetJoystickCallback(GLFWjoystickfun cb) { GLFWjoystickfun p = gJoystickCb; gJoystickCb = cb; return p; }
++
++int glfwJoystickIsGamepad(int jid)
++{
++    if (jid < 0 || jid > GLFW_JOYSTICK_LAST) return GLFW_FALSE;
++    if (!gPads[jid] && jid < SDL_NumJoysticks() && SDL_IsGameController(jid))
++        gPads[jid] = SDL_GameControllerOpen(jid);
++    return gPads[jid] ? GLFW_TRUE : GLFW_FALSE;
++}
++
++int glfwGetGamepadState(int jid, GLFWgamepadstate* state)
++{
++    if (jid < 0 || jid > GLFW_JOYSTICK_LAST || !gPads[jid] || !state) return GLFW_FALSE;
++    SDL_GameController* c = gPads[jid];
++    static const SDL_GameControllerButton map[15] = {
++        SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_Y,
++        SDL_CONTROLLER_BUTTON_LEFTSHOULDER, SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, SDL_CONTROLLER_BUTTON_BACK,
++        SDL_CONTROLLER_BUTTON_START, SDL_CONTROLLER_BUTTON_GUIDE, SDL_CONTROLLER_BUTTON_LEFTSTICK,
++        SDL_CONTROLLER_BUTTON_RIGHTSTICK, SDL_CONTROLLER_BUTTON_DPAD_UP, SDL_CONTROLLER_BUTTON_DPAD_RIGHT,
++        SDL_CONTROLLER_BUTTON_DPAD_DOWN, SDL_CONTROLLER_BUTTON_DPAD_LEFT };
++    memset(state, 0, sizeof(*state));
++    for (int i = 0; i < 15; ++i)
++        state->buttons[i] = SDL_GameControllerGetButton(c, map[i]) ? GLFW_PRESS : GLFW_RELEASE;
++
++    const float k = 1.0f / 32767.0f;
++    state->axes[GLFW_GAMEPAD_AXIS_LEFT_X] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTX) * k;
++    state->axes[GLFW_GAMEPAD_AXIS_LEFT_Y] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_LEFTY) * k;
++    state->axes[GLFW_GAMEPAD_AXIS_RIGHT_X] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTX) * k;
++    state->axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_RIGHTY) * k;
++    state->axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERLEFT) * k * 2.0f - 1.0f;
++    state->axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] = SDL_GameControllerGetAxis(c, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) * k * 2.0f - 1.0f;
++
++    // left analog stick also drives the d-pad (the game uses digital steering)
++    const float t = 0.5f;
++    if (state->axes[GLFW_GAMEPAD_AXIS_LEFT_Y] < -t) state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] = GLFW_PRESS;
++    if (state->axes[GLFW_GAMEPAD_AXIS_LEFT_Y] > t) state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] = GLFW_PRESS;
++    if (state->axes[GLFW_GAMEPAD_AXIS_LEFT_X] < -t) state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] = GLFW_PRESS;
++    if (state->axes[GLFW_GAMEPAD_AXIS_LEFT_X] > t) state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] = GLFW_PRESS;
++    return GLFW_TRUE;
++}
++
++void glfwShimGetDisplaySize(int* width, int* height)
++{
++    int w = 0, h = 0;
++    if (gWindow.mSdlWindow) SDL_GL_GetDrawableSize(gWindow.mSdlWindow, &w, &h);
++    if (width) *width = w;
++    if (height) *height = h;
++}
++
++const char* glfwShimInternalStoragePath(void) { return SDL_AndroidGetInternalStoragePath(); }
++const char* glfwShimExternalStoragePath(void) { return SDL_AndroidGetExternalStoragePath(); }
+diff --git a/src/android/glfw_sdl_shim.h b/src/android/glfw_sdl_shim.h
+new file mode 100644
+index 0000000..377ba90
+--- /dev/null
++++ b/src/android/glfw_sdl_shim.h
+@@ -0,0 +1,178 @@
++#pragma once
++// GTA Classic Perspective Lock - Android platform layer.
++// Implements the small subset of the GLFW 3 API that Carnage3D uses, on top of SDL2,
++// so the engine runs on Android without changes to its windowing/input code.
++// Also provides an on-screen touch control overlay that injects GLFW-style key events.
++
++#include <GLES3/gl3.h>
++
++#define GLFW_TRUE 1
++#define GLFW_FALSE 0
++#define GLFW_RELEASE 0
++#define GLFW_PRESS 1
++#define GLFW_REPEAT 2
++#define GLFW_CONNECTED 0x00040001
++#define GLFW_DISCONNECTED 0x00040002
++
++// window hints (accepted and ignored: SDL/EGL picks a GLES 3.0 context)
++#define GLFW_RESIZABLE 0x00020003
++#define GLFW_RED_BITS 0x00021001
++#define GLFW_GREEN_BITS 0x00021002
++#define GLFW_BLUE_BITS 0x00021003
++#define GLFW_ALPHA_BITS 0x00021004
++#define GLFW_DEPTH_BITS 0x00021005
++#define GLFW_DOUBLEBUFFER 0x00021010
++#define GLFW_CONTEXT_VERSION_MAJOR 0x00022002
++#define GLFW_CONTEXT_VERSION_MINOR 0x00022003
++#define GLFW_OPENGL_FORWARD_COMPAT 0x00022006
++#define GLFW_OPENGL_PROFILE 0x00022008
++#define GLFW_OPENGL_CORE_PROFILE 0x00032001
++
++// keys (same values as GLFW)
++#define GLFW_KEY_SPACE 32
++#define GLFW_KEY_0 48
++#define GLFW_KEY_1 49
++#define GLFW_KEY_2 50
++#define GLFW_KEY_3 51
++#define GLFW_KEY_4 52
++#define GLFW_KEY_5 53
++#define GLFW_KEY_6 54
++#define GLFW_KEY_7 55
++#define GLFW_KEY_8 56
++#define GLFW_KEY_9 57
++#define GLFW_KEY_A 65
++#define GLFW_KEY_B 66
++#define GLFW_KEY_C 67
++#define GLFW_KEY_D 68
++#define GLFW_KEY_E 69
++#define GLFW_KEY_F 70
++#define GLFW_KEY_G 71
++#define GLFW_KEY_H 72
++#define GLFW_KEY_I 73
++#define GLFW_KEY_J 74
++#define GLFW_KEY_K 75
++#define GLFW_KEY_L 76
++#define GLFW_KEY_M 77
++#define GLFW_KEY_N 78
++#define GLFW_KEY_O 79
++#define GLFW_KEY_P 80
++#define GLFW_KEY_Q 81
++#define GLFW_KEY_R 82
++#define GLFW_KEY_S 83
++#define GLFW_KEY_T 84
++#define GLFW_KEY_U 85
++#define GLFW_KEY_V 86
++#define GLFW_KEY_W 87
++#define GLFW_KEY_X 88
++#define GLFW_KEY_Y 89
++#define GLFW_KEY_Z 90
++#define GLFW_KEY_GRAVE_ACCENT 96
++#define GLFW_KEY_ESCAPE 256
++#define GLFW_KEY_ENTER 257
++#define GLFW_KEY_TAB 258
++#define GLFW_KEY_BACKSPACE 259
++#define GLFW_KEY_INSERT 260
++#define GLFW_KEY_DELETE 261
++#define GLFW_KEY_RIGHT 262
++#define GLFW_KEY_LEFT 263
++#define GLFW_KEY_DOWN 264
++#define GLFW_KEY_UP 265
++#define GLFW_KEY_PAGE_UP 266
++#define GLFW_KEY_PAGE_DOWN 267
++#define GLFW_KEY_HOME 268
++#define GLFW_KEY_END 269
++#define GLFW_KEY_F1 290
++#define GLFW_KEY_F2 291
++#define GLFW_KEY_F3 292
++#define GLFW_KEY_F4 293
++#define GLFW_KEY_F5 294
++#define GLFW_KEY_F6 295
++#define GLFW_KEY_F7 296
++#define GLFW_KEY_F8 297
++#define GLFW_KEY_F9 298
++#define GLFW_KEY_F10 299
++#define GLFW_KEY_F11 300
++#define GLFW_KEY_F12 301
++#define GLFW_KEY_LEFT_SHIFT 340
++#define GLFW_KEY_LEFT_CONTROL 341
++#define GLFW_KEY_RIGHT_SHIFT 344
++#define GLFW_KEY_RIGHT_CONTROL 345
++
++#define GLFW_MOD_SHIFT 0x0001
++#define GLFW_MOD_CONTROL 0x0002
++#define GLFW_MOD_ALT 0x0004
++
++#define GLFW_MOUSE_BUTTON_LEFT 0
++#define GLFW_MOUSE_BUTTON_RIGHT 1
++#define GLFW_MOUSE_BUTTON_MIDDLE 2
++
++// gamepad (same values as GLFW)
++#define GLFW_GAMEPAD_BUTTON_A 0
++#define GLFW_GAMEPAD_BUTTON_B 1
++#define GLFW_GAMEPAD_BUTTON_X 2
++#define GLFW_GAMEPAD_BUTTON_Y 3
++#define GLFW_GAMEPAD_BUTTON_LEFT_BUMPER 4
++#define GLFW_GAMEPAD_BUTTON_RIGHT_BUMPER 5
++#define GLFW_GAMEPAD_BUTTON_BACK 6
++#define GLFW_GAMEPAD_BUTTON_START 7
++#define GLFW_GAMEPAD_BUTTON_GUIDE 8
++#define GLFW_GAMEPAD_BUTTON_LEFT_THUMB 9
++#define GLFW_GAMEPAD_BUTTON_RIGHT_THUMB 10
++#define GLFW_GAMEPAD_BUTTON_DPAD_UP 11
++#define GLFW_GAMEPAD_BUTTON_DPAD_RIGHT 12
++#define GLFW_GAMEPAD_BUTTON_DPAD_DOWN 13
++#define GLFW_GAMEPAD_BUTTON_DPAD_LEFT 14
++#define GLFW_GAMEPAD_BUTTON_LAST GLFW_GAMEPAD_BUTTON_DPAD_LEFT
++#define GLFW_GAMEPAD_AXIS_LEFT_X 0
++#define GLFW_GAMEPAD_AXIS_LEFT_Y 1
++#define GLFW_GAMEPAD_AXIS_RIGHT_X 2
++#define GLFW_GAMEPAD_AXIS_RIGHT_Y 3
++#define GLFW_GAMEPAD_AXIS_LEFT_TRIGGER 4
++#define GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER 5
++#define GLFW_JOYSTICK_LAST 15
++
++typedef struct GLFWwindow GLFWwindow;
++typedef struct GLFWmonitor GLFWmonitor;
++
++typedef struct GLFWgamepadstate
++{
++    unsigned char buttons[16];
++    float axes[6];
++} GLFWgamepadstate;
++
++typedef void (*GLFWerrorfun)(int, const char*);
++typedef void (*GLFWmousebuttonfun)(GLFWwindow*, int, int, int);
++typedef void (*GLFWkeyfun)(GLFWwindow*, int, int, int, int);
++typedef void (*GLFWcharfun)(GLFWwindow*, unsigned int);
++typedef void (*GLFWscrollfun)(GLFWwindow*, double, double);
++typedef void (*GLFWcursorposfun)(GLFWwindow*, double, double);
++typedef void (*GLFWjoystickfun)(int, int);
++
++int glfwInit(void);
++void glfwTerminate(void);
++const char* glfwGetVersionString(void);
++GLFWerrorfun glfwSetErrorCallback(GLFWerrorfun cb);
++void glfwWindowHint(int hint, int value);
++GLFWmonitor* glfwGetPrimaryMonitor(void);
++GLFWwindow* glfwCreateWindow(int width, int height, const char* title, GLFWmonitor* monitor, GLFWwindow* share);
++void glfwDestroyWindow(GLFWwindow* window);
++void glfwMakeContextCurrent(GLFWwindow* window);
++void glfwSwapBuffers(GLFWwindow* window);
++void glfwSwapInterval(int interval);
++void glfwPollEvents(void);
++int glfwWindowShouldClose(GLFWwindow* window);
++void glfwSetWindowMonitor(GLFWwindow* window, GLFWmonitor* monitor, int xpos, int ypos, int width, int height, int refreshRate);
++double glfwGetTime(void);
++GLFWmousebuttonfun glfwSetMouseButtonCallback(GLFWwindow* window, GLFWmousebuttonfun cb);
++GLFWkeyfun glfwSetKeyCallback(GLFWwindow* window, GLFWkeyfun cb);
++GLFWcharfun glfwSetCharCallback(GLFWwindow* window, GLFWcharfun cb);
++GLFWscrollfun glfwSetScrollCallback(GLFWwindow* window, GLFWscrollfun cb);
++GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow* window, GLFWcursorposfun cb);
++GLFWjoystickfun glfwSetJoystickCallback(GLFWjoystickfun cb);
++int glfwJoystickIsGamepad(int jid);
++int glfwGetGamepadState(int jid, GLFWgamepadstate* state);
++
++// Android helpers (not part of GLFW)
++void glfwShimGetDisplaySize(int* width, int* height);
++const char* glfwShimInternalStoragePath(void);
++const char* glfwShimExternalStoragePath(void);
+diff --git a/src/path_utils.cpp b/src/path_utils.cpp
+index 117d3a9..50017e4 100644
+--- a/src/path_utils.cpp
++++ b/src/path_utils.cpp
+@@ -3,6 +3,9 @@
+ 
+ #if OS_NAME == OS_MACOS
+     namespace filesystem = std::filesystem;
++#elif defined(__ANDROID__)
++#include <filesystem>
++    namespace filesystem = std::filesystem;
+ #elif defined(__EMSCRIPTEN__)
+ #include <filesystem>
+     namespace filesystem = std::__fs::filesystem;
+@@ -66,30 +69,34 @@ std::string get_executable_path()
+ bool is_file_exists(std::string pathto)
+ {
+     filesystem::path sourcePath {pathto};
+-    return filesystem::is_regular_file(pathto);
++    std::error_code ec; // non-throwing: unreadable paths (e.g. on Android) count as missing
++    return filesystem::is_regular_file(sourcePath, ec);
+ }
+ 
+ bool is_directory_exists(std::string pathto)
+ {
+     filesystem::path sourcePath {pathto};
+-    return filesystem::is_directory(pathto);
++    std::error_code ec;
++    return filesystem::is_directory(sourcePath, ec);
+ }
+ 
+ bool ensure_path_exists(std::string pathto)
+ {
+     filesystem::path sourcePath {pathto};
+-    return filesystem::create_directories(sourcePath);
++    std::error_code ec;
++    return filesystem::create_directories(sourcePath, ec);
+ }
+ 
+ void enum_files(std::string pathto, enum_files_proc enumproc)
+ {
+     filesystem::path sourcePath {pathto};
+-    if (!filesystem::exists(sourcePath))
++    std::error_code ec;
++    if (!filesystem::exists(sourcePath, ec))
+         return;
+ 
+     filesystem::directory_iterator iter_directory_end;
+-    for (filesystem::directory_iterator iter_directory(sourcePath);
+-        iter_directory != iter_directory_end; ++iter_directory)
++    for (filesystem::directory_iterator iter_directory(sourcePath, ec);
++        !ec && iter_directory != iter_directory_end; iter_directory.increment(ec))
+     {
+         const filesystem::path& currentFile = iter_directory->path();
+         enumproc(currentFile.filename().generic_string());
+@@ -99,12 +106,13 @@ void enum_files(std::string pathto, enum_files_proc enumproc)
+ void enum_files_recursive(std::string pathto, enum_files_proc enumproc)
+ {
+     filesystem::path sourcePath {pathto};
+-    if (!filesystem::exists(sourcePath))
++    std::error_code ec;
++    if (!filesystem::exists(sourcePath, ec))
+         return;
+ 
+     filesystem::recursive_directory_iterator iter_directory_end;
+-    for (filesystem::recursive_directory_iterator iter_directory(sourcePath);
+-        iter_directory != iter_directory_end; ++iter_directory)
++    for (filesystem::recursive_directory_iterator iter_directory(sourcePath, ec);
++        !ec && iter_directory != iter_directory_end; iter_directory.increment(ec))
+     {
+         const filesystem::path& currentFile = iter_directory->path();
+         enumproc(currentFile.filename().generic_string());
+diff --git a/src/stdafx.h b/src/stdafx.h
+index 7df6e72..da8f328 100644
+--- a/src/stdafx.h
++++ b/src/stdafx.h
+@@ -19,6 +19,10 @@
+     #include <unistd.h>
+ #endif
+ 
++#if defined(__EMSCRIPTEN__) || defined(__ANDROID__)
++    #define C3D_GLES
++#endif
++
+ #ifdef __EMSCRIPTEN__
+     #include <emscripten/emscripten.h>
+     #define GLFW_INCLUDE_ES3
+@@ -51,6 +55,10 @@
+ #include <functional>
+ 
+ // opengl
++#ifdef __ANDROID__
++#include "android/gles_glew_compat.h"
++#include "android/glfw_sdl_shim.h"
++#else
+ #include <GL/glew.h>
+ #if OS_NAME == OS_MACOS
+ #include <OpenGL/gl.h>
+@@ -58,6 +66,7 @@
+ #include <GL/gl.h>
+ #endif
+ #include "GLFW/glfw3.h"
++#endif // __ANDROID__
+ 
+ // glm
+ #define GLM_ENABLE_EXPERIMENTAL

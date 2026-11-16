@@ -1,0 +1,9 @@
+build/
+.cxx/
+.gradle/
+local.properties
+*.log
+shots/
+dist/
+app/src/main/assets/gamedata/
+app/src/main/java/org/libsdl/
