@@ -21,7 +21,7 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
-| **Android app** | **Working.** Release APK 0.3.2 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
+| **Android app** | **Working.** Release APK 0.4.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
 | **Aspect ratios** | **Auto, 16:9, 4:3 or fill**, with black bars as needed. Auto picks 4:3 on a foldable's unfolded screen and 16:9 when folded. Works on Android and desktop |
 
 ## Layout
@@ -75,7 +75,29 @@ Touch layout:
 * **FIRE**, **CAR** (enter/exit), **JUMP** (handbrake in a car), **WPN** (next weapon),
   **HORN**, **LOCK** (toggle the perspective lock).
 
-A connected gamepad works too, and hides the touch overlay.
+**On-screen controls** (launcher setting): **Auto** hides them while a game controller is in
+use and brings them back on the next touch; **Always** keeps them; **Off** removes them
+completely (for controller-only play).
+
+**Game controllers** (Bluetooth or USB; Xbox / PlayStation / generic layouts via SDL):
+
+| | On foot (twin-stick) | In a car |
+|---|---|---|
+| Left stick | Move in that screen direction (push past ~70% to run) | Steer (analog) |
+| D-pad | Move (8 directions) | Steer / gas (up) / reverse (down) |
+| Right stick | Aim in that direction; push past half way to fire | – |
+| Right trigger | Fire | Gas (analog) |
+| Left trigger | – | Brake / reverse (analog) |
+| A | Jump | Handbrake |
+| B | Special | Horn |
+| X | Enter car as passenger | – |
+| Y | Enter car | Leave car |
+| LB / RB | Previous / next weapon | Previous / next weapon |
+| Back / View / Select | Toggle the perspective lock | Toggle the perspective lock |
+
+* **Twin-stick on foot:** while you walk with a controller, the view holds its rotation, so
+  "up" on a stick always means up on the screen. You move one way and aim another.
+* **In a car:** the view locks to the car's heading again.
 
 Aspect ratio:
 * **Auto** (Android default) picks the nearer of 4:3 and 16:9 to the screen shape. On a

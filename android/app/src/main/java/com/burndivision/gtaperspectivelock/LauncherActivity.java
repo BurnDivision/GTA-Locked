@@ -47,6 +47,9 @@ public class LauncherActivity extends Activity {
     private Button pickButton;
     private Button playButton;
     private RadioGroup aspectGroup;
+    private RadioGroup touchGroup;
+    private static final String[] TOUCH_MODES = { "auto", "on", "off" };
+    private static final String[] TOUCH_LABELS = { "Auto", "Always", "Off" };
     private static final String[] ASPECTS = { "auto", "16:9", "4:3", "fill" };
     private static final String[] ASPECT_LABELS = { "Auto", "16:9", "4:3", "Fill" };
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -121,6 +124,29 @@ public class LauncherActivity extends Activity {
         aspectGroup.setVisibility(View.GONE);
         root.addView(aspectGroup);
 
+        TextView touchTitle = new TextView(this);
+        touchTitle.setText("On-screen controls. Auto: hidden while a game controller is in use");
+        touchTitle.setTextColor(Color.rgb(200, 200, 200));
+        touchTitle.setGravity(Gravity.CENTER);
+        root.addView(touchTitle);
+
+        touchGroup = new RadioGroup(this);
+        touchGroup.setOrientation(RadioGroup.HORIZONTAL);
+        touchGroup.setGravity(Gravity.CENTER);
+        for (int i = 0; i < TOUCH_MODES.length; ++i) {
+            RadioButton rb = new RadioButton(this);
+            rb.setId(2000 + i);
+            rb.setText(TOUCH_LABELS[i]);
+            rb.setTextColor(Color.WHITE);
+            touchGroup.addView(rb);
+        }
+        touchGroup.setOnCheckedChangeListener((g, id) -> {
+            int i = id - 2000;
+            if (i >= 0 && i < TOUCH_MODES.length) EngineConfig.put(this, "touch_controls", TOUCH_MODES[i]);
+        });
+        touchGroup.setVisibility(View.GONE);
+        root.addView(touchGroup);
+
         playButton = new Button(this);
         playButton.setText("Play");
         playButton.setVisibility(View.GONE);
@@ -169,6 +195,7 @@ public class LauncherActivity extends Activity {
             pickButton.setVisibility(View.VISIBLE);
             playButton.setVisibility(View.GONE);
             aspectGroup.setVisibility(View.GONE);
+            touchGroup.setVisibility(View.GONE);
         }
     }
 
@@ -206,6 +233,11 @@ public class LauncherActivity extends Activity {
             if (ASPECTS[i].equals(cur)) aspectGroup.check(1000 + i);
         }
         aspectGroup.setVisibility(View.VISIBLE);
+        String touch = EngineConfig.get(this, "touch_controls", "auto");
+        for (int i = 0; i < TOUCH_MODES.length; ++i) {
+            if (TOUCH_MODES[i].equals(touch)) touchGroup.check(2000 + i);
+        }
+        touchGroup.setVisibility(View.VISIBLE);
     }
 
     private void startGame() {
@@ -227,9 +259,11 @@ public class LauncherActivity extends Activity {
         }
         if (marker.exists() && want.equals(readSmall(marker))) return;
         String keepAspect = configFile().exists() ? readAspect() : null;
+        String keepTouch = EngineConfig.get(this, "touch_controls", null);
         setStatus("Unpacking engine data...");
         copyAssetDir(getAssets(), "gamedata", target);
         if (keepAspect != null) writeAspect(keepAspect);
+        if (keepTouch != null) EngineConfig.put(this, "touch_controls", keepTouch);
         try (OutputStream o = new FileOutputStream(marker)) {
             o.write(want.getBytes());
         }

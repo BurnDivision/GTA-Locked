@@ -361,3 +361,48 @@ view slightly when turning while moving.
 - Release `android/dist/GTA-Perspective-Lock-0.3.2.apk`, SHA-256
   `46a9bcc515cf87393600612e5fb72e78bba71860140d0d5aea212f29ec1d6616`. Emulator smoke test of the
   release APK: no crashes. Cumulative patch sha256 57d34497… (26 files).
+
+## 2026-11-16 — Game controllers, twin-stick on foot, touch controls setting, Android 0.4.0
+
+User request: be able to remove the on-screen controls; Bluetooth controllers with both
+d-pad and analog stick; twin-stick shooting on foot.
+
+- **Analog input in the engine.** `GamepadState` now carries the stick and trigger axes, which
+  `GraphicsDevice` copies from the gamepad each frame. Before this the engine only saw buttons;
+  the platform layer already turned the left stick into d-pad presses.
+- **Twin-stick on foot** (`HumanPlayer::ProcessTwinStick`, active once the gamepad was the
+  last input used):
+  - Left stick or d-pad: move in a screen direction. Walk below 70% deflection, run above.
+  - Right stick: face that direction, and fire past 60% deflection. The right trigger also fires.
+  - Without aiming, the player faces where they walk.
+  - New `PedestrianCtlState::mUseMoveDirection` / `mMoveDirection`, so a pedestrian can walk
+    independently of facing. `Pedestrian::UpdateLocomotion` uses it.
+  - Screen directions are mapped to the world through the camera's up and right vectors.
+  - The follow camera holds its rotation (`mHoldHeading`) while twin-stick is active, so stick
+    directions stay screen-consistent. Turning the view with the aim would make
+    screen-relative movement spin in a loop. In a car the heading lock resumes.
+  - Analog motion also enables input processing (sticks send no input events).
+- **Driving with a controller** (`ProcessGamepadDriving`): the left stick steers in proportion
+  (20% deadzone), the right trigger is the gas, the left trigger brakes or reverses. The d-pad
+  still works.
+- **Default layout** (`inputs.json.default`, re-extracted on app update):
+  - A = jump / handbrake, B = special / horn, X = enter car as passenger, Y = enter / leave car.
+  - LB / RB = previous / next weapon; RT = fire on foot.
+  - Back / View / Select = toggle the perspective lock. The platform layer sends F9.
+- **On-screen controls setting** (launcher): Auto / Always / Off, stored as `touch_controls`
+  in `sys_config.json` and kept across updates. `GameActivity` passes it to the platform layer
+  (JNI `nativeSetTouchMode`).
+  - Auto hides the overlay on any controller button or large stick movement, and shows it on
+    the next touch.
+  - Off never draws it and ignores touches.
+- Emulator checks:
+  - Debug and release builds compile.
+  - With Auto, touch controls still drive the player (`50_ctl_auto_after_touch.png`).
+  - With `touch_controls` set to off, no overlay is drawn, there are no errors, and a tap
+    doesn't bring it back (`50_ctl_off*.png`).
+  - **Not tested:** a real controller. The emulator has no gamepad, so twin-stick, analog
+    steering and the button layout are untested.
+- Version 0.4.0 (versionCode 6).
+- Release `android/dist/GTA-Perspective-Lock-0.4.0.apk`, SHA-256
+  `6f36b514c4edb7fee9bdf347d395c5d221871e73f9748b9f9838dd7134d0e872`. Cumulative patch sha256
+  ab08c15d… (32 files).

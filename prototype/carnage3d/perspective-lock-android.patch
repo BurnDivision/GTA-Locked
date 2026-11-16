@@ -1,3 +1,46 @@
+diff --git a/gamedata/config/inputs.json.default b/gamedata/config/inputs.json.default
+index db6ae85..d2d900e 100644
+--- a/gamedata/config/inputs.json.default
++++ b/gamedata/config/inputs.json.default
+@@ -5,26 +5,26 @@
+         "actions":
+         [
+             // common
+-            {"action":"NextWeapon", "keycode":"x", "gpbutton":"LeftBumper"},
+-            {"action":"PrevWeapon", "keycode":"z", "gpbutton":"RightBumper"},
+-            // on foot
++            {"action":"NextWeapon", "keycode":"x", "gpbutton":"RightBumper"},
++            {"action":"PrevWeapon", "keycode":"z", "gpbutton":"LeftBumper"},
++            // on foot. With a gamepad: left stick / d-pad moves, right stick aims and fires
+             {"action":"TurnLeft", "keycode":"Left", "gpbutton":"Left"},
+             {"action":"TurnRight", "keycode":"Right", "gpbutton":"Right"},
+-            {"action":"Jump", "keycode":"Space", "gpbutton":"LeftTrigger"},
++            {"action":"Jump", "keycode":"Space", "gpbutton":"A"},
+             {"action":"WalkBackward", "keycode":"Down", "gpbutton":"Down"},
+             {"action":"Run", "keycode":"Up", "gpbutton":"Up"},
+-            {"action":"Shoot", "keycode":"LCtrl", "gpbutton":"B"},
+-            {"action":"EnterCar", "keycode":"Enter", "gpbutton":"X"},
+-            {"action":"EnterCarAsPassenger", "keycode":"f", "gpbutton":"A"},
+-            {"action":"Special", "keycode":"Tab"},
+-            // in car
+-            {"action":"HandBrake", "keycode":"Space", "gpbutton":"Y"},
++            {"action":"Shoot", "keycode":"LCtrl", "gpbutton":"RightTrigger"},
++            {"action":"EnterCar", "keycode":"Enter", "gpbutton":"Y"},
++            {"action":"EnterCarAsPassenger", "keycode":"f", "gpbutton":"X"},
++            {"action":"Special", "keycode":"Tab", "gpbutton":"B"},
++            // in car. Also: left stick steers (analog), right trigger = gas, left trigger = brake / reverse
++            {"action":"HandBrake", "keycode":"Space", "gpbutton":"A"},
+             {"action":"Accelerate", "keycode":"Up", "gpbutton":"Up"},
+             {"action":"Reverse", "keycode":"Down", "gpbutton":"Down"},
+             {"action":"SteerLeft", "keycode":"Left", "gpbutton":"Left"},
+             {"action":"SteerRight", "keycode":"Right", "gpbutton":"Right"},
+-            {"action":"Horn", "keycode":"Tab", "gpbutton":"A"},
+-            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"X"}
++            {"action":"Horn", "keycode":"Tab", "gpbutton":"B"},
++            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"Y"}
+         ]
+     },
+     "player2":
 diff --git a/src/AiCharacterController.cpp b/src/AiCharacterController.cpp
 index 36bc041..605d4af 100644
 --- a/src/AiCharacterController.cpp
@@ -510,7 +553,7 @@ index feb69e3..4610835 100644
      if (gCvarCurrentBaseDir.mValue.empty())
      {
 diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
-index 4a53905..edb61c5 100644
+index 4a53905..f0b39c3 100644
 --- a/src/FollowCameraController.cpp
 +++ b/src/FollowCameraController.cpp
 @@ -4,6 +4,26 @@
@@ -602,7 +645,7 @@ index 4a53905..edb61c5 100644
  }
  
  void FollowCameraController::UpdateFrame()
-@@ -42,42 +104,119 @@ void FollowCameraController::UpdateFrame()
+@@ -42,42 +104,120 @@ void FollowCameraController::UpdateFrame()
      if (mFollowPedestrian == nullptr)
          return;
  
@@ -695,10 +738,11 @@ index 4a53905..edb61c5 100644
 +        headingCatchSpeed = glm::mix(mHeadingCatchSpeed, 3.5f, mSpeedFactor);
 +        maxLag += glm::radians(9.5f) * mSpeedFactor;
 +    }
-+    float diff = WrapPi(target - mCameraHeading);
++    // twin-stick on foot: the view holds still, so screen-relative sticks stay consistent
++    float diff = mHoldHeading ? 0.0f : WrapPi(target - mCameraHeading);
 +    float t = glm::clamp(headingCatchSpeed * deltaTime, 0.0f, 1.0f);
 +    mCameraHeading = WrapPi(mCameraHeading + diff * t);
-+    if (mDynamicCamera)
++    if (mDynamicCamera && !mHoldHeading)
 +    {
 +        float lag = WrapPi(target - mCameraHeading);
 +        if (lag > maxLag) mCameraHeading = WrapPi(target - maxLag);
@@ -743,7 +787,7 @@ index 4a53905..edb61c5 100644
  {
      mScrollHeightOffset = glm::clamp(mScrollHeightOffset - inputEvent.mScrollY, -3.0f, 23.0f);
  }
-@@ -85,6 +224,12 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -85,6 +225,12 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
  void FollowCameraController::SetFollowTarget(Pedestrian* pedestrian)
  {
      mFollowPedestrian = pedestrian;
@@ -757,10 +801,20 @@ index 4a53905..edb61c5 100644
  
  void FollowCameraController::InputEventLost()
 diff --git a/src/FollowCameraController.h b/src/FollowCameraController.h
-index 8640d19..a982556 100644
+index 8640d19..911bd0d 100644
 --- a/src/FollowCameraController.h
 +++ b/src/FollowCameraController.h
-@@ -31,4 +31,18 @@ private:
+@@ -23,6 +23,9 @@ public:
+     void InputEvent(MouseScrollInputEvent& inputEvent) override;
+     void InputEventLost() override;
+ 
++    // set by the player controller: keep the current view rotation (twin-stick on foot)
++    bool mHoldHeading = false;
++
+ private:
+     // parameters
+     float mStartupCameraHeight; // meters
+@@ -31,4 +34,18 @@ private:
      float mFollowPedCameraCatchSpeed; // meters per second
  
      Pedestrian* mFollowPedestrian = nullptr;
@@ -816,6 +870,21 @@ index f2b5e03..158e417 100644
  
  public:
      GameCheatsWindow();
+diff --git a/src/GameDefs.h b/src/GameDefs.h
+index 85f2137..a82b020 100644
+--- a/src/GameDefs.h
++++ b/src/GameDefs.h
+@@ -896,6 +896,10 @@ public:
+     bool mRotateToDesiredAngle = false;
+     cxx::angle_t mDesiredRotationAngle;
+ 
++    // overrides the walking direction (twin-stick: move one way, face another); unit vector, world X/Z
++    bool mUseMoveDirection = false;
++    glm::vec2 mMoveDirection {0.0f, 0.0f};
++
+     // in car control actions
+     float mAcceleration = 0.0f; // 0 means no acceleration, < 0 move reverse, > 0 full acceleration
+     float mSteerDirection = 0.0f; // 0 means no steer, < 0 steer left, > 0 steer right
 diff --git a/src/GpuBuffer.cpp b/src/GpuBuffer.cpp
 index 2b9f269..52c8066 100644
 --- a/src/GpuBuffer.cpp
@@ -852,7 +921,7 @@ index cae3819..1ac82a5 100644
      "#version 300 es\n"
      "precision highp float;\n"
 diff --git a/src/GraphicsDevice.cpp b/src/GraphicsDevice.cpp
-index 2329731..f345936 100644
+index 2329731..38f9304 100644
 --- a/src/GraphicsDevice.cpp
 +++ b/src/GraphicsDevice.cpp
 @@ -213,6 +213,15 @@ bool GraphicsDevice::Initialize()
@@ -894,7 +963,22 @@ index 2329731..f345936 100644
      glCheckError();
  }
  
-@@ -966,7 +981,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
+@@ -782,6 +797,14 @@ void GraphicsDevice::ProcessGamepadsInputs()
+         if (::glfwGetGamepadState(icurr, &gamepadstate) != GLFW_TRUE)
+             continue;
+ 
++        // analog sticks and triggers (twin-stick aiming, analog steering)
++        for (int iaxis = 0; iaxis < 4; ++iaxis)
++        {
++            currGamepad.mAxes[iaxis] = gamepadstate.axes[iaxis];
++        }
++        currGamepad.mAxes[4] = (gamepadstate.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
++        currGamepad.mAxes[5] = (gamepadstate.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
++
+         for (int ibutton = 0; ibutton < GLFW_JOYSTICK_LAST + 1; ++ibutton)
+         {
+             eGamepadButton buttonNative = GlfwGamepadButtonToNative(ibutton);
+@@ -966,7 +989,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
      if (mCurrentStates == renderStates && !forceState)
          return;
  
@@ -951,6 +1035,210 @@ index a68fe52..3b05e55 100644
              gRenderManager.mSpritesProgram.UploadCameraTransformMatrices(mCamera2D);
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
+diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
+index a13af22..3899a8b 100644
+--- a/src/HumanPlayer.cpp
++++ b/src/HumanPlayer.cpp
+@@ -134,6 +134,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
+ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
+ {
+     debug_assert(mCharacter);
++    mGamepadActive = false; // keyboard or touch controls in use
+ 
+     if (mCameraController)
+     {
+@@ -168,6 +169,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+ 
+     if (inputEvent.mGamepad != mActionsMapping.mGamepadID)
+         return;
++    mGamepadActive = true;
+ 
+     eInputActionsGroup actionGroup = mCharacter->IsCarPassenger() ? eInputActionsGroup_InCar : eInputActionsGroup_OnFoot;
+     eInputAction action = mActionsMapping.GetAction(actionGroup, inputEvent.mButton);
+@@ -354,6 +356,24 @@ void HumanPlayer::Respawn()
+ 
+ void HumanPlayer::ProcessRepetitiveActions()
+ {
++    mFollowCameraController.mHoldHeading = false;
++
++    // analog sticks and triggers send no input events: start processing inputs when they move
++    {
++        const GamepadState& pad = gInputs.mGamepadsState[mActionsMapping.mGamepadID];
++        if (pad.mPresent)
++        {
++            for (int iaxis = 0; iaxis < 6; ++iaxis)
++            {
++                if (fabsf(pad.mAxes[iaxis]) > 0.3f)
++                {
++                    mUpdateInputs = true;
++                    break;
++                }
++            }
++        }
++    }
++
+     if (!mUpdateInputs)
+         return;
+ 
+@@ -384,10 +404,14 @@ void HumanPlayer::ProcessRepetitiveActions()
+         }
+ 
+         mCtlState.mHandBrake = GetActionState(eInputAction_HandBrake);
++        ProcessGamepadDriving();
+     }
+     // update on foot
+     else
+     {
++        if (ProcessTwinStick())
++            return;
++
+         mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
+         mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
+         mCtlState.mRun = GetActionState(eInputAction_Run);
+@@ -403,6 +427,115 @@ void HumanPlayer::ProcessRepetitiveActions()
+     }
+ }
+ 
++// on foot with a gamepad: the left stick (or d-pad) moves in a screen direction, the right stick
++// aims in a screen direction and fires when pushed past half way; the right trigger fires too.
++// The view holds its rotation meanwhile, so "up" on the stick keeps meaning up on the screen.
++bool HumanPlayer::ProcessTwinStick()
++{
++    const GamepadState& pad = gInputs.mGamepadsState[mActionsMapping.mGamepadID];
++    if (!pad.mPresent)
++        return false;
++
++    const float moveDeadZone = 0.25f;
++    const float aimDeadZone = 0.3f;
++    glm::vec2 moveStick (pad.mAxes[0], pad.mAxes[1]);
++    const glm::vec2 aimStick (pad.mAxes[2], pad.mAxes[3]);
++    if (glm::length(moveStick) > moveDeadZone || glm::length(aimStick) > aimDeadZone)
++    {
++        mGamepadActive = true; // analog motion counts as gamepad use
++    }
++    if (!mGamepadActive)
++        return false;
++
++    // the d-pad moves in 8 directions when the left stick is centred
++    if (glm::length(moveStick) <= moveDeadZone)
++    {
++        moveStick = glm::vec2(0.0f, 0.0f);
++        if (pad.mButtons[eGamepadButton_DPAD_Right]) moveStick.x += 1.0f;
++        if (pad.mButtons[eGamepadButton_DPAD_Left]) moveStick.x -= 1.0f;
++        if (pad.mButtons[eGamepadButton_DPAD_Down]) moveStick.y += 1.0f;
++        if (pad.mButtons[eGamepadButton_DPAD_Up]) moveStick.y -= 1.0f;
++    }
++
++    // screen directions in the world X/Z plane: stick x = screen right, stick y = screen down
++    const glm::vec2 screenUp (mViewCamera.mUpDirection.x, mViewCamera.mUpDirection.z);
++    const glm::vec2 screenRight (mViewCamera.mRightDirection.x, mViewCamera.mRightDirection.z);
++    auto ToWorld = [&screenUp, &screenRight](const glm::vec2& stick)
++    {
++        return screenRight * stick.x - screenUp * stick.y;
++    };
++
++    mCtlState.mJump = GetActionState(eInputAction_Jump);
++    mCtlState.mShoot = GetActionState(eInputAction_Shoot);
++
++    const float moveAmount = glm::min(glm::length(moveStick), 1.0f);
++    if (moveAmount > moveDeadZone)
++    {
++        const glm::vec2 moveWorld = ToWorld(moveStick);
++        if (glm::length(moveWorld) > 0.001f)
++        {
++            mCtlState.mUseMoveDirection = true;
++            mCtlState.mMoveDirection = glm::normalize(moveWorld);
++            if (moveAmount > 0.7f)
++            {
++                mCtlState.mRun = true;
++            }
++            else
++            {
++                mCtlState.mWalkForward = true;
++            }
++        }
++    }
++
++    // face the aim direction; without aiming, face where we walk
++    glm::vec2 faceWorld (0.0f, 0.0f);
++    const float aimAmount = glm::length(aimStick);
++    if (aimAmount > aimDeadZone)
++    {
++        faceWorld = ToWorld(aimStick);
++        if (aimAmount > 0.6f)
++        {
++            mCtlState.mShoot = true;
++        }
++    }
++    else if (mCtlState.mUseMoveDirection)
++    {
++        faceWorld = mCtlState.mMoveDirection;
++    }
++    if (glm::length(faceWorld) > 0.001f)
++    {
++        mCtlState.mRotateToDesiredAngle = true;
++        mCtlState.mDesiredRotationAngle = cxx::angle_t::from_radians(::atan2f(faceWorld.y, faceWorld.x));
++    }
++
++    mFollowCameraController.mHoldHeading = true;
++    return true;
++}
++
++// in a car with a gamepad: the left stick steers in proportion, the right trigger is the gas
++// and the left trigger brakes / reverses (the d-pad and stick-as-d-pad keep working too)
++void HumanPlayer::ProcessGamepadDriving()
++{
++    const GamepadState& pad = gInputs.mGamepadsState[mActionsMapping.mGamepadID];
++    if (!pad.mPresent)
++        return;
++
++    const float stickX = pad.mAxes[0];
++    if (fabsf(stickX) > 0.2f)
++    {
++        const float amount = glm::min((fabsf(stickX) - 0.2f) / 0.7f, 1.0f);
++        mCtlState.mSteerDirection = (stickX > 0.0f) ? amount : -amount;
++    }
++    if (pad.mAxes[5] > 0.1f)
++    {
++        mCtlState.mAcceleration = glm::max(mCtlState.mAcceleration, pad.mAxes[5]);
++    }
++    if (pad.mAxes[4] > 0.1f)
++    {
++        mCtlState.mAcceleration = glm::clamp(mCtlState.mAcceleration - pad.mAxes[4], -1.0f, 1.0f);
++    }
++}
++
+ bool HumanPlayer::GetActionState(eInputAction action) const
+ {
+     const auto& mapping = mActionsMapping.mActionToKeys[action];
+diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
+index c272fba..78019ad 100644
+--- a/src/HumanPlayer.h
++++ b/src/HumanPlayer.h
+@@ -90,6 +90,10 @@ private:
+     float mRespawnTime = 0.0f;
+     bool mUpdateInputs = false;
+     bool mMouseAimingEnabled = false;
++    bool mGamepadActive = false; // the last input came from the gamepad (not keyboard / touch)
++
++    bool ProcessTwinStick();
++    void ProcessGamepadDriving();
+ 
+     FollowCameraController mFollowCameraController;
+     FreeLookCameraController mFreeLookCameraController;
+diff --git a/src/InputsDefs.h b/src/InputsDefs.h
+index 138173a..c86ad73 100644
+--- a/src/InputsDefs.h
++++ b/src/InputsDefs.h
+@@ -197,6 +197,8 @@ public:
+ public:
+     bool mButtons[eGamepadButton_COUNT];
+     bool mPresent;
++    // analog state: left x/y, right x/y (-1..1, y down), left/right trigger (0..1)
++    float mAxes[6] = {};
+ };
+ 
+ // input events
 diff --git a/src/Main.cpp b/src/Main.cpp
 index 068fae5..435924d 100644
 --- a/src/Main.cpp
@@ -964,6 +1252,22 @@ index 068fae5..435924d 100644
  
  int main(int argc, char *argv[])
  {
+diff --git a/src/Pedestrian.cpp b/src/Pedestrian.cpp
+index af31f7a..03de8ea 100644
+--- a/src/Pedestrian.cpp
++++ b/src/Pedestrian.cpp
+@@ -303,6 +303,11 @@ void Pedestrian::UpdateLocomotion()
+     if (walkingSpeed)
+     {
+         glm::vec2 moveDirection = mPhysicsBody->GetSignVector() * (inverseDirection ? -1.0f : 1.0f);
++        const PedestrianCtlState& moveCtlState = GetCtlState();
++        if (!isSlideOverCar && moveCtlState.mUseMoveDirection)
++        {
++            moveDirection = moveCtlState.mMoveDirection; // twin-stick: walk independently of facing
++        }
+         desiredVelocity = moveDirection * walkingSpeed;
+         
+         if (!isSlideOverCar)
 diff --git a/src/RenderingManager.cpp b/src/RenderingManager.cpp
 index c626ef7..62d6bc6 100644
 --- a/src/RenderingManager.cpp
@@ -1100,10 +1404,10 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..2f5757c
+index 0000000..d733603
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
-@@ -0,0 +1,713 @@
+@@ -0,0 +1,732 @@
 +// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
 +#include <SDL.h>
 +#include "glfw_sdl_shim.h"
@@ -1230,6 +1534,7 @@ index 0000000..2f5757c
 +    static int gViewX = 0, gViewY = 0, gViewW = 0, gViewH = 0; // game view rect, set by the engine
 +    static bool gKeyState[K_COUNT] = {};
 +    static bool gVisible = true;
++    static int gMode = 0; // 0 auto (hidden while a controller is used), 1 always, 2 off
 +
 +    static void Layout(int w, int h)
 +    {
@@ -1319,6 +1624,7 @@ index 0000000..2f5757c
 +
 +    static void OnFinger(const SDL_TouchFingerEvent& e, Uint32 type)
 +    {
++        if (gMode == 2) return; // on-screen controls switched off
 +        gVisible = true;
 +        float x = e.x * gScreenW, y = e.y * gScreenH;
 +        if (type == SDL_FINGERDOWN)
@@ -1510,7 +1816,7 @@ index 0000000..2f5757c
 +
 +    static void Draw(int w, int h)
 +    {
-+        if (!gVisible) return;
++        if (!gVisible || gMode == 2) return;
 +        if (w != gScreenW || h != gScreenH) Layout(w, h);
 +        if (!gProgram && !InitGL()) { gVisible = false; return; }
 +        Build();
@@ -1715,12 +2021,21 @@ index 0000000..2f5757c
 +                    gPads[idx] = SDL_GameControllerOpen(idx);
 +                    if (gPads[idx])
 +                    {
-+                        touch::gVisible = false; // controller in use: hide touch overlay until next touch
++                        if (touch::gMode == 0) touch::gVisible = false; // controller in use: hide touch overlay until next touch
 +                        if (gJoystickCb) gJoystickCb(idx, GLFW_CONNECTED);
 +                    }
 +                }
 +                break;
 +            }
++            case SDL_CONTROLLERBUTTONDOWN:
++            case SDL_CONTROLLERBUTTONUP:
++                if (e.type == SDL_CONTROLLERBUTTONDOWN && touch::gMode == 0) touch::gVisible = false;
++                // Back / View / Select toggles the perspective lock (F9)
++                if (e.cbutton.button == SDL_CONTROLLER_BUTTON_BACK) EmitKey(GLFW_KEY_F9, e.type == SDL_CONTROLLERBUTTONDOWN);
++                break;
++            case SDL_CONTROLLERAXISMOTION:
++                if (touch::gMode == 0 && (e.caxis.value > 16000 || e.caxis.value < -16000)) touch::gVisible = false;
++                break;
 +            case SDL_CONTROLLERDEVICEREMOVED:
 +            {
 +                for (int i = 0; i <= GLFW_JOYSTICK_LAST; ++i)
@@ -1729,7 +2044,7 @@ index 0000000..2f5757c
 +                    {
 +                        SDL_GameControllerClose(gPads[i]);
 +                        gPads[i] = nullptr;
-+                        touch::gVisible = true;
++                        touch::gVisible = (touch::gMode != 2);
 +                        if (gJoystickCb) gJoystickCb(i, GLFW_DISCONNECTED);
 +                    }
 +                }
@@ -1816,6 +2131,14 @@ index 0000000..2f5757c
 +{
 +    touch::gViewX = x; touch::gViewY = y; touch::gViewW = w; touch::gViewH = h;
 +    touch::gScreenW = 0; // force a touch layout refresh on the next frame
++}
++
++// on-screen controls mode from the launcher setting: 0 auto, 1 always, 2 off
++#include <jni.h>
++extern "C" JNIEXPORT void JNICALL Java_com_burndivision_gtaperspectivelock_GameActivity_nativeSetTouchMode(JNIEnv*, jclass, jint mode)
++{
++    touch::gMode = (mode >= 0 && mode <= 2) ? (int) mode : 0;
++    touch::gVisible = (touch::gMode != 2);
 +}
 diff --git a/src/android/glfw_sdl_shim.h b/src/android/glfw_sdl_shim.h
 new file mode 100644
