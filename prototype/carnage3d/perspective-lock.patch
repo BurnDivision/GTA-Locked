@@ -1,0 +1,209 @@
+diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
+index 4a53905..888ee1f 100644
+--- a/src/FollowCameraController.cpp
++++ b/src/FollowCameraController.cpp
+@@ -5,12 +5,62 @@
+ #include "Pedestrian.h"
+ #include "TimeManager.h"
+ 
++// GTA Classic Perspective Lock:
++// The camera's screen-up vector follows the player's world heading (or the heading of the
++// car they drive), so the player always faces 12 o'clock and the world rotates around them.
++// Only the view matrix changes: world coordinates, physics, AI and collision are untouched.
++//   ScreenPosition = R(-theta) * (WorldPosition - PlayerPosition)
++
++namespace
++{
++    const float TwoPi = 6.2831853f;
++
++    // wrap angle to [-pi, pi]
++    inline float WrapPi(float a)
++    {
++        a = fmodf(a + 3.14159265f, TwoPi);
++        if (a < 0.0f) a += TwoPi;
++        return a - 3.14159265f;
++    }
++}
++
+ FollowCameraController::FollowCameraController()
+     : mStartupCameraHeight(32.0f)
+     , mFollowPedCameraHeight(20.0f)
+     , mFollowPedCameraCatchSpeed(20.0f)
+     , mScrollHeightOffset()
+ {
++    const char* lockEnv = getenv("C3D_LOCK");
++    if (lockEnv && lockEnv[0] == '0')
++    {
++        mHeadingLockEnabled = false;
++    }
++}
++
++float FollowCameraController::GetTargetHeading() const
++{
++    // heading in radians, world X/Z plane, direction = (cos, sin)
++    if (mFollowPedestrian->IsCarPassenger() && mFollowPedestrian->mCurrentCar)
++        return mFollowPedestrian->mCurrentCar->mTransformSmooth.mOrientation.to_radians();
++
++    return mFollowPedestrian->mTransformSmooth.mOrientation.to_radians();
++}
++
++void FollowCameraController::ApplyHeading(float headingRadians)
++{
++    const glm::vec3 front = -SceneAxisY; // looking straight down
++    glm::vec3 up;
++    if (mHeadingLockEnabled)
++    {
++        // screen-up = player's forward direction in world space
++        up = glm::vec3(cosf(headingRadians), 0.0f, sinf(headingRadians));
++    }
++    else
++    {
++        up = -SceneAxisZ; // original fixed north-up view
++    }
++    glm::vec3 right = glm::cross(front, up);
++    mCamera->SetOrientation(front, right, up);
+ }
+ 
+ void FollowCameraController::Setup(GameCamera* gameCamera)
+@@ -29,12 +79,18 @@ void FollowCameraController::Setup(GameCamera* gameCamera)
+     {
+         glm::vec3 position = mFollowPedestrian->mTransformSmooth.mPosition;
+         mCamera->SetPosition({position.x, position.y + mStartupCameraHeight, position.z}); 
++        mCameraHeading = GetTargetHeading();
+     }
+     else
+     {
+         mCamera->SetPosition({0.0f, mStartupCameraHeight, 0.0f});
++        mCameraHeading = -3.14159265f * 0.5f; // north-up
+     }
+     mCamera->SetTopDownOrientation();
++    if (mFollowPedestrian)
++    {
++        ApplyHeading(mCameraHeading);
++    }
+ }
+ 
+ void FollowCameraController::UpdateFrame()
+@@ -51,9 +107,12 @@ void FollowCameraController::UpdateFrame()
+     {
+         glm::vec2 carVelocity = mFollowPedestrian->mCurrentCar->mPhysicsBody->GetLinearVelocity();
+         float carSpeed = glm::length(carVelocity);
+-        carVelocity = glm::normalize(carVelocity);
+-        position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
+-        position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
++        if (carSpeed > 0.001f)
++        {
++            carVelocity = carVelocity / carSpeed;
++            position.x += (carVelocity.x * carSpeed * 0.35f); // todo: magic numbers
++            position.z += (carVelocity.y * carSpeed * 0.35f); // todo: magic numbers
++        }
+         catchSpeed *= 0.3f; // todo: magic numbers
+     }
+ 
+@@ -63,21 +122,44 @@ void FollowCameraController::UpdateFrame()
+         position = mCamera->mPosition + (position - mCamera->mPosition) * catchSpeed * deltaTime;
+         mCamera->SetPosition(position); 
+     }
++
++    // TEST ONLY: C3D_TEST_SPIN=<deg/sec> turns the on-foot player continuously so the
++    // lock can be verified from screenshots without keyboard input. Never set in normal play.
++    static const char* testSpin = getenv("C3D_TEST_SPIN");
++    if (testSpin && !mFollowPedestrian->IsCarPassenger())
++    {
++        float degPerSec = (float) atof(testSpin);
++        cxx::angle_t a = mFollowPedestrian->mTransform.mOrientation;
++        a = a + cxx::angle_t::from_degrees(degPerSec * deltaTime);
++        mFollowPedestrian->SetOrientation(a, eTransformSpace_World);
++    }
++
++    // heading lock: shortest-arc exponential smoothing toward the player's heading
++    float target = GetTargetHeading();
++    float diff = WrapPi(target - mCameraHeading);
++    float t = glm::clamp(mHeadingCatchSpeed * deltaTime, 0.0f, 1.0f);
++    mCameraHeading = WrapPi(mCameraHeading + diff * t);
++    ApplyHeading(mCameraHeading);
+ }
+ 
+-void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
++void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseButtonInputEvent& inputEvent)
++    if (inputEvent.mPressed && inputEvent.mKeycode == eKeycode_F9)
++    {
++        mHeadingLockEnabled = !mHeadingLockEnabled;
++        inputEvent.SetConsumed();
++    }
++}
++
++void FollowCameraController::InputEvent(MouseButtonInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
++}
++
++void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
++}
++
++void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+ {
+     mScrollHeightOffset = glm::clamp(mScrollHeightOffset - inputEvent.mScrollY, -3.0f, 23.0f);
+ }
+@@ -85,6 +167,10 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+ void FollowCameraController::SetFollowTarget(Pedestrian* pedestrian)
+ {
+     mFollowPedestrian = pedestrian;
++    if (mFollowPedestrian)
++    {
++        mCameraHeading = GetTargetHeading();
++    }
+ }
+ 
+ void FollowCameraController::InputEventLost()
+diff --git a/src/FollowCameraController.h b/src/FollowCameraController.h
+index 8640d19..bca9ea0 100644
+--- a/src/FollowCameraController.h
++++ b/src/FollowCameraController.h
+@@ -31,4 +31,12 @@ private:
+     float mFollowPedCameraCatchSpeed; // meters per second
+ 
+     Pedestrian* mFollowPedestrian = nullptr;
++
++    // perspective lock (player always faces screen-up, world rotates)
++    bool mHeadingLockEnabled = true; // F9 toggles
++    float mCameraHeading = 0.0f; // radians, smoothed
++    float mHeadingCatchSpeed = 12.0f; // 1/sec, higher = tighter lock
++
++    float GetTargetHeading() const;
++    void ApplyHeading(float headingRadians);
+ };
+\ No newline at end of file
+diff --git a/src/GameCamera.cpp b/src/GameCamera.cpp
+index 3e02e64..0fba3b4 100644
+--- a/src/GameCamera.cpp
++++ b/src/GameCamera.cpp
+@@ -181,10 +181,14 @@ void GameCamera::ComputeViewBounds2()
+         const float Hfar = tan(mPerspectiveParams.mFovy * PiDiv180 * 0.5f) * mPosition.y;
+         const float Wfar = Hfar * mPerspectiveParams.mAspect;
+ 
+-        areaBounds.mMin.x = mPosition.x - Wfar;
+-        areaBounds.mMin.y = mPosition.z - Hfar;
+-        areaBounds.mMax.x = mPosition.x + Wfar;
+-        areaBounds.mMax.y = mPosition.z + Hfar;
++        // perspective lock: the view may be yaw-rotated, so cover the rotated
++        // screen rectangle with its bounding circle (axis-aligned square of radius R)
++        const float R = sqrtf(Wfar * Wfar + Hfar * Hfar);
++
++        areaBounds.mMin.x = mPosition.x - R;
++        areaBounds.mMin.y = mPosition.z - R;
++        areaBounds.mMax.x = mPosition.x + R;
++        areaBounds.mMax.y = mPosition.z + R;
+     }
+ 
+     mOnScreenMapArea = areaBounds;
