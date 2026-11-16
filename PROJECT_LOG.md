@@ -406,3 +406,55 @@ d-pad and analog stick; twin-stick shooting on foot.
 - Release `android/dist/GTA-Perspective-Lock-0.4.0.apk`, SHA-256
   `6f36b514c4edb7fee9bdf347d395c5d221871e73f9748b9f9838dd7134d0e872`. Cumulative patch sha256
   ab08c15d… (32 files).
+
+## 2026-11-16 — Reperspective camera modes, twin-stick redesign, agent collaboration, Android 0.5.0
+
+Spec: "GTA Classic Reperspective — Camera and Twin-Stick Control Design" (user, 2026-11-16).
+Design notes and the full test list are in `docs/CAMERA_CONTROLS.md`.
+
+- **Gap analysis.** The camera already had lock on/off (F9) and dynamic look-ahead. Missing:
+  - no Combat mode and no saved mode setting;
+  - smoothing was not frame-rate independent and had no presets;
+  - twin-stick froze the view on foot instead of following a persistent travel heading;
+  - the auto-fire threshold was hard-coded;
+  - no keyboard/mouse twin-stick;
+  - no collision-jitter protection in cars;
+  - no automated control tests.
+- **New engine-independent modules,** `src/reperspective/CameraHeading.h` and `TwinStick.h`:
+  - shortest-arc, frame-rate independent smoothing;
+  - smoothing presets;
+  - persistent travel heading tracker;
+  - screen basis, dead zones, latched input frame;
+  - separate move / face / aim evaluation;
+  - combat turning.
+
+  Native unit tests: 185 checks (`prototype/carnage3d/tests/run_tests.sh`).
+- **`FollowCameraController` rewritten around modes.**
+  - Cvars `cam_mode`, `cam_smoothing` and `cam_dynamic`, archived in the config.
+  - F9 cycles the modes, with labels NORTH / LOCK / AIM on the touch button.
+  - Rate limits: 120–400°/s in a car depending on speed; 240°/s on foot while following the travel heading.
+  - The player controller passes hints (twin-stick, aiming, aim heading) to the camera.
+- **`HumanPlayer` twin-stick uses the modules.**
+  - Cvars `g_controls`, `g_autoFire`, `g_autoFireThreshold`.
+  - Keyboard/mouse twin-stick when `g_controls=twinstick`.
+  - Combat mode: the right stick turns the aim and the view.
+- **Fix (Codex audit P1):** analog sticks no longer re-enable input while another handler or a UI
+  window has the input focus. Runtime check: with the console open, the held stick gives speed 0;
+  movement resumes once it closes.
+- **Test harness (test-only).** When `config/test_input.txt` exists, `HumanPlayer` plays scripted
+  gamepad input and logs `RPT` telemetry. Matrix: `tools/rp_tests` on the T7.
+  - Runs m3 and m4: **22/22 checks pass.**
+  - Covered: Classic and Reperspective with twin-stick, held stick, strafe and fire, backward and fire,
+    stationary aim, rapid changes, 360° sweep through ±180, Combat, driving.
+  - Extra runs: Reperspective with tank controls (view follows body); UI capture; config preserved
+    across an APK reinstall.
+- **Agent collaboration.**
+  - Coordination files live in `agent-coordination/` on the T7.
+  - Codex contributions, each reviewed and integrated:
+    - T1 fail-fast `tools/release.sh` plus 11 mock tests (native-intermediate cleanup kept);
+    - T2 `ConfigMerge.java`: user `sys_config.json` values survive updates, verified on the emulator;
+    - T6 `TrafficGap.h`: the jam breaker no longer drives into the vehicle ahead (16 tests).
+- **Launcher:** new Camera, Smoothing and On-foot controls settings; the screen is now scrollable.
+- **Engine sync method:** codebox rebuilds upstream plus the repo patch in a scratch tree and copies
+  only differing files (`tools/sync_from_repo.sh`, with backups).
+- Version 0.5.0 (versionCode 7).

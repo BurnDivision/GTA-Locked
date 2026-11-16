@@ -21,7 +21,7 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
-| **Android app** | **Working.** Release APK 0.4.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
+| **Android app** | **Working.** Release APK 0.5.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
 | **Aspect ratios** | **Auto, 16:9, 4:3 or fill**, with black bars as needed. Auto picks 4:3 on a foldable's unfolded screen and 16:9 when folded. Works on Android and desktop |
 
 ## Layout
@@ -95,8 +95,9 @@ completely (for controller-only play).
 | LB / RB | Previous / next weapon | Previous / next weapon |
 | Back / View / Select | Toggle the perspective lock | Toggle the perspective lock |
 
-* **Twin-stick on foot:** while you walk with a controller, the view holds its rotation, so
-  "up" on a stick always means up on the screen. You move one way and aim another.
+* **Twin-stick on foot:** you move one way and aim another. In Reperspective the view turns to
+  follow your travel direction once it settles, and holds still while you aim or shoot (strafing),
+  so the world doesn't spin under you. A held stick keeps its direction while the view turns.
 * **In a car:** the view locks to the car's heading again.
 
 Aspect ratio:
@@ -123,7 +124,14 @@ cd android
 
 * Original GTA 1 controls: Up = forward, Left/Right = turn. They're already
   heading-relative, so they match the locked camera with no changes (on-foot "Option A").
-* **F9**: toggle perspective lock on/off (for comparison).
+* **Camera modes** (`cam_mode`; F9, the LOCK touch button or a controller's Back button cycles them;
+  the button shows NORTH / LOCK / AIM; also selectable in the launcher):
+  * **Classic** (NORTH): the original north-up view.
+  * **Reperspective** (LOCK, default): your travel heading points up and the city turns around you.
+  * **Combat** (AIM, experimental): the view follows your aim. The right stick turns.
+* **Camera smoothing** (`cam_smoothing`): Instant, Fast (125 ms, default) or Smooth (250 ms).
+* **On-foot controls** (`g_controls`): Auto (twin-stick with a controller), Classic or Twin-stick.
+  Design notes and test results: [docs/CAMERA_CONTROLS.md](docs/CAMERA_CONTROLS.md).
 * **Dynamic camera** (on by default with the lock; **F8** toggles, `C3D_DYNCAM=0` starts it off):
   * As you run or drive, the view looks ahead along your heading, so you sit lower on the
     screen and see more of what's coming. Up to about a third of the half-screen on foot and
