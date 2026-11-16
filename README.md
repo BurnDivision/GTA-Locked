@@ -21,7 +21,7 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
-| **Android app** | **Working.** Release APK 0.5.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
+| **Android app** | **Working.** Release APK 0.5.1 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
 | **Aspect ratios** | **Auto, 16:9, 4:3 or fill**, with black bars as needed. Auto picks 4:3 on a foldable's unfolded screen and 16:9 when folded. Works on Android and desktop |
 
 ## Layout
@@ -77,7 +77,9 @@ Touch layout:
 
 **On-screen controls** (launcher setting): **Auto** hides them while a game controller is in
 use and brings them back on the next touch; **Always** keeps them; **Off** removes them
-completely (for controller-only play).
+completely (for controller-only play); **Twin-stick** replaces the d-pad and FIRE with a move
+stick (left) and an aim stick (right, fires past the red ring). It works like a game controller,
+and a real controller takes over when one is connected.
 
 **Game controllers** (Bluetooth or USB; Xbox / PlayStation / generic layouts via SDL):
 

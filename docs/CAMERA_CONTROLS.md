@@ -109,10 +109,10 @@ later. The engine adapters live in `FollowCameraController` (camera) and `HumanP
 - **Not covered:**
   - Different frame rates at runtime: the emulator runs at one rate; the unit tests cover dt independence.
   - Different aspect ratios with these modes: the camera code is aspect independent.
-  - Touch twin-stick: not implemented; touch uses tank controls.
+  - Touch twin-stick: one emulator run (single-finger swipes; adb can't do two fingers at once).
 
 ## Open trade-offs and remaining work
-- Touch twin-stick (a virtual right stick) isn't implemented.
+- Touch twin-stick (Codex T8, integrated in 0.5.1): in a car the aim stick acts as the gas, and touch has no brake/reverse yet.
 - Combat mode is experimental:
   - gamepad only;
   - auto-fire is off in this mode because the right stick turns the view;

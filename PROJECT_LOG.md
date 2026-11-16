@@ -462,3 +462,17 @@ Design notes and the full test list are in `docs/CAMERA_CONTROLS.md`.
   `30fe7aa3df329daf58599d2b87d039d8f24ccb8fcd3f086808ddc6d84118927f`. Built with the merged
   fail-fast `tools/release.sh` (its first real run: Gradle OK, single APK, both ABIs present).
 - Handoff for other agents: `agent-coordination/STATE_HANDOFF.md` on the T7.
+
+## 2026-11-16 — Touch twin-stick (Codex T8), Android 0.5.1
+- **Codex T8** (platform layer only):
+  - `touch_sticks.h`: deflection, 20% dead zone, fire past 60%, per-finger ownership.
+  - Touch mode 3: two on-screen sticks reported to the engine as a virtual gamepad in slot 1. A real
+    controller takes priority. Touch mode changes are applied on the SDL thread.
+  - Host tests and an NDK syntax check pass.
+- **Claude review:** reproduced byte-identically in the repo (hash match). Launcher option
+  "Twin-stick" sets `touch_controls=twinstick`, which maps to mode 3. Harness gained `@realpad`.
+- **Emulator check:**
+  - Left touch stick → twin-stick movement toward screen-right; the camera then turned to the travel direction.
+  - Right touch stick pushed up → 3 shots along screen-up.
+  - No crashes. Screenshot: `tools/rp_tests/tt_idle.png`.
+- Known gap: in a car, the touch aim stick acts as the gas, and touch has no brake/reverse.
