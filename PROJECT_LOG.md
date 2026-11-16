@@ -290,7 +290,7 @@ User intent: 4:3 is meant for the unfolded screen of foldables like their Galaxy
 - Version 0.3.0 (versionCode 3). Cumulative patch sha256 2b75a533… (21 files, +1222/−46).
 - Release `android/dist/GTA-Perspective-Lock-0.3.0.apk`, SHA-256 `f374d7747a378882d6b8c49607c9f4e20989e017e0a5a3b39dcefc736478df10`; release smoke test at the Fold7 inner size: no crashes.
 
-## 2026-11-16 — Rotation on foldables + traffic, 0.3.1 (in progress)
+## 2026-11-16 — Rotation on foldables + traffic, Android 0.3.1
 
 User report: "There are no cars. And I can't rotate on the unfolded screen."
 
@@ -324,4 +324,13 @@ User report: "There are no cars. And I can't rotate on the unfolded screen."
   - Damage rule, traffic only: car-to-car contacts below impulse 2000 cause no damage when
     **both** cars have AI drivers. Collisions involving the player or a parked car keep the
     original rules.
-- `TrafficManager` logs a debug-level "Traffic status" line to logcat (temporary).
+- Temporary `TrafficManager` and damage debug logs were used for diagnosis, then removed.
+- Test after all fixes (120 s, player idle at a junction): traffic flows, and the junction
+  pile-up is gone. Some crashes and explosions remain (8 explosion events, chain explosions
+  included), mostly from hard hits.
+  Screenshot `android/shots/46_yield.png`.
+- Edit scripts that keep codebox and the patch in sync: `tools/drive2.py` … `drive7.py`
+  on the T7 (idempotent; applied in order).
+- Release `android/dist/GTA-Perspective-Lock-0.3.1.apk` (versionCode 4), SHA-256
+  `903efd2c3ab881a18a8afeb36d75ac916af4244164226966e6172876feb0f9ca`. Clean RelWithDebInfo
+  build, with no debug log strings in `libmain.so`. Cumulative patch sha256 b743a823… (26 files).

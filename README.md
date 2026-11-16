@@ -61,8 +61,14 @@ Set `g_gtadata` in `gamedata/config/sys_config.json` to your `GTADATA` folder.
 * **Orientation:** phones are landscape only. Tablets and unfolded foldables
   (smallest width ≥ 600 dp) follow the system rotation setting, in portrait or landscape.
 * **Traffic:** AI traffic is on by default (upstream Carnage3D ships it off and has no car
-  driving AI). This build adds simple lane-following drivers: they follow the map's lane
-  directions, turn at junctions, slow down for corners and keep a gap to the car ahead.
+  driving AI). This build adds simple lane-following drivers. They:
+  * follow the map's lane directions and turn at junctions;
+  * slow down for corners;
+  * keep a gap to the car ahead and yield to crossing traffic;
+  * back off instead of pushing when blocked.
+
+  Scrapes between two AI-driven cars don't cause damage (hard crashes still do). Collisions
+  with the player are unchanged.
 
 Touch layout:
 * **Left thumb pad:** Up = forward, Down = back, Left/Right = turn.

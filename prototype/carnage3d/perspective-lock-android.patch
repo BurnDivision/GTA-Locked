@@ -949,35 +949,6 @@ index e0c0b12..e6ff6bb 100644
  
  private:
      bool mQuitRequested;
-diff --git a/src/TrafficManager.cpp b/src/TrafficManager.cpp
-index 7cc7edb..3fb7074 100644
---- a/src/TrafficManager.cpp
-+++ b/src/TrafficManager.cpp
-@@ -297,6 +297,16 @@ void TrafficManager::GenerateCars()
-     mLastGenCarsTime = gTimeManager.mGameTime;
- 
-     RemoveOffscreenCars();
-+    {
-+        int trafficCars = 0, movingCars = 0;
-+        for (Vehicle* car: gGameObjectsManager.mVehiclesList)
-+        {
-+            if (!car->IsTrafficFlag() || car->IsMarkedForDeletion()) continue;
-+            ++trafficCars;
-+            if (car->GetCurrentSpeed() > 0.5f) ++movingCars;
-+        }
-+        gConsole.LogMessage(eLogMessage_Debug, "Traffic status: %d cars, %d moving", trafficCars, movingCars);
-+    }
- 
-     if (!gGameCheatsWindow.mEnableTrafficCarsGeneration)
-         return;
-@@ -399,6 +409,7 @@ void TrafficManager::GenerateTrafficCars(int carsCount, GameCamera& view)
- 
-         GenerateRandomTrafficCar(candidate.mMapX, candidate.mMapLayer, candidate.mMapY);
-     }
-+    gConsole.LogMessage(eLogMessage_Debug, "Traffic: %d car(s) requested, %d road candidates", carsCount, (int) mCandidatePosArray.size() + numCarsGenerated);
- }
- 
- void TrafficManager::RemoveOffscreenCars()
 diff --git a/src/Vehicle.cpp b/src/Vehicle.cpp
 index 3847938..6260526 100644
 --- a/src/Vehicle.cpp
