@@ -39,11 +39,12 @@ final class EngineConfig {
         }
     }
 
-    /** On-screen controls: 0 auto (hidden while a controller is used), 1 always, 2 off. */
+    /** On-screen controls: 0 auto (hidden while a controller is used), 1 always, 2 off, 3 touch twin-stick. */
     static int touchMode(Context c) {
         String m = get(c, "touch_controls", "auto");
         if ("on".equals(m)) return 1;
         if ("off".equals(m)) return 2;
+        if ("twinstick".equals(m)) return 3;
         return 0;
     }
 }

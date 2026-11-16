@@ -1170,7 +1170,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..df03020 100644
+index a13af22..857f3da 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,5 +1,23 @@
@@ -1292,7 +1292,7 @@ index a13af22..df03020 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +455,358 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +455,362 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -1300,7 +1300,7 @@ index a13af22..df03020 100644
 +
 +const GamepadState& HumanPlayer::GetPadState() const
 +{
-+    if (mTestScript.mActive)
++    if (mTestScript.mActive && !mTestScript.mUseRealPad)
 +        return mTestScript.mPad;
 +    return gInputs.mGamepadsState[mActionsMapping.mGamepadID];
 +}
@@ -1416,7 +1416,7 @@ index a13af22..df03020 100644
 +
 +    const bool manualFire = GetActionState(eInputAction_Shoot) ||
 +        (useKeyboard && gInputs.GetMouseButtonL()) ||
-+        (mTestScript.mActive && mTestScript.mPad.mButtons[eGamepadButton_RightTrigger]);
++        (mTestScript.mActive && !mTestScript.mUseRealPad && mTestScript.mPad.mButtons[eGamepadButton_RightTrigger]);
 +
 +    // Reperspective follows the travel heading, so a held stick keeps the screen mapping it started
 +    // with (no feedback loop while the view turns). Combat moves relative to the current view.
@@ -1533,11 +1533,14 @@ index a13af22..df03020 100644
 +
 +    const float deltaTime = gTimeManager.mGameFrameDelta;
 +    ts.mTime += deltaTime;
-+    if (!mInputFocusLost)
++    if (!ts.mUseRealPad)
 +    {
-+        mUpdateInputs = true; // scripted sticks behave like real ones: no input while a UI has the focus
++        if (!mInputFocusLost)
++        {
++            mUpdateInputs = true; // scripted sticks behave like real ones: no input while a UI has the focus
++        }
++        mGamepadActive = true;
 +    }
-+    mGamepadActive = true;
 +    while (ts.mActive && ts.mNextLine < ts.mLines.size() && ts.mLines[ts.mNextLine].mTime <= ts.mTime)
 +    {
 +        ExecuteTestLine(ts.mLines[ts.mNextLine].mText);
@@ -1607,6 +1610,7 @@ index a13af22..df03020 100644
 +    else if (first == "@controls") gCvarControlScheme.mValue = arg;
 +    else if (first == "@smoothing") gCvarCameraSmoothing.mValue = arg;
 +    else if (first == "@autofire") gCvarAutoFire.mValue = (arg == "1");
++    else if (first == "@realpad") ts.mUseRealPad = true;
 +    else if (first == "@log") ts.mLogInterval = glm::max(0.05f, (float) atof(arg.c_str()));
 +    else if (first == "@facing")
 +    {
@@ -1652,7 +1656,7 @@ index a13af22..df03020 100644
  {
      const auto& mapping = mActionsMapping.mActionToKeys[action];
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..9a12ff4 100644
+index c272fba..1f953fa 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
 @@ -5,6 +5,8 @@
@@ -1664,7 +1668,7 @@ index c272fba..9a12ff4 100644
  #include "FreeLookCameraController.h"
  #include "HUD.h"
  
-@@ -19,6 +21,34 @@ enum ePlayerCameraMode
+@@ -19,6 +21,35 @@ enum ePlayerCameraMode
  //////////////////////////////////////////////////////////////////////////
  
  // Contains human player related information but also processes character controller logic
@@ -1694,12 +1698,13 @@ index c272fba..9a12ff4 100644
 +    float mMoveHeading = 0.0f;
 +    bool mFire = false;
 +    void* mCar = nullptr; // vehicle spawned by @car
++    bool mUseRealPad = false; // @realpad: telemetry only, input from the real / virtual (touch) gamepad
 +};
 +
  class HumanPlayer final: public CharacterController
  {
  public:
-@@ -90,6 +120,21 @@ private:
+@@ -90,6 +121,21 @@ private:
      float mRespawnTime = 0.0f;
      bool mUpdateInputs = false;
      bool mMouseAimingEnabled = false;
@@ -1934,16 +1939,18 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..3af0cbf
+index 0000000..aa236dd
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
-@@ -0,0 +1,740 @@
+@@ -0,0 +1,869 @@
 +// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
 +#include <SDL.h>
 +#include "glfw_sdl_shim.h"
 +#include <cmath>
 +#include <cstring>
 +#include <vector>
++#include <atomic>
++#include "touch_sticks.h"
 +
 +struct GLFWwindow
 +{
@@ -1967,6 +1974,14 @@ index 0000000..3af0cbf
 +static GLFWjoystickfun gJoystickCb = nullptr;
 +static SDL_GameController* gPads[GLFW_JOYSTICK_LAST + 1] = {};
 +static Uint64 gTimeStart = 0;
++static std::atomic<int> gRequestedTouchMode {0};
++
++static bool AnyRealPad()
++{
++    for (auto* pad : gPads) if (pad && SDL_GameControllerGetAttached(pad)) return true;
++    return false;
++}
++
 +
 +static void ReportError(const char* what)
 +{
@@ -2065,7 +2080,10 @@ index 0000000..3af0cbf
 +    static int gViewX = 0, gViewY = 0, gViewW = 0, gViewH = 0; // game view rect, set by the engine
 +    static bool gKeyState[K_COUNT] = {};
 +    static bool gVisible = true;
-+    static int gMode = 0; // 0 auto (hidden while a controller is used), 1 always, 2 off
++    static int gMode = 0; // 0 auto, 1 always, 2 off, 3 twin-stick
++    static touch_sticks::Stick gLeftStick, gRightStick;
++    static float gRightX = 0, gRightY = 0;
++    static bool VirtualPad() { return gMode == 3 && !AnyRealPad(); }
 +
 +    static void Layout(int w, int h)
 +    {
@@ -2107,15 +2125,29 @@ index 0000000..3af0cbf
 +            gButtons[Control_Aspect].y = cy;
 +            gButtons[Control_Aspect].r = r;
 +        }
++        if (gMode == 3)
++        {
++            // Reserve the lower right for aim, with action buttons above the stick.
++            gRightX = W - gDPadX; gRightY = gDPadY;
++            gButtons[Control_Car].x = W - .10f * u;
++            gButtons[Control_Car].y = H - .51f * u;
++            gButtons[Control_Jump].x = W - .29f * u;
++            gButtons[Control_Jump].y = H - .60f * u;
++            gButtons[Control_Weapon].x = W - .48f * u;
++            gButtons[Control_Weapon].y = H - .51f * u;
++            gButtons[Control_Horn].x = W - .55f * u;
++            gButtons[Control_Horn].y = H - .30f * u;
++        }
 +        gButtons[Control_DPad]   = { gDPadX, gDPadY, gDPadR, -1, "", 1, 1, 1 };
 +    }
 +
 +    static int HitTest(float x, float y)
 +    {
 +        float dx = x - gDPadX, dy = y - gDPadY;
-+        if (dx * dx + dy * dy <= (gDPadR * 1.6f) * (gDPadR * 1.6f)) return Control_DPad;
++        if (gMode != 3 && dx * dx + dy * dy <= (gDPadR * 1.6f) * (gDPadR * 1.6f)) return Control_DPad;
 +        for (int i = Control_Fire; i < Control_COUNT; ++i)
 +        {
++            if (gMode == 3 && i == Control_Fire) continue;
 +            const Button& b = gButtons[i];
 +            float bx = x - b.x, by = y - b.y;
 +            float rr = b.r * 1.35f;
@@ -2156,15 +2188,40 @@ index 0000000..3af0cbf
 +    static void OnFinger(const SDL_TouchFingerEvent& e, Uint32 type)
 +    {
 +        if (gMode == 2) return; // on-screen controls switched off
++        if (gScreenW <= 0 || gScreenH <= 0)
++        {
++            int w = 0, h = 0;
++            if (gWindow.mSdlWindow) SDL_GL_GetDrawableSize(gWindow.mSdlWindow, &w, &h);
++            Layout(w, h);
++        }
 +        gVisible = true;
 +        float x = e.x * gScreenW, y = e.y * gScreenH;
 +        if (type == SDL_FINGERDOWN)
 +        {
++            // A finger is captured on down and keeps its control until up.
++            for (const Finger& f : gFingers) if (f.id == e.fingerId) return;
++            if ((gLeftStick.active && gLeftStick.owner == e.fingerId) ||
++                (gRightStick.active && gRightStick.owner == e.fingerId)) return;
 +            int c = HitTest(x, y);
++            if (gMode == 3 && c == Control_None && VirtualPad())
++            {
++                float dx = x - gDPadX, dy = y - gDPadY;
++                float rx = x - gRightX, ry = y - gRightY;
++                // Acquisition stays inside each disc: no stealing nearby action buttons.
++                if (dx*dx + dy*dy <= gDPadR*gDPadR)
++                    gLeftStick.Begin(e.fingerId, x, y, gDPadX, gDPadY, gDPadR);
++                else if (rx*rx + ry*ry <= gDPadR*gDPadR)
++                    gRightStick.Begin(e.fingerId, x, y, gRightX, gRightY, gDPadR);
++            }
 +            if (c != Control_None) gFingers.push_back({ e.fingerId, c, x, y });
 +        }
 +        else
 +        {
++            if (type == SDL_FINGERUP) { gLeftStick.End(e.fingerId); gRightStick.End(e.fingerId); }
++            else {
++                gLeftStick.Move(e.fingerId, x, y, gDPadX, gDPadY, gDPadR);
++                gRightStick.Move(e.fingerId, x, y, gRightX, gRightY, gDPadR);
++            }
 +            for (size_t i = 0; i < gFingers.size(); ++i)
 +            {
 +                if (gFingers[i].id != e.fingerId) continue;
@@ -2179,6 +2236,7 @@ index 0000000..3af0cbf
 +    static void ReleaseAll()
 +    {
 +        gFingers.clear();
++        gLeftStick.Reset(); gRightStick.Reset();
 +        Recompute();
 +    }
 +
@@ -2313,28 +2371,45 @@ index 0000000..3af0cbf
 +    static void Build()
 +    {
 +        gVerts.clear();
-+        // d-pad
-+        Disc(gDPadX, gDPadY, gDPadR, 0, 0, 0, 0.22f);
-+        Ring(gDPadX, gDPadY, gDPadR, gDPadR * 0.06f, 1, 1, 1, 0.45f);
-+        float s = gDPadR * 0.22f, o = gDPadR * 0.62f;
-+        float aU = gKeyState[K_UP] ? 0.9f : 0.5f, aD = gKeyState[K_DOWN] ? 0.9f : 0.5f;
-+        float aL = gKeyState[K_LEFT] ? 0.9f : 0.5f, aR = gKeyState[K_RIGHT] ? 0.9f : 0.5f;
-+        Tri(gDPadX, gDPadY - o - s, gDPadX - s, gDPadY - o + s * 0.6f, gDPadX + s, gDPadY - o + s * 0.6f, 1, 1, 1, aU);
-+        Tri(gDPadX, gDPadY + o + s, gDPadX + s, gDPadY + o - s * 0.6f, gDPadX - s, gDPadY + o - s * 0.6f, 1, 1, 1, aD);
-+        Tri(gDPadX - o - s, gDPadY, gDPadX - o + s * 0.6f, gDPadY + s, gDPadX - o + s * 0.6f, gDPadY - s, 1, 1, 1, aL);
-+        Tri(gDPadX + o + s, gDPadY, gDPadX + o - s * 0.6f, gDPadY - s, gDPadX + o - s * 0.6f, gDPadY + s, 1, 1, 1, aR);
-+        // finger knob on d-pad
-+        for (const Finger& f : gFingers)
++        if (gMode == 3)
 +        {
-+            if (f.control != Control_DPad) continue;
-+            float dx = f.x - gDPadX, dy = f.y - gDPadY;
-+            float len = sqrtf(dx * dx + dy * dy), mx = gDPadR * 0.8f;
-+            if (len > mx) { dx *= mx / len; dy *= mx / len; }
-+            Disc(gDPadX + dx, gDPadY + dy, gDPadR * 0.28f, 1, 1, 1, 0.35f);
++            const touch_sticks::Vector values[] = {gLeftStick.value, gRightStick.value};
++            const float centers[] = {gDPadX, gRightX};
++            for (int i = 0; i < 2; ++i)
++            {
++                Disc(centers[i], gDPadY, gDPadR, 0, 0, 0, .22f);
++                Ring(centers[i], gDPadY, gDPadR, gDPadR*.06f, 1, 1, 1, .45f);
++                if (i == 1) Ring(centers[i], gDPadY, gDPadR*.6f, gDPadR*.025f, 1, .4f, .4f, .5f);
++                Disc(centers[i] + values[i].x*gDPadR*.8f, gDPadY + values[i].y*gDPadR*.8f,
++                    gDPadR*.28f, 1, 1, 1, .5f);
++            }
++        }
++        else
++        {
++            // d-pad
++            Disc(gDPadX, gDPadY, gDPadR, 0, 0, 0, 0.22f);
++            Ring(gDPadX, gDPadY, gDPadR, gDPadR * 0.06f, 1, 1, 1, 0.45f);
++            float s = gDPadR * 0.22f, o = gDPadR * 0.62f;
++            float aU = gKeyState[K_UP] ? 0.9f : 0.5f, aD = gKeyState[K_DOWN] ? 0.9f : 0.5f;
++            float aL = gKeyState[K_LEFT] ? 0.9f : 0.5f, aR = gKeyState[K_RIGHT] ? 0.9f : 0.5f;
++            Tri(gDPadX, gDPadY - o - s, gDPadX - s, gDPadY - o + s * 0.6f, gDPadX + s, gDPadY - o + s * 0.6f, 1, 1, 1, aU);
++            Tri(gDPadX, gDPadY + o + s, gDPadX + s, gDPadY + o - s * 0.6f, gDPadX - s, gDPadY + o - s * 0.6f, 1, 1, 1, aD);
++            Tri(gDPadX - o - s, gDPadY, gDPadX - o + s * 0.6f, gDPadY + s, gDPadX - o + s * 0.6f, gDPadY - s, 1, 1, 1, aL);
++            Tri(gDPadX + o + s, gDPadY, gDPadX + o - s * 0.6f, gDPadY - s, gDPadX + o - s * 0.6f, gDPadY + s, 1, 1, 1, aR);
++            // finger knob on d-pad
++            for (const Finger& f : gFingers)
++            {
++                if (f.control != Control_DPad) continue;
++                float dx = f.x - gDPadX, dy = f.y - gDPadY;
++                float len = sqrtf(dx * dx + dy * dy), mx = gDPadR * 0.8f;
++                if (len > mx) { dx *= mx / len; dy *= mx / len; }
++                Disc(gDPadX + dx, gDPadY + dy, gDPadR * 0.28f, 1, 1, 1, 0.35f);
++            }
 +        }
 +        // buttons
 +        for (int i = Control_Fire; i < Control_COUNT; ++i)
 +        {
++            if (gMode == 3 && i == Control_Fire) continue;
 +            const Button& b = gButtons[i];
 +            bool down = gKeyState[b.key];
 +            Disc(b.x, b.y, b.r, b.cr, b.cg, b.cb, down ? 0.70f : 0.38f);
@@ -2499,8 +2574,22 @@ index 0000000..3af0cbf
 +
 +void glfwSwapInterval(int interval) { SDL_GL_SetSwapInterval(interval); }
 +
++static void DiscoverPads();
++static bool gReportedPads[GLFW_JOYSTICK_LAST + 1] = {};
++
 +void glfwPollEvents(void)
 +{
++    DiscoverPads();
++    const int mode = gRequestedTouchMode.load();
++    if (mode != touch::gMode)
++    {
++        touch::ReleaseAll();
++        touch::gMode = mode;
++        touch::gVisible = mode != 2;
++        int w = 0, h = 0;
++        if (gWindow.mSdlWindow) SDL_GL_GetDrawableSize(gWindow.mSdlWindow, &w, &h);
++        touch::Layout(w, h);
++    }
 +    SDL_Event e;
 +    while (SDL_PollEvent(&e))
 +    {
@@ -2508,6 +2597,10 @@ index 0000000..3af0cbf
 +        {
 +            case SDL_QUIT:
 +                gWindow.mShouldClose = true;
++                break;
++            case SDL_WINDOWEVENT:
++                if (e.window.event == SDL_WINDOWEVENT_FOCUS_LOST || e.window.event == SDL_WINDOWEVENT_SIZE_CHANGED)
++                    touch::ReleaseAll();
 +                break;
 +            case SDL_APP_WILLENTERBACKGROUND:
 +                touch::ReleaseAll();
@@ -2546,16 +2639,8 @@ index 0000000..3af0cbf
 +                break;
 +            case SDL_CONTROLLERDEVICEADDED:
 +            {
-+                int idx = e.cdevice.which;
-+                if (idx >= 0 && idx <= GLFW_JOYSTICK_LAST && !gPads[idx])
-+                {
-+                    gPads[idx] = SDL_GameControllerOpen(idx);
-+                    if (gPads[idx])
-+                    {
-+                        if (touch::gMode == 0) touch::gVisible = false; // controller in use: hide touch overlay until next touch
-+                        if (gJoystickCb) gJoystickCb(idx, GLFW_CONNECTED);
-+                    }
-+                }
++                DiscoverPads();
++                if (touch::gMode == 0 && AnyRealPad()) touch::gVisible = false;
 +                break;
 +            }
 +            case SDL_CONTROLLERBUTTONDOWN:
@@ -2576,13 +2661,22 @@ index 0000000..3af0cbf
 +                        SDL_GameControllerClose(gPads[i]);
 +                        gPads[i] = nullptr;
 +                        touch::gVisible = (touch::gMode != 2);
-+                        if (gJoystickCb) gJoystickCb(i, GLFW_DISCONNECTED);
++                        // The virtual pad may take this slot back immediately.
 +                    }
 +                }
 +                break;
 +            }
 +            default:
 +                break;
++        }
++    }
++    for (int i = 0; i <= GLFW_JOYSTICK_LAST; ++i)
++    {
++        const bool present = gPads[i] || (i == GLFW_JOYSTICK_1 && touch::VirtualPad());
++        if (present != gReportedPads[i])
++        {
++            gReportedPads[i] = present;
++            if (gJoystickCb) gJoystickCb(i, present ? GLFW_CONNECTED : GLFW_DISCONNECTED);
 +        }
 +    }
 +}
@@ -2602,17 +2696,55 @@ index 0000000..3af0cbf
 +GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow*, GLFWcursorposfun cb) { GLFWcursorposfun p = gCursorCb; gCursorCb = cb; return p; }
 +GLFWjoystickfun glfwSetJoystickCallback(GLFWjoystickfun cb) { GLFWjoystickfun p = gJoystickCb; gJoystickCb = cb; return p; }
 +
-+int glfwJoystickIsGamepad(int jid)
++// Discover all real pads before exposing slot 1 as a virtual controller.
++static void DiscoverPads()
++{
++    for (int idx = 0; idx < SDL_NumJoysticks(); ++idx)
++    {
++        if (!SDL_IsGameController(idx)) continue;
++        const SDL_JoystickID id = SDL_JoystickGetDeviceInstanceID(idx);
++        bool opened = false;
++        for (auto* pad : gPads)
++            if (pad && SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(pad)) == id) opened = true;
++        if (opened) continue;
++        for (int slot = 0; slot <= GLFW_JOYSTICK_LAST; ++slot)
++            if (!gPads[slot])
++            {
++                gPads[slot] = SDL_GameControllerOpen(idx);
++                if (gPads[slot]) touch::ReleaseAll();
++                break;
++            }
++    }
++}
++
++int glfwJoystickPresent(int jid)
 +{
 +    if (jid < 0 || jid > GLFW_JOYSTICK_LAST) return GLFW_FALSE;
-+    if (!gPads[jid] && jid < SDL_NumJoysticks() && SDL_IsGameController(jid))
-+        gPads[jid] = SDL_GameControllerOpen(jid);
-+    return gPads[jid] ? GLFW_TRUE : GLFW_FALSE;
++    DiscoverPads();
++    return gPads[jid] || (jid == GLFW_JOYSTICK_1 && touch::VirtualPad()) ? GLFW_TRUE : GLFW_FALSE;
 +}
++
++int glfwJoystickIsGamepad(int jid) { return glfwJoystickPresent(jid); }
 +
 +int glfwGetGamepadState(int jid, GLFWgamepadstate* state)
 +{
-+    if (jid < 0 || jid > GLFW_JOYSTICK_LAST || !gPads[jid] || !state) return GLFW_FALSE;
++    if (!state || !glfwJoystickPresent(jid)) return GLFW_FALSE;
++    if (jid == GLFW_JOYSTICK_1 && touch::VirtualPad())
++    {
++        memset(state, 0, sizeof(*state));
++        state->axes[GLFW_GAMEPAD_AXIS_LEFT_X] = touch::gLeftStick.value.x;
++        state->axes[GLFW_GAMEPAD_AXIS_LEFT_Y] = touch::gLeftStick.value.y;
++        state->axes[GLFW_GAMEPAD_AXIS_RIGHT_X] = touch::gRightStick.value.x;
++        state->axes[GLFW_GAMEPAD_AXIS_RIGHT_Y] = touch::gRightStick.value.y;
++        state->axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] = -1;
++        state->axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] = touch_sticks::Firing(touch::gRightStick.value) ? 1 : -1;
++        // Preserve the shim's stick-as-d-pad fallback for vehicle driving.
++        state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_UP] = touch::gLeftStick.value.y < -.5f;
++        state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_DOWN] = touch::gLeftStick.value.y > .5f;
++        state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_LEFT] = touch::gLeftStick.value.x < -.5f;
++        state->buttons[GLFW_GAMEPAD_BUTTON_DPAD_RIGHT] = touch::gLeftStick.value.x > .5f;
++        return GLFW_TRUE;
++    }
 +    SDL_GameController* c = gPads[jid];
 +    static const SDL_GameControllerButton map[15] = {
 +        SDL_CONTROLLER_BUTTON_A, SDL_CONTROLLER_BUTTON_B, SDL_CONTROLLER_BUTTON_X, SDL_CONTROLLER_BUTTON_Y,
@@ -2667,28 +2799,30 @@ index 0000000..3af0cbf
 +
 +void glfwShimSetGameViewRect(int x, int y, int w, int h)
 +{
++    if (x == touch::gViewX && y == touch::gViewY && w == touch::gViewW && h == touch::gViewH) return;
++    touch::ReleaseAll();
 +    touch::gViewX = x; touch::gViewY = y; touch::gViewW = w; touch::gViewH = h;
 +    touch::gScreenW = 0; // force a touch layout refresh on the next frame
 +}
 +
-+// on-screen controls mode from the launcher setting: 0 auto, 1 always, 2 off
++// Launcher maps touch_controls="twinstick" to mode 3; apply on the SDL thread.
++// 0 auto, 1 always, 2 off, 3 twin-stick
 +#include <jni.h>
 +extern "C" JNIEXPORT void JNICALL Java_com_burndivision_gtaperspectivelock_GameActivity_nativeSetTouchMode(JNIEnv*, jclass, jint mode)
 +{
-+    touch::gMode = (mode >= 0 && mode <= 2) ? (int) mode : 0;
-+    touch::gVisible = (touch::gMode != 2);
++    gRequestedTouchMode.store((mode >= 0 && mode <= 3) ? (int)mode : 0);
 +}
 diff --git a/src/android/glfw_sdl_shim.h b/src/android/glfw_sdl_shim.h
 new file mode 100644
-index 0000000..f804711
+index 0000000..aad2165
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.h
-@@ -0,0 +1,181 @@
+@@ -0,0 +1,183 @@
 +#pragma once
 +// GTA Classic Perspective Lock - Android platform layer.
 +// Implements the small subset of the GLFW 3 API that Carnage3D uses, on top of SDL2,
 +// so the engine runs on Android without changes to its windowing/input code.
-+// Also provides an on-screen touch control overlay that injects GLFW-style key events.
++// Touch overlay injects keys or, in mode 3, a virtual twin-stick gamepad.
 +
 +#include <GLES3/gl3.h>
 +
@@ -2815,6 +2949,7 @@ index 0000000..f804711
 +#define GLFW_GAMEPAD_AXIS_RIGHT_Y 3
 +#define GLFW_GAMEPAD_AXIS_LEFT_TRIGGER 4
 +#define GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER 5
++#define GLFW_JOYSTICK_1 0
 +#define GLFW_JOYSTICK_LAST 15
 +
 +typedef struct GLFWwindow GLFWwindow;
@@ -2855,6 +2990,7 @@ index 0000000..f804711
 +GLFWscrollfun glfwSetScrollCallback(GLFWwindow* window, GLFWscrollfun cb);
 +GLFWcursorposfun glfwSetCursorPosCallback(GLFWwindow* window, GLFWcursorposfun cb);
 +GLFWjoystickfun glfwSetJoystickCallback(GLFWjoystickfun cb);
++int glfwJoystickPresent(int jid);
 +int glfwJoystickIsGamepad(int jid);
 +int glfwGetGamepadState(int jid, GLFWgamepadstate* state);
 +
@@ -2865,6 +3001,44 @@ index 0000000..f804711
 +void glfwShimSetAspectLabel(const char* label); // text on the aspect-ratio touch button
 +void glfwShimSetLockLabel(const char* label); // text on the camera-mode (LOCK) touch button
 +void glfwShimSetGameViewRect(int x, int y, int w, int h); // game view inside the screen (top-left origin, pixels)
+diff --git a/src/android/touch_sticks.h b/src/android/touch_sticks.h
+new file mode 100644
+index 0000000..255e8ee
+--- /dev/null
++++ b/src/android/touch_sticks.h
+@@ -0,0 +1,32 @@
++#pragma once
++#include <cmath>
++#include <cstdint>
++namespace touch_sticks {
++struct Vector { float x, y; Vector(float a = 0, float b = 0) : x(a), y(b) {} };
++// Radial 20% dead zone, preserving physical deflection beyond it; positive Y is down.
++inline Vector Deflection(float x, float y, float cx, float cy, float radius) {
++    if (radius <= 0) return {};
++    float dx = (x-cx)/radius, dy = (y-cy)/radius;
++    float length = std::sqrt(dx*dx + dy*dy);
++    if (length <= .2f) return {};
++    if (length > 1) { dx /= length; dy /= length; }
++    return {dx, dy};
++}
++inline bool Firing(Vector v) { return v.x*v.x + v.y*v.y > .6f*.6f; }
++struct Stick {
++    bool active = false;
++    std::int64_t owner = 0;
++    Vector value;
++    bool Begin(std::int64_t id, float x, float y, float cx, float cy, float radius) {
++        if (active) return false;
++        active = true; owner = id;
++        value = Deflection(x,y,cx,cy,radius);
++        return true;
++    }
++    void Move(std::int64_t id, float x, float y, float cx, float cy, float radius) {
++        if (active && owner == id) value = Deflection(x,y,cx,cy,radius);
++    }
++    void End(std::int64_t id) { if (active && owner == id) Reset(); }
++    void Reset() { active = false; value = {}; }
++};
++}
 diff --git a/src/cvars.h b/src/cvars.h
 index dfc0703..a985b77 100644
 --- a/src/cvars.h

@@ -59,8 +59,8 @@ public class LauncherActivity extends Activity {
         { "g_controls", "auto", "On-foot controls. Auto: twin-stick with a game controller, classic otherwise",
           "auto|classic|twinstick", "Auto|Classic|Twin-stick" },
     };
-    private static final String[] TOUCH_MODES = { "auto", "on", "off" };
-    private static final String[] TOUCH_LABELS = { "Auto", "Always", "Off" };
+    private static final String[] TOUCH_MODES = { "auto", "on", "off", "twinstick" };
+    private static final String[] TOUCH_LABELS = { "Auto", "Always", "Off", "Twin-stick" };
     private static final String[] ASPECTS = { "auto", "16:9", "4:3", "fill" };
     private static final String[] ASPECT_LABELS = { "Auto", "16:9", "4:3", "Fill" };
     private final Handler ui = new Handler(Looper.getMainLooper());
@@ -136,7 +136,7 @@ public class LauncherActivity extends Activity {
         root.addView(aspectGroup);
 
         TextView touchTitle = new TextView(this);
-        touchTitle.setText("On-screen controls. Auto: hidden while a game controller is in use");
+        touchTitle.setText("On-screen controls. Auto: hidden while a game controller is in use. Twin-stick: move and aim sticks");
         touchTitle.setTextColor(Color.rgb(200, 200, 200));
         touchTitle.setGravity(Gravity.CENTER);
         root.addView(touchTitle);
