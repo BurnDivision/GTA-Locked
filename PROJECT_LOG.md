@@ -476,3 +476,5 @@ Design notes and the full test list are in `docs/CAMERA_CONTROLS.md`.
   - Right touch stick pushed up → 3 shots along screen-up.
   - No crashes. Screenshot: `tools/rp_tests/tt_idle.png`.
 - Known gap: in a car, the touch aim stick acts as the gas, and touch has no brake/reverse.
+- Release `android/dist/GTA-Perspective-Lock-0.5.1.apk` (versionCode 8), SHA-256
+  `224f6eccaf75f5db7abb29ac632a6f0466bc9f0c349ab8ac4cfdbfe18ac06267`. Release smoke test: 0 FATAL.
