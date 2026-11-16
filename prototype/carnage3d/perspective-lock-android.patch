@@ -553,7 +553,7 @@ index feb69e3..4610835 100644
      if (gCvarCurrentBaseDir.mValue.empty())
      {
 diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
-index 4a53905..d4ef793 100644
+index 4a53905..d95cd7f 100644
 --- a/src/FollowCameraController.cpp
 +++ b/src/FollowCameraController.cpp
 @@ -4,6 +4,62 @@
@@ -684,7 +684,7 @@ index 4a53905..d4ef793 100644
  }
  
  void FollowCameraController::UpdateFrame()
-@@ -42,42 +136,166 @@ void FollowCameraController::UpdateFrame()
+@@ -42,42 +136,173 @@ void FollowCameraController::UpdateFrame()
      if (mFollowPedestrian == nullptr)
          return;
  
@@ -769,10 +769,11 @@ index 4a53905..d4ef793 100644
 -        mCamera->SetPosition(position); 
 +        position = mCamera->mPosition + (position - mCamera->mPosition) * glm::clamp(catchSpeed * deltaTime, 0.0f, 1.0f);
 +        mCamera->SetPosition(position);
-     }
++    }
 +
 +    // ---- camera heading (separate from movement, facing and aim)
 +    float targetHeading = NorthUpHeading;
++    bool trackingTravel = false;
 +    if (rotating)
 +    {
 +        if (inCar)
@@ -795,13 +796,19 @@ index 4a53905..d4ef793 100644
 +                mTravelHeading.Update(velocity.x, velocity.y, deltaTime);
 +            }
 +            targetHeading = mHints.mAiming ? mCameraHeading : mTravelHeading.mHeading;
++            trackingTravel = true;
 +        }
 +        else
 +        {
 +            // tank controls: the body heading is the travel heading
 +            targetHeading = bodyHeading;
-+            mTravelHeading.Reset(bodyHeading);
 +        }
++    }
++    if (!trackingTravel)
++    {
++        // keep the travel heading in step with the view, so switching into twin-stick
++        // reperspective (from combat, classic or a car) starts from what is on screen
++        mTravelHeading.Reset(mCameraHeading);
 +    }
 +    mWasInCar = inCar;
 +
@@ -818,7 +825,7 @@ index 4a53905..d4ef793 100644
 +    {
 +        const float carSpeed = glm::length(velocity);
 +        maxRate = glm::radians(glm::mix(120.0f, 400.0f, glm::clamp(carSpeed / 8.0f, 0.0f, 1.0f)));
-+    }
+     }
 +    mCameraHeading = reperspective::SmoothAngle(mCameraHeading, targetHeading, deltaTime, timeConstant, maxRate);
 +    ApplyHeading(mCameraHeading);
  }
@@ -841,10 +848,7 @@ index 4a53905..d4ef793 100644
 +}
 +
 +void FollowCameraController::InputEvent(KeyInputEvent& inputEvent)
- {
--}
--
--void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
++{
 +    if (inputEvent.mPressed && inputEvent.mKeycode == eKeycode_F9)
 +    {
 +        CycleViewMode();
@@ -862,18 +866,21 @@ index 4a53905..d4ef793 100644
  {
 -}
 -
--void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+-void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
 +}
 +
 +void FollowCameraController::InputEvent(MouseMovedInputEvent& inputEvent)
-+{
+ {
+-}
+-
+-void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
 +}
 +
 +void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
  {
      mScrollHeightOffset = glm::clamp(mScrollHeightOffset - inputEvent.mScrollY, -3.0f, 23.0f);
  }
-@@ -85,6 +303,13 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -85,6 +310,13 @@ void FollowCameraController::InputEvent(MouseScrollInputEvent& inputEvent)
  void FollowCameraController::SetFollowTarget(Pedestrian* pedestrian)
  {
      mFollowPedestrian = pedestrian;
@@ -1169,7 +1176,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..6284e0a 100644
+index a13af22..9ebaa40 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,5 +1,23 @@
@@ -1291,7 +1298,7 @@ index a13af22..6284e0a 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +455,330 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +455,347 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -1606,11 +1613,28 @@ index a13af22..6284e0a 100644
 +    }
 +    else if (first == "@car")
 +    {
-+        Vehicle* car = gGameObjectsManager.CreateVehicle(mCharacter->mTransform.mPosition, mCharacter->mTransform.mOrientation, eVehicle_BeastGTS_1);
-+        if (car)
++        // spawn next to the player; "@enter" a moment later seats the player
++        const glm::vec2 side = mCharacter->mTransform.GetDirectionVector();
++        glm::vec3 position = mCharacter->mTransform.mPosition;
++        position.x -= side.y * 1.5f;
++        position.z += side.x * 1.5f;
++        Vehicle* car = gGameObjectsManager.CreateVehicle(position, mCharacter->mTransform.mOrientation, eVehicle_BeastGTS_1);
++        ts.mCar = car;
++        gConsole.LogMessage(eLogMessage_Debug, "RPT car spawned=%d", car ? 1 : 0);
++    }
++    else if (first == "@enter")
++    {
++        if (ts.mCar)
 +        {
-+            mCharacter->PutInsideCar(car, eCarSeat_Driver);
++            mCharacter->PutInsideCar(static_cast<Vehicle*>(ts.mCar), eCarSeat_Driver);
 +        }
++        gConsole.LogMessage(eLogMessage_Debug, "RPT car entered=%d", mCharacter->IsCarPassenger() ? 1 : 0);
++    }
++    else if (first == "@weapons")
++    {
++        Cheat_GiveAllAmmunitions();
++        SwitchNextWeapon();
++        gConsole.LogMessage(eLogMessage_Debug, "RPT weapon=%d", (int) mCharacter->mCurrentWeapon);
 +    }
 +    else if (first == "@end")
 +    {
@@ -1623,7 +1647,7 @@ index a13af22..6284e0a 100644
  {
      const auto& mapping = mActionsMapping.mActionToKeys[action];
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..7ea5343 100644
+index c272fba..63994b5 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
 @@ -5,6 +5,8 @@
@@ -1635,7 +1659,7 @@ index c272fba..7ea5343 100644
  #include "FreeLookCameraController.h"
  #include "HUD.h"
  
-@@ -19,6 +21,33 @@ enum ePlayerCameraMode
+@@ -19,6 +21,34 @@ enum ePlayerCameraMode
  //////////////////////////////////////////////////////////////////////////
  
  // Contains human player related information but also processes character controller logic
@@ -1664,12 +1688,13 @@ index c272fba..7ea5343 100644
 +    bool mMoving = false;
 +    float mMoveHeading = 0.0f;
 +    bool mFire = false;
++    void* mCar = nullptr; // vehicle spawned by @car
 +};
 +
  class HumanPlayer final: public CharacterController
  {
  public:
-@@ -90,6 +119,21 @@ private:
+@@ -90,6 +120,21 @@ private:
      float mRespawnTime = 0.0f;
      bool mUpdateInputs = false;
      bool mMouseAimingEnabled = false;
@@ -2896,10 +2921,10 @@ index 117d3a9..50017e4 100644
          enumproc(currentFile.filename().generic_string());
 diff --git a/src/reperspective/CameraHeading.h b/src/reperspective/CameraHeading.h
 new file mode 100644
-index 0000000..563135a
+index 0000000..9cfbe1e
 --- /dev/null
 +++ b/src/reperspective/CameraHeading.h
-@@ -0,0 +1,141 @@
+@@ -0,0 +1,143 @@
 +#pragma once
 +
 +// GTA Classic Reperspective: camera heading helpers.
@@ -2969,8 +2994,9 @@ index 0000000..563135a
 +
 +    // Persistent travel heading for on-foot movement with free (twin-stick) input.
 +    // - holds while standing still or moving slowly (no oscillation when stationary);
-+    // - a new direction must persist for commitTime before the heading starts to follow it,
-+    //   so brief wiggles and rapid back-and-forth input don't rotate the view;
++    // - travel that stays on one side of the heading (beyond the deadband) for commitTime makes the
++    //   heading follow it: sharp turns and steadily curving runs both rotate the view, while brief
++    //   wiggles and rapid side-to-side input (which keeps switching sides) don't;
 +    // - small adjustments (within deadband) are followed only slowly.
 +    struct TravelHeadingTracker
 +    {
@@ -2984,7 +3010,7 @@ index 0000000..563135a
 +        // state
 +        float mHeading = 0.0f;
 +        bool mValid = false;
-+        float mCandidate = 0.0f;
++        int mCandidateSide = 0; // side of the heading the travel direction is on (+1 / -1)
 +        float mCandidateTime = 0.0f;
 +        bool mFollowing = false; // committed to a new direction, catching up with it
 +
@@ -2992,7 +3018,7 @@ index 0000000..563135a
 +        {
 +            mHeading = WrapPi(heading);
 +            mValid = true;
-+            mCandidate = mHeading;
++            mCandidateSide = 0;
 +            mCandidateTime = 0.0f;
 +            mFollowing = false;
 +        }
@@ -3027,9 +3053,10 @@ index 0000000..563135a
 +                mCandidateTime = 0.0f;
 +                return;
 +            }
-+            if (std::fabs(AngleDelta(mCandidate, direction)) > mDeadband)
++            const int side = (offset > 0.0f) ? 1 : -1;
++            if (side != mCandidateSide)
 +            {
-+                mCandidate = direction;
++                mCandidateSide = side;
 +                mCandidateTime = 0.0f;
 +            }
 +            mCandidateTime += dt;

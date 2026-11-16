@@ -104,6 +104,19 @@ static void TestTravelHeading()
     t.Update(2.0f * std::cos(Deg(95)), 2.0f * std::sin(Deg(95)), dt);
     CHECK(std::fabs(AngleDelta(before, t.mHeading)) < Deg(0.2f));
 
+    // steadily curving run (60 degrees per second for 6 s): the heading keeps following
+    t.Reset(Deg(0));
+    float dir = 0.0f, turned = 0.0f, prev = t.mHeading;
+    for (int i = 0; i < 360; ++i)
+    {
+        dir += Deg(60) * dt;
+        t.Update(6.0f * std::cos(dir), 6.0f * std::sin(dir), dt);
+        turned += std::fabs(AngleDelta(prev, t.mHeading));
+        prev = t.mHeading;
+    }
+    CHECK(turned > Deg(300));
+    CHECK(std::fabs(AngleDelta(t.mHeading, WrapPi(dir))) < Deg(30));
+
     // crossing 180 degrees
     t.Reset(Deg(170));
     for (int i = 0; i < 120; ++i) t.Update(2.0f * std::cos(Deg(-150)), 2.0f * std::sin(Deg(-150)), dt);
