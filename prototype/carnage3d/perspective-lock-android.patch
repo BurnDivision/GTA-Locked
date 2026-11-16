@@ -1,5 +1,5 @@
 diff --git a/src/AiCharacterController.cpp b/src/AiCharacterController.cpp
-index 36bc041..6b217df 100644
+index 36bc041..b7e15b4 100644
 --- a/src/AiCharacterController.cpp
 +++ b/src/AiCharacterController.cpp
 @@ -5,6 +5,10 @@
@@ -24,7 +24,7 @@ index 36bc041..6b217df 100644
      mFollowPedestrian.reset();
  
      mCtlState.Clear();
-@@ -419,18 +427,210 @@ void AiCharacterController::UpdateDrivingCar()
+@@ -419,18 +427,223 @@ void AiCharacterController::UpdateDrivingCar()
      }
  }
  
@@ -64,14 +64,6 @@ index 36bc041..6b217df 100644
 +        return 0;
 +    return (mapBlock->mRightDirection ? 1 : 0) + (mapBlock->mLeftDirection ? 1 : 0) +
 +        (mapBlock->mDownDirection ? 1 : 0) + (mapBlock->mUpDirection ? 1 : 0);
-+}
-+
-+// half of the chassis length, meters
-+static float GetVehicleHalfLength(const Vehicle* vehicle)
-+{
-+    glm::vec2 corners[4];
-+    vehicle->GetChassisCornersLocal(corners);
-+    return fabsf(corners[1].x - corners[0].x) * 0.5f;
 +}
 +
 +bool AiCharacterController::ChooseDriveWaypoint()
@@ -190,10 +182,23 @@ index 36bc041..6b217df 100644
 +
 +    // keep a gap to vehicles ahead (bumper to bumper, plus a braking distance that grows with speed)
 +    const glm::vec2 forward = car->mTransform.GetDirectionVector();
++    // half of the chassis length, meters (a lambda so it shares this class's friend access to Vehicle)
++    auto GetVehicleHalfLength = [](const Vehicle* vehicle)
++    {
++        glm::vec2 corners[4];
++        vehicle->GetChassisCornersLocal(corners);
++        return fabsf(corners[1].x - corners[0].x) * 0.5f;
++    };
 +    const float selfHalfLength = GetVehicleHalfLength(car);
 +    const float margin = Convert::MapUnitsToMeters(0.3f) + fabsf(speed) * 0.5f;
++    if (mDriveIgnoreGapTime > 0.0f)
++    {
++        mDriveIgnoreGapTime -= gTimeManager.mGameFrameDelta;
++    }
 +    for (Vehicle* other: gGameObjectsManager.mVehiclesList)
 +    {
++        if (mDriveIgnoreGapTime > 0.0f)
++            break;
 +        if (other == car || other->IsMarkedForDeletion())
 +            continue;
 +        const glm::vec2 toOther (other->mTransform.mPosition.x - carPos2.x, other->mTransform.mPosition.z - carPos2.y);
@@ -229,8 +234,16 @@ index 36bc041..6b217df 100644
 +        }
 +        mDriveSegmentTime = 0.0f; // waiting in traffic is not being stuck
 +        mDriveStuckTime = 0.0f;
++        mDriveWaitTime += gTimeManager.mGameFrameDelta;
++        if (mDriveWaitTime > 5.0f)
++        {
++            mDriveWaitTime = 0.0f;
++            mDriveIgnoreGapTime = 2.0f; // waited long enough (deadlock at a junction?), push on
++        }
 +        return true;
 +    }
++
++    mDriveWaitTime = 0.0f;
 +
 +    // stuck (blocked by something): give up after a while
 +    if (fabsf(speed) < 0.2f) mDriveStuckTime += gTimeManager.mGameFrameDelta;
@@ -248,10 +261,10 @@ index 36bc041..6b217df 100644
  {
      if (pedestrian == mCharacter || pedestrian == nullptr)
 diff --git a/src/AiCharacterController.h b/src/AiCharacterController.h
-index d2483f9..9c171e1 100644
+index d2483f9..10ec748 100644
 --- a/src/AiCharacterController.h
 +++ b/src/AiCharacterController.h
-@@ -91,4 +91,13 @@ private:
+@@ -91,4 +91,15 @@ private:
      float mFollowFarDistance;
  
      bool mRunToTarget = false;
@@ -264,6 +277,8 @@ index d2483f9..9c171e1 100644
 +    float mDriveSegmentTime = 0.0f; // time spent heading to the current target block
 +    int mDriveTargetX = 0; // target block, map units
 +    int mDriveTargetY = 0;
++    float mDriveWaitTime = 0.0f; // time spent waiting behind another vehicle
++    float mDriveIgnoreGapTime = 0.0f; // > 0: pushing on after a long wait (breaks deadlocks)
  };
 \ No newline at end of file
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
@@ -933,6 +948,18 @@ index 7cc7edb..3fb7074 100644
  }
  
  void TrafficManager::RemoveOffscreenCars()
+diff --git a/src/Vehicle.h b/src/Vehicle.h
+index 0d3a52f..e691f13 100644
+--- a/src/Vehicle.h
++++ b/src/Vehicle.h
+@@ -21,6 +21,7 @@ class Vehicle final: public GameObject, public SpriteAnimListener
+ {
+     friend class GameObjectsManager;
+     friend class GameCheatsWindow;
++    friend class AiCharacterController; // reads the chassis size for traffic gaps
+     friend class PhysicsManager;
+ 
+ public:
 diff --git a/src/android/gles_glew_compat.h b/src/android/gles_glew_compat.h
 new file mode 100644
 index 0000000..70113b2

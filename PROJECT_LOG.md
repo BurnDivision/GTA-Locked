@@ -307,6 +307,10 @@ User report: "There are no cars. And I can't rotate on the unfolded screen."
     point-chasing version overshot corners and circled until the car wrecked);
   - slows for corners and junctions, and keeps a length-aware gap to the vehicle ahead;
   - re-plans after 6 s on one block or 4 s stuck.
-- Emulator traces confirm clean turns and lane following. The latest gap-keeping change
-  had not been tested on the device yet because codebox stopped responding.
+- Emulator traces confirm clean turns and lane following.
+- Gap keeping uses each vehicle's chassis length plus a speed-dependent braking distance.
+  `Vehicle` befriends `AiCharacterController` to read the chassis box.
+  Test: traffic kept moving for about 25 s (up to 9 of 11 cars), then gridlocked.
+- Jam breaker: a car that has waited 5 s ignores the gap rule for 2 s. Not yet tested
+  (codebox went offline again).
 - `TrafficManager` logs a debug-level "Traffic status" line to logcat (temporary).
