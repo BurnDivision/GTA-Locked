@@ -288,3 +288,4 @@ User intent: 4:3 is meant for the unfolded screen of foldables like their Galaxy
     with the controls in the side bars.
   - Screenshots: `android/shots/fold_auto_v2.png`.
 - Version 0.3.0 (versionCode 3). Cumulative patch sha256 2b75a533… (21 files, +1222/−46).
+- Release `android/dist/GTA-Perspective-Lock-0.3.0.apk`, SHA-256 `f374d7747a378882d6b8c49607c9f4e20989e017e0a5a3b39dcefc736478df10`; release smoke test at the Fold7 inner size: no crashes.
