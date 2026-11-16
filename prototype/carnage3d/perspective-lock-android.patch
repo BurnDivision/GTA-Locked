@@ -42,10 +42,10 @@ index db6ae85..d2d900e 100644
      },
      "player2":
 diff --git a/src/AiCharacterController.cpp b/src/AiCharacterController.cpp
-index 36bc041..605d4af 100644
+index 36bc041..bd0e112 100644
 --- a/src/AiCharacterController.cpp
 +++ b/src/AiCharacterController.cpp
-@@ -5,6 +5,10 @@
+@@ -5,6 +5,11 @@
  #include "CarnageGame.h"
  #include "DebugRenderer.h"
  #include "BroadcastEventsManager.h"
@@ -53,10 +53,11 @@ index 36bc041..605d4af 100644
 +#include "GameObjectsManager.h"
 +#include "Vehicle.h"
 +#include "TimeManager.h"
++#include "TrafficGap.h"
  
  //////////////////////////////////////////////////////////////////////////
  
-@@ -367,6 +371,10 @@ bool AiCharacterController::ContinueWalkToWaypoint(float distance)
+@@ -367,6 +372,10 @@ bool AiCharacterController::ContinueWalkToWaypoint(float distance)
  void AiCharacterController::StartDrivingCar()
  {
      mAiMode = ePedestrianAiMode_DrivingCar;
@@ -67,7 +68,7 @@ index 36bc041..605d4af 100644
      mFollowPedestrian.reset();
  
      mCtlState.Clear();
-@@ -419,18 +427,252 @@ void AiCharacterController::UpdateDrivingCar()
+@@ -419,18 +428,241 @@ void AiCharacterController::UpdateDrivingCar()
      }
  }
  
@@ -237,12 +238,10 @@ index 36bc041..605d4af 100644
 +    if (mDriveIgnoreGapTime > 0.0f)
 +    {
 +        mDriveIgnoreGapTime -= gTimeManager.mGameFrameDelta;
-+        targetSpeed = std::min(targetSpeed, slowSpeed); // push on gently
++        targetSpeed = std::min(targetSpeed, slowSpeed); // crossing override still respects vehicles directly ahead
 +    }
 +    for (Vehicle* other: gGameObjectsManager.mVehiclesList)
 +    {
-+        if (mDriveIgnoreGapTime > 0.0f)
-+            break;
 +        if (other == car || other->IsMarkedForDeletion())
 +            continue;
 +        const glm::vec2 toOther (other->mTransform.mPosition.x - carPos2.x, other->mTransform.mPosition.z - carPos2.y);
@@ -250,28 +249,19 @@ index 36bc041..605d4af 100644
 +        if (along <= 0.0f)
 +            continue;
 +        const float side = fabsf(forward.x * toOther.y - forward.y * toOther.x);
-+        if (side > Convert::MapUnitsToMeters(0.6f))
-+        {
-+            // crossing traffic: another vehicle close by, inside a forward cone (about 45 degrees)
-+            const float distance = glm::length(toOther);
-+            if (along < distance * 0.7f ||
-+                distance > selfHalfLength + GetVehicleHalfLength(other) + margin + Convert::MapUnitsToMeters(0.5f))
-+                continue;
-+            // if we are in front of it as well, only one of the two waits (fixed tie-break) so they can't deadlock
-+            const glm::vec2 otherForward = other->mTransform.GetDirectionVector();
-+            const float otherAlong = glm::dot(-toOther, otherForward);
-+            if (otherAlong > distance * 0.7f && car < other)
-+                continue; // it yields to us
-+            targetSpeed = 0.0f;
-+            break;
-+        }
-+        const float clearDistance = along - selfHalfLength - GetVehicleHalfLength(other);
-+        if (clearDistance < margin)
++        const float distance = glm::length(toOther);
++        const glm::vec2 otherForward = other->mTransform.GetDirectionVector();
++        const float otherAlong = glm::dot(-toOther, otherForward);
++        const TrafficGap::Decision gap = TrafficGap::Evaluate(along, side, distance,
++            selfHalfLength + GetVehicleHalfLength(other), margin,
++            Convert::MapUnitsToMeters(1.0f), otherAlong, car < other,
++            mDriveIgnoreGapTime > 0.0f);
++        if (gap == TrafficGap::Decision::Stop)
 +        {
 +            targetSpeed = 0.0f;
 +            break;
 +        }
-+        if (clearDistance < margin + Convert::MapUnitsToMeters(1.0f))
++        if (gap == TrafficGap::Decision::Slow)
 +        {
 +            targetSpeed = std::min(targetSpeed, slowSpeed);
 +        }
@@ -310,7 +300,7 @@ index 36bc041..605d4af 100644
 +        if (mDriveWaitTime > 5.0f)
 +        {
 +            mDriveWaitTime = 0.0f;
-+            mDriveIgnoreGapTime = 2.0f; // waited long enough (deadlock at a junction?), push on
++            mDriveIgnoreGapTime = 2.0f; // relax crossing yield only; preserve the gap directly ahead
 +        }
 +        return true;
 +    }
@@ -333,7 +323,7 @@ index 36bc041..605d4af 100644
  {
      if (pedestrian == mCharacter || pedestrian == nullptr)
 diff --git a/src/AiCharacterController.h b/src/AiCharacterController.h
-index d2483f9..135e294 100644
+index d2483f9..b3bb998 100644
 --- a/src/AiCharacterController.h
 +++ b/src/AiCharacterController.h
 @@ -91,4 +91,16 @@ private:
@@ -350,7 +340,7 @@ index d2483f9..135e294 100644
 +    int mDriveTargetX = 0; // target block, map units
 +    int mDriveTargetY = 0;
 +    float mDriveWaitTime = 0.0f; // time spent waiting behind another vehicle
-+    float mDriveIgnoreGapTime = 0.0f; // > 0: pushing on after a long wait (breaks deadlocks)
++    float mDriveIgnoreGapTime = 0.0f; // > 0: relax crossing yield after a long wait; keep forward gap
 +    float mDriveReverseTime = 0.0f; // > 0: backing away from an obstacle
  };
 \ No newline at end of file
@@ -1843,6 +1833,41 @@ index e0c0b12..e6ff6bb 100644
  
  private:
      bool mQuitRequested;
+diff --git a/src/TrafficGap.h b/src/TrafficGap.h
+new file mode 100644
+index 0000000..5374a82
+--- /dev/null
++++ b/src/TrafficGap.h
+@@ -0,0 +1,29 @@
++#pragma once
++
++namespace TrafficGap
++{
++enum class Decision { Clear, Slow, Stop };
++
++// All distances use meters. side is absolute lateral distance; priority is the
++// existing fixed tie-break for mutually approaching crossing traffic.
++inline Decision Evaluate(float along, float side, float distance,
++    float halfLengthSum, float margin, float mapUnitMeters,
++    float otherAlong, bool priority, bool ignoreCrossing)
++{
++    if (along <= 0.0f) return Decision::Clear;
++    if (side > 0.6f * mapUnitMeters)
++    {
++        if (ignoreCrossing) return Decision::Clear;
++        if (along < distance * 0.7f ||
++            distance > halfLengthSum + margin + 0.5f * mapUnitMeters)
++            return Decision::Clear;
++        if (otherAlong > distance * 0.7f && priority)
++            return Decision::Clear;
++        return Decision::Stop;
++    }
++    const float clearDistance = along - halfLengthSum;
++    if (clearDistance < margin) return Decision::Stop;
++    if (clearDistance < margin + mapUnitMeters) return Decision::Slow;
++    return Decision::Clear;
++}
++}
 diff --git a/src/Vehicle.cpp b/src/Vehicle.cpp
 index 3847938..6260526 100644
 --- a/src/Vehicle.cpp
