@@ -358,3 +358,6 @@ view slightly when turning while moving.
   - The turn-at-speed shot didn't exercise the lag (the player ran into a wall).
   - Screenshots: `android/shots/48_dyn_*.png`.
 - Version 0.3.2 (versionCode 5).
+- Release `android/dist/GTA-Perspective-Lock-0.3.2.apk`, SHA-256
+  `46a9bcc515cf87393600612e5fb72e78bba71860140d0d5aea212f29ec1d6616`. Emulator smoke test of the
+  release APK: no crashes. Cumulative patch sha256 57d34497… (26 files).
