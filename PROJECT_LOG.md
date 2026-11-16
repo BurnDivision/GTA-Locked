@@ -267,3 +267,24 @@ Goal (user): turn the perspective-lock prototype into an Android app.
 - **Release:** `android/dist/GTA-Perspective-Lock-0.2.0.apk` (versionCode 2), rebuilt clean with the fix.
   SHA-256 `d979171448caf5a479c50e6165d05769f7942964a1616226d3fa19f43bff973f`.
   Cumulative patch `engines/perspective-lock-android.patch` sha256 018a1147… (21 files, +1186/−46).
+
+## 2026-11-16 — Auto aspect for foldables (Galaxy Z Fold7), Android 0.3.0
+
+User intent: 4:3 is meant for the unfolded screen of foldables like their Galaxy Z Fold7.
+
+- New `r_aspect` value **`auto`** (Android default): picks whichever of 4:3 / 16:9 is
+  nearer to the screen shape (log-ratio distance).
+  - Fold7 inner screen (2184x1968, ≈1.11) → **4:3**, full width, thin bars top/bottom.
+  - Fold7 cover screen (2520x1080, ≈2.33) → **16:9**, side bars.
+  - Because of the surface-resize handling, folding or unfolding mid-game re-picks live.
+- F7 / touch button cycle: auto → 16:9 → 4:3 → fill. The button shows "AUTO" (overlay font gained T).
+- Launcher choice: Auto / 16:9 / 4:3 / Fill, defaulting to Auto. Desktop default stays `fill`.
+- Touch layout fix for letterboxed views: the engine reports the game-view rectangle to the
+  touch layer (`glfwShimSetGameViewRect`). When there's a top bar and no right-side bar, LOCK
+  and the ratio button shrink into the top bar instead of covering the HUD score.
+- Emulator check at the Fold7's sizes (`wm size`):
+  - Inner screen: 4:3, buttons in the top bar.
+  - Simulated fold to the cover size mid-game: "Surface resized to 2520x1080", then 16:9
+    with the controls in the side bars.
+  - Screenshots: `android/shots/fold_auto_v2.png`.
+- Version 0.3.0 (versionCode 3). Cumulative patch sha256 2b75a533… (21 files, +1222/−46).

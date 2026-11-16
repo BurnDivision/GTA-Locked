@@ -47,8 +47,8 @@ public class LauncherActivity extends Activity {
     private Button pickButton;
     private Button playButton;
     private RadioGroup aspectGroup;
-    private static final String[] ASPECTS = { "16:9", "4:3", "fill" };
-    private static final String[] ASPECT_LABELS = { "16:9", "4:3", "Fill screen" };
+    private static final String[] ASPECTS = { "auto", "16:9", "4:3", "fill" };
+    private static final String[] ASPECT_LABELS = { "Auto", "16:9", "4:3", "Fill" };
     private final Handler ui = new Handler(Looper.getMainLooper());
 
     @Override
@@ -98,7 +98,7 @@ public class LauncherActivity extends Activity {
         root.addView(pickButton);
 
         TextView aspectTitle = new TextView(this);
-        aspectTitle.setText("View aspect ratio (also switchable in game)");
+        aspectTitle.setText("View aspect ratio. Auto: 4:3 on square-ish screens (foldables unfolded), 16:9 on wide ones");
         aspectTitle.setTextColor(Color.rgb(200, 200, 200));
         aspectTitle.setGravity(Gravity.CENTER);
         root.addView(aspectTitle);
@@ -180,9 +180,9 @@ public class LauncherActivity extends Activity {
     private String readAspect() {
         try {
             JSONObject o = new JSONObject(new String(Files.readAllBytes(configFile().toPath()), StandardCharsets.UTF_8));
-            return o.optString("r_aspect", "16:9");
+            return o.optString("r_aspect", "auto");
         } catch (Exception e) {
-            return "16:9";
+            return "auto";
         }
     }
 

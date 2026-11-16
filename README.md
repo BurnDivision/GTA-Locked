@@ -21,8 +21,8 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
-| **Android app** | **Working.** Release APK 0.2.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
-| **Aspect ratios** | **16:9, 4:3 or fill**, with black bars as needed. Works on Android and desktop |
+| **Android app** | **Working.** Release APK 0.3.0 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
+| **Aspect ratios** | **Auto, 16:9, 4:3 or fill**, with black bars as needed. Auto picks 4:3 on a foldable's unfolded screen and 16:9 when folded. Works on Android and desktop |
 
 ## Layout
 
@@ -67,11 +67,16 @@ Touch layout:
 A connected gamepad works too, and hides the touch overlay.
 
 Aspect ratio:
-* **16:9** (Android default) or **4:3**. The game view is centred, with black bars
+* **Auto** (Android default) picks the nearer of 4:3 and 16:9 to the screen shape. On a
+  Galaxy Z Fold that means 4:3 on the unfolded inner screen (≈1.1:1) and 16:9 on the folded
+  cover screen (≈21:9). It switches live when you fold or unfold.
+* **16:9** or **4:3** can be chosen directly. The game view is centred, with black bars
   wherever the screen shape differs.
 * **Fill** uses the whole screen.
-* Choose it on the launcher screen, or switch in game with the small
-  ratio button under LOCK (shows "16:9", "4:3" or "FILL").
+* Choose it on the launcher screen, or switch in game with the small ratio button next to
+  LOCK (shows "AUTO", "16:9", "4:3" or "FILL").
+* When the view has bars above and below (as on the unfolded Fold), LOCK and the ratio
+  button move into the top bar so they don't cover the HUD.
 * Setting: `r_aspect` in `config/sys_config.json`, saved when changed.
 
 Build:
@@ -86,5 +91,5 @@ cd android
 * Original GTA 1 controls: Up = forward, Left/Right = turn. They're already
   heading-relative, so they match the locked camera with no changes (on-foot "Option A").
 * **F9**: toggle perspective lock on/off (for comparison).
-* **F7**: cycle aspect ratio 16:9 → 4:3 → fill (`r_aspect`; desktop default is `fill`).
+* **F7**: cycle aspect ratio auto → 16:9 → 4:3 → fill (`r_aspect`; desktop default is `fill`).
 * `C3D_LOCK=0`: start with the lock off. `C3D_TEST_SPIN=<deg/s>`: test-only auto-turn.
