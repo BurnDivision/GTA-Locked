@@ -21,7 +21,7 @@ The game data and working builds live on codebox at
 | 3. Perspective-lock prototype (Carnage3D) | **Working**, verified by screenshots (world rotates, player stays facing up) |
 | 4. Vehicle integration | Coded (camera follows car heading while driving); not yet hand-tested |
 | Phase B: port into original `Grand Theft Auto.exe` | Not started. Ghidra project prepared |
-| **Android app** | **Working.** Release APK 0.3.1 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
+| **Android app** | **Working.** Release APK 0.3.2 (arm64 + x86_64). Tested on the emulator: the original cities load, the touch controls drive the player, and the world rotates around them |
 | **Aspect ratios** | **Auto, 16:9, 4:3 or fill**, with black bars as needed. Auto picks 4:3 on a foldable's unfolded screen and 16:9 when folded. Works on Android and desktop |
 
 ## Layout
@@ -102,5 +102,11 @@ cd android
 * Original GTA 1 controls: Up = forward, Left/Right = turn. They're already
   heading-relative, so they match the locked camera with no changes (on-foot "Option A").
 * **F9**: toggle perspective lock on/off (for comparison).
+* **Dynamic camera** (on by default with the lock; **F8** toggles, `C3D_DYNCAM=0` starts it off):
+  * As you run or drive, the view looks ahead along your heading, so you sit lower on the
+    screen and see more of what's coming. Up to about a third of the half-screen on foot and
+    over half in a car, easing back to centre when you stop or reverse.
+  * Turning at speed, the view trails your heading slightly (up to about 11°), so turns show
+    as a gentle rotation that settles when the turn ends. Standing still, the lock stays tight.
 * **F7**: cycle aspect ratio auto → 16:9 → 4:3 → fill (`r_aspect`; desktop default is `fill`).
 * `C3D_LOCK=0`: start with the lock off. `C3D_TEST_SPIN=<deg/s>`: test-only auto-turn.

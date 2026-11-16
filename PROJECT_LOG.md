@@ -334,3 +334,27 @@ User report: "There are no cars. And I can't rotate on the unfolded screen."
 - Release `android/dist/GTA-Perspective-Lock-0.3.1.apk` (versionCode 4), SHA-256
   `903efd2c3ab881a18a8afeb36d75ac916af4244164226966e6172876feb0f9ca`. Clean RelWithDebInfo
   build, with no debug log strings in `libmain.so`. Cumulative patch sha256 b743a823… (26 files).
+
+## 2026-11-16 — Dynamic camera, Android 0.3.2
+
+User request: move the player lower on the screen while driving or running, and rotate the
+view slightly when turning while moving.
+
+- `FollowCameraController` (with the heading lock on):
+  - **Speed factor:** forward speed along the heading (from the physics body's velocity),
+    divided by run speed on foot (6 m/s) or 14 m/s in a car, clamped 0..1 and smoothed (3/s).
+  - **Look-ahead:** the camera shifts along the heading (screen-up) by up to 35% (on foot) or
+    55% (car) of the half view height, scaled by the speed factor and smoothed (2.5/s). The
+    player therefore moves towards the bottom of the screen. It's zero when reversing or standing.
+  - **Turn lag:** the heading catch-up rate eases from 12/s to 3.5/s with speed, and the lag is
+    capped at 1.5° + 9.5° × speed factor. At speed, turns show as a slight rotation that
+    settles; standing still the lock stays tight.
+  - Toggles: F8, or the `C3D_DYNCAM=0` environment variable. With the lock off, the original
+    upstream follow camera is used.
+- Emulator test (`tools/dyn_test.sh`, holding the touch pad's Up arrow):
+  - Standing: the player is at the screen centre.
+  - Running: the player sits about 150 px lower on a 1080 px screen, with more road ahead.
+  - After stopping: back to centre.
+  - The turn-at-speed shot didn't exercise the lag (the player ran into a wall).
+  - Screenshots: `android/shots/48_dyn_*.png`.
+- Version 0.3.2 (versionCode 5).
