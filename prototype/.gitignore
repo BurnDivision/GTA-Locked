@@ -1,0 +1,5 @@
+shots/
+*.png
+*.log
+bin/
+gamedata/
