@@ -1085,12 +1085,13 @@ index 8640d19..36e7307 100644
 +};
 diff --git a/src/Frontend.h b/src/Frontend.h
 new file mode 100755
-index 0000000..53b6eeb
+index 0000000..1739e1b
 --- /dev/null
 +++ b/src/Frontend.h
-@@ -0,0 +1,118 @@
+@@ -0,0 +1,150 @@
 +#pragma once
 +#include <algorithm>
++#include "FrontendProfile.h"
 +#include <array>
 +#include <vector>
 +#include <string>
@@ -1108,10 +1109,17 @@ index 0000000..53b6eeb
 +    const auto first=name.find_first_not_of(" \t\r\n"),last=name.find_last_not_of(" \t\r\n");
 +    return first==std::string::npos?std::string{}:name.substr(first,last-first+1);
 +}
-+enum class Page {Main,Cities,Options,Quit};
-+enum class Action {Up,Down,Left,Right,Accept,Back};
++enum class Page {Main,Profiles,Name,Reset,Cities,Options,Quit};
++enum class Action {Up,Down,Left,Right,Accept,Back,Rename,Reset,Erase};
 +struct Menu {
 +    bool exitRequested=false;
++    Profiles profiles;
++    std::string nameEntry;
++    void character(unsigned int c) {
++        if(page==Page::Name && c>=32 && c<=126 && nameEntry.size()<14)nameEntry+=char(c);
++    }
++    int lastCity() const {int n=0;for(int i=0;i<3;++i)if(profiles.unlocked(i*2))n=i;return n;}
++    int lastChapter() const {return profiles.unlocked(city*2+1)?1:0;}
 +    Page page=Page::Main; int row=0,city=0,chapter=0;
 +    std::array<int,5> options{{3,3,2,0,1}}, saved=options;
 +    void act(Action a) {
@@ -1119,11 +1127,28 @@ index 0000000..53b6eeb
 +        if(page==Page::Main) {
 +            if(a==Action::Up || a==Action::Down) row=(row+2+d)%2;
 +            if(a==Action::Back) page=Page::Quit;
-+            if(a==Action::Accept) {page=row?Page::Options:Page::Cities; saved=options;row=0;}
-+        } else if(page==Page::Cities) {
-+            if(a==Action::Left || a==Action::Right) {city=(city+3+d)%3;chapter=0;}
-+            if(a==Action::Up || a==Action::Down) chapter=(chapter+2+d)%2;
++            if(a==Action::Accept) {page=row?Page::Options:Page::Profiles; saved=options;row=0;}
++        } else if(page==Page::Profiles) {
++            if(a==Action::Left || a==Action::Right)profiles.selected=(profiles.selected+8+d)%8;
++            if(a==Action::Accept) {page=Page::Cities;city=chapter=0;}
 +            if(a==Action::Back) {page=Page::Main;row=0;}
++            if(a==Action::Rename) {page=Page::Name;nameEntry.clear();}
++            if(a==Action::Reset) {page=Page::Reset;row=0;}
++        } else if(page==Page::Name) {
++            if(a==Action::Erase && !nameEntry.empty())nameEntry.pop_back();
++            if(a==Action::Accept) {
++                profiles.rename(nameEntry.empty()?Profiles::defaultName(profiles.selected):nameEntry);
++                page=Page::Profiles;
++            }
++            if(a==Action::Back)page=Page::Profiles;
++        } else if(page==Page::Reset) {
++            if(a==Action::Up || a==Action::Down)row=1-row;
++            if(a==Action::Accept) {if(row==1)profiles.reset();page=Page::Profiles;}
++            if(a==Action::Back)page=Page::Profiles;
++        } else if(page==Page::Cities) {
++            if(a==Action::Left || a==Action::Right) {city=(city+lastCity()+1+d)%(lastCity()+1);chapter=0;}
++            if(a==Action::Up || a==Action::Down) chapter=(chapter+lastChapter()+1+d)%(lastChapter()+1);
++            if(a==Action::Back) {page=Page::Profiles;row=0;}
 +        } else if(page==Page::Options) {
 +            if(a==Action::Up || a==Action::Down) row=(row+5+d)%5;
 +            if(a==Action::Left || a==Action::Right) {
@@ -1142,6 +1167,13 @@ index 0000000..53b6eeb
 +struct Image {
 +    int width=0,height=0;
 +    std::vector<unsigned char> pixels;
++    void blit(const Image& src,int x,int y) {
++        for(int yy=0;yy<src.height;++yy)for(int xx=0;xx<src.width;++xx) {
++            const int dx=x+xx,dy=y+yy;
++            if(dx>=0 && dy>=0 && dx<width && dy<height)
++                std::copy_n(&src.pixels[(yy*src.width+xx)*4],4,&pixels[(dy*width+dx)*4]);
++        }
++    }
 +    bool load(std::istream& in,int w,int h) {
 +        pixels.clear(); width=height=0;
 +        if(w<=0 || h<=0 || w>2048 || h>2048) return false;
@@ -1397,6 +1429,122 @@ index 0000000..8e10ec9
 +    "@David Jones",
 +    "",
 +};
++}
+diff --git a/src/FrontendProfile.h b/src/FrontendProfile.h
+new file mode 100755
+index 0000000..eaa0127
+--- /dev/null
++++ b/src/FrontendProfile.h
+@@ -0,0 +1,110 @@
++#pragma once
++#include <algorithm>
++#include <array>
++#include <cstdint>
++#include <iomanip>
++#include <istream>
++#include <sstream>
++#include <string>
++namespace frontend {
++// 0042b4a0 / 0042b260: eight 0x50-byte records, first score 0,
++// remaining scores -1. 00427630 derives chapter availability from scores.
++struct Profile {std::string name;std::array<int,6> scores{{0,-1,-1,-1,-1,-1}};};
++struct HighScore {int score=0;std::string name;};
++struct Profiles {
++ std::array<std::array<HighScore,3>,6> highScores;
++ int selected=1;
++ std::array<Profile,8> players;
++ Profiles() {
++  for(int i=0;i<8;++i)players[i].name=defaultName(i);
++  for(auto& table:highScores) {table[0]={1,"BILLY"};table[1]={2,"PAUL"};table[2]={3,"STEVE"};}
++ }
++ static const char* defaultName(int i) {
++  const char* names[]={"Ulrika","Travis","Katie","Mikki","Divine","Bubba","Troy","Kivlov"};
++  return names[i];
++ }
++ static bool validName(const std::string& s) {
++  if(s.empty() || s.size()>14)return false;
++  for(unsigned char c:s)if(c<32 || c>126)return false;
++  return true;
++ }
++ bool unlocked(int chapter) const {
++  return selected>=0 && selected<8 && chapter>=0 && chapter<6 && players[selected].scores[chapter]>=0;
++ }
++ // Call only after a verified single-player chapter-complete outcome, never
++ // MISSION_END (which ends an individual phone job). 00427030 state 13.
++ bool complete(int chapter,int score) {
++  if(!unlocked(chapter) || score<0)return false;
++  auto& s=players[selected].scores;s[chapter]=std::max(s[chapter],score);
++  if(chapter<5 && s[chapter+1]==-1)s[chapter+1]=0;
++  auto& table=highScores[chapter];
++  for(int i=2;i>=0;--i)if(score>table[i].score) {
++   for(int j=0;j<i;++j)table[j]=table[j+1];
++   table[i]={score,players[selected].name};break;
++  }
++  return true;
++ }
++ bool rename(const std::string& name) {
++  if(!validName(name))return false;
++  players[selected].name=name;return true;
++ }
++ void reset() {players[selected]=Profile{};players[selected].name=defaultName(selected);}
++ std::string encode() const {
++  std::ostringstream out;out<<"C3DPROFILES1 "<<selected;
++  for(const auto& p:players) {out<<' '<<std::quoted(p.name);for(int s:p.scores)out<<' '<<s;}
++  for(const auto& table:highScores)for(const auto& h:table)out<<' '<<h.score<<' '<<std::quoted(h.name);
++  return out.str();
++ }
++ bool decode(const std::string& data) {
++  if(data.size()>4096)return false;
++  Profiles next;std::istringstream in(data);std::string magic;
++  if(!(in>>magic>>next.selected) || magic!="C3DPROFILES1" || next.selected<0 || next.selected>7)return false;
++  for(auto& p:next.players) {
++   if(!(in>>std::quoted(p.name)) || !validName(p.name))return false;
++   for(int& s:p.scores)if(!(in>>s) || s< -1)return false;
++   if(p.scores[0]<0)return false;
++  }
++  for(auto& table:next.highScores)for(auto& h:table)
++   if(!(in>>h.score>>std::quoted(h.name)) || h.score<0 || !validName(h.name))return false;
++  in>>std::ws;if(!in.eof())return false;
++  *this=next;return true;
++ }
++ // Import only; the original PLAYER_A.DAT is never rewritten by this port.
++ bool importOriginal(std::istream& in) {
++  std::array<unsigned char,0x414> bytes{};
++  if(!in.read(reinterpret_cast<char*>(bytes.data()),bytes.size()))return false;
++  auto integer=[&](int o)->std::int64_t {
++   std::uint32_t n=std::uint32_t(bytes[o]) | (std::uint32_t(bytes[o+1])<<8) |
++    (std::uint32_t(bytes[o+2])<<16) | (std::uint32_t(bytes[o+3])<<24);
++   return n<=0x7fffffffU?n:std::int64_t(n)-0x100000000LL;
++  };
++  Profiles next;next.selected=bytes[0x400];if(next.selected>7)return false;
++  for(int i=0;i<8;++i) {
++   int o=0x180+i*0x50;std::string name;
++   for(int j=0;j<16 && bytes[o+j];++j)name+=char(bytes[o+j]);
++   if(!validName(name))return false;
++   next.players[i].name=name;
++   for(int j=0;j<6;++j) {
++    auto n=integer(o+16+j*4);if(n< -1)return false;
++    next.players[i].scores[j]=int(n);
++   }
++   if(next.players[i].scores[0]<0)return false;
++  }
++  for(int chapter=0;chapter<6;++chapter)for(int rank=0;rank<3;++rank) {
++   const int o=0x18+chapter*60+rank*20;auto& h=next.highScores[chapter][rank];
++   const auto value=integer(o);if(value<0)return false;h.score=int(value);
++   std::string name;for(int j=0;j<16 && bytes[o+4+j];++j)name+=char(bytes[o+4+j]);
++   if(!validName(name))return false;
++   h.name=name;
++  }
++  *this=next;return true;
++ }
++};
++// 00482140 and 00486430: one/two/three pixels at 25 Hz.
++inline int textPixelsPerTick(int speed) {return std::max(1,std::min(3,speed));}
++// 00481d40: (integer(4 / {1,2,4}) * (strlen + 25)) / 2 ticks.
++inline float messageSeconds(std::size_t length,int speed) {
++ const int divisors[]={1,1,2,4};speed=std::max(1,std::min(3,speed));
++ return ((4/divisors[speed])*(int(std::min<std::size_t>(length,65535))+25)/2)/25.0f;
++}
 +}
 diff --git a/src/GameCamera.cpp b/src/GameCamera.cpp
 index 3e02e64..0fba3b4 100644
@@ -1834,17 +1982,19 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HUD.cpp b/src/HUD.cpp
-index da5e832..0605030 100644
+index da5e832..422e266 100644
 --- a/src/HUD.cpp
 +++ b/src/HUD.cpp
-@@ -1,4 +1,6 @@
+@@ -1,4 +1,8 @@
  #include "stdafx.h"
++#include "FrontendProfile.h"
++#include "cvars.h"
 +#include "mission/MissionSession.h"
 +#include "CarnageGame.h"
  #include "HUD.h"
  #include "SpriteBatch.h"
  #include "GuiContext.h"
-@@ -14,8 +16,10 @@
+@@ -14,8 +18,10 @@
  //////////////////////////////////////////////////////////////////////////
  
  HUDPanel::HUDPanel()
@@ -1857,7 +2007,7 @@ index da5e832..0605030 100644
  {
  }
  
-@@ -550,23 +554,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
+@@ -550,23 +556,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
  
  void HUDScoresPanel::SetScores(int score, int lives, int multiplier)
  {
@@ -1887,20 +2037,31 @@ index da5e832..0605030 100644
  }
  
  void HUDScoresPanel::Self_SetupHUD()
-@@ -824,6 +817,12 @@ void HUD::PushHelpMessage()
+@@ -729,8 +724,8 @@ void HUDPagerMessage::Self_UpdateFrame()
+ 
+ void HUDPagerMessage::UpdateTextScroll(float dt)
+ {
+-    static const float TextScrollSpeed = 24.0f; // pixels per second
+-    static const float SinglePixelScrollTime = 1.0f / TextScrollSpeed;
++    const float TextScrollSpeed = 25.0f * frontend::textPixelsPerTick(gCvarTextSpeed.mValue); // pixels per second
++    const float SinglePixelScrollTime = 1.0f / TextScrollSpeed;
+ 
+     if (IsTextScrolling())
+     {
+@@ -824,6 +819,12 @@ void HUD::PushHelpMessage()
      // todo
  }
  
 +void HUD::ShowMissionText(const std::string& text)
 +{
 +    mBigFontMessage.SetText(text);
-+    ShowAutoHidePanel(&mBigFontMessage, gGameParams.mHudBigFontMessageShowDuration);
++    ShowAutoHidePanel(&mBigFontMessage, frontend::messageSeconds(text.size(),gCvarTextSpeed.mValue));
 +}
 +
  void HUD::PushMissionMessage()
  {
      // todo
-@@ -901,7 +900,10 @@ void HUD::UpdateScreen()
+@@ -901,7 +902,10 @@ void HUD::UpdateScreen()
      }
  
      // update wanted level
@@ -1912,7 +2073,7 @@ index da5e832..0605030 100644
      mWantedLevelPanel.SetWantedLevel(currentWantedLevel);
      if (currentWantedLevel == 0)
      {
-@@ -913,7 +915,7 @@ void HUD::UpdateScreen()
+@@ -913,7 +917,7 @@ void HUD::UpdateScreen()
      }
  
      // update scores
@@ -1921,7 +2082,7 @@ index da5e832..0605030 100644
  
                                         // todo: implement bonus
      if (true)
-@@ -936,6 +938,19 @@ void HUD::DrawScreen(GuiContext& context)
+@@ -936,6 +940,19 @@ void HUD::DrawScreen(GuiContext& context)
      mPanelsContainer.ComputeSize();
      mPanelsContainer.ComputePosition();
      mPanelsContainer.DrawFrame(context);
@@ -2541,10 +2702,10 @@ index 068fae5..435924d 100644
  int main(int argc, char *argv[])
  {
 diff --git a/src/MainMenuGamestate.cpp b/src/MainMenuGamestate.cpp
-index 9089238..de156d7 100644
+index 9089238..f0db740 100644
 --- a/src/MainMenuGamestate.cpp
 +++ b/src/MainMenuGamestate.cpp
-@@ -1,42 +1,219 @@
+@@ -1,42 +1,298 @@
 -#include "stdafx.h"
 -#include "MainMenuGamestate.h"
 -
@@ -2580,14 +2741,18 @@ index 9089238..de156d7 100644
  
 -void MainMenuGamestate::OnGamestateInputEvent(MouseButtonInputEvent& inputEvent)
 -{
+-}
++CvarString gCvarFrontendProfiles("g_frontendProfiles", "", "Original front-end player profiles", CvarFlags_Archive);
++CvarInt gCvarTextSpeed("g_textSpeed", 2, 1, 3, "Original text speed", CvarFlags_Archive);
++CvarBoolean gCvarTransparencyEffects("g_transparencyEffects", true, "Original transparency preference (sprite consumer unresolved)", CvarFlags_Archive);
+ 
+-void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
+-{
 +namespace {
 +std::string Text(const std::string& key) {return gGameTexts.GetText(key);}
 +void Center(const frontend::Font& f,frontend::Image& frame,const std::string& s,int y) {
 +    f.draw(frame,s,(640-f.measure(s))/2,y);
- }
--
--void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
--{
++}
 +void Blit(frontend::Image& dst,const frontend::Image& src,int y) {
 +    if(src.width==640 && y>=0 && y+src.height<=480)
 +        std::copy(src.pixels.begin(),src.pixels.end(),dst.pixels.begin()+y*640*4);
@@ -2621,6 +2786,13 @@ index 9089238..de156d7 100644
 +    for(int i=0;i<3;++i) ok=font(mCity[i],cxx::va("F_CITY%d.FON",i==0?4:i==1?1:3),1) && ok;
 +    for(int i=0;i<8;++i) ok=image(mLogos[i],cxx::va("F_LOGO%d.RAW",i),168) && ok;
 +    for(int i=0;i<2;++i) ok=image(mLower[i],cxx::va("F_LOWER%d.RAW",i),312) && ok;
++    auto decoration=[](frontend::Image& im,const std::string& name,int w,int h) {
++        std::ifstream in;return gFiles.OpenBinaryFile(name,in) && im.load(in,w,h);
++    };
++    for(int i=0;i<8;++i)ok=decoration(mPortraits[i],cxx::va("F_PLAY%d.RAW",i+1),102,141) && ok;
++    ok=decoration(mNamePanel,"F_PLAYN.RAW",180,50) && ok;
++    ok=decoration(mBadges[0],"F_RSTAR.RAW",64,59) && ok;
++    ok=decoration(mBadges[1],"F_RSTARN.RAW",64,59) && ok;
 +    // Resolve maps from MISSION.INI, never assume city names are map filenames.
 +    std::ifstream ini;
 +    if(!gFiles.OpenTextFile("MISSION.INI",ini)) return false;
@@ -2645,6 +2817,14 @@ index 9089238..de156d7 100644
 +void MainMenuGamestate::OnGamestateEnter() {
 +    mMenu=frontend::Menu{};mElapsed=0;mStartPending=mQuitPending=false;
 +    mMenu.options[0]=gCvarSoundsVolume.mValue;mMenu.options[1]=gCvarMusicVolume.mValue;
++    if(gCvarFrontendProfiles.mValue.empty()) {
++        std::ifstream original;
++        if(gFiles.OpenBinaryFile("PLAYER_A.DAT",original) && !mMenu.profiles.importOriginal(original))
++            gConsole.LogMessage(eLogMessage_Warning,"Original player save rejected; using fresh profiles");
++    } else if(!mMenu.profiles.decode(gCvarFrontendProfiles.mValue))
++        gConsole.LogMessage(eLogMessage_Warning,"Archived player profiles rejected; using fresh profiles");
++    mMenu.options[2]=gCvarTextSpeed.mValue;
++    mMenu.options[4]=gCvarTransparencyEffects.mValue;
 +    mMenu.options[3]=gCvarGameMusicMode.mValue==eGameMusicMode_Constant;
 +    mReady=LoadAssets();
 +    if(mReady) mTexture=gGraphicsDevice.CreateTexture2D(eTextureFormat_RGBA8,640,480,mFrame.pixels.data());
@@ -2657,17 +2837,25 @@ index 9089238..de156d7 100644
 +    if(mTexture)gGraphicsDevice.DestroyTexture(mTexture);
 +    mTexture=nullptr;mReady=false;
 +}
++void MainMenuGamestate::SaveProfiles() {
++    gCvarFrontendProfiles.mValue=mMenu.profiles.encode();
++    if(!gSystem.SaveConfiguration())gConsole.LogMessage(eLogMessage_Warning,"Could not save player profiles");
++}
 +void MainMenuGamestate::Act(frontend::Action a) {
 +    if(!mReady)return;
-+    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Cities) {mStartPending=true;return;}
++    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Cities) {if(mMenu.profiles.unlocked(mMenu.city*2+mMenu.chapter)){SaveProfiles();mStartPending=true;}return;}
 +    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Quit) {mQuitPending=true;return;}
 +    const bool save=mMenu.page==frontend::Page::Options && a==frontend::Action::Accept;
 +    const auto previous=mMenu.page;
++    const auto previousProfiles=mMenu.profiles.encode();
 +    mMenu.act(a);
++    if(previousProfiles!=mMenu.profiles.encode())SaveProfiles();
 +    if(mMenu.page==frontend::Page::Quit && previous!=mMenu.page)mCreditsElapsed=0;
 +    if(mMenu.exitRequested)mQuitPending=true;
 +    if(save) {
 +        gCvarSoundsVolume.mValue=mMenu.options[0];gCvarMusicVolume.mValue=mMenu.options[1];
++        gCvarTextSpeed.mValue=mMenu.options[2];
++        gCvarTransparencyEffects.mValue=mMenu.options[4];
 +        gCvarGameMusicMode.mValue=mMenu.options[3]?eGameMusicMode_Constant:eGameMusicMode_Radio;
 +        gAudioManager.InitSoundsAndMusicGainValue();
 +        if(gAudioManager.mMusicAudioSource)
@@ -2696,21 +2884,63 @@ index 9089238..de156d7 100644
 +    const int anim=int(mElapsed*25)%13+1;
 +    auto cursor=[&](int x,int y){mKey.draw(mFrame,std::string(1,char(anim)),x,y);};
 +    if(mMenu.page==frontend::Page::Main) {
++        mFrame.blit(mBadges[0],20,390);mFrame.blit(mBadges[1],556,390);
 +        mHead.draw(mFrame,Text("Play"),196,216);
 +        mHead.draw(mFrame,Text("Options"),196,216+mHead.height);
 +        cursor(116,200+mMenu.row*mHead.height);
 +        Center(mText,mFrame,Text("esc-key")+": "+Text("Quit"),480-mText.height);
++    } else if(mMenu.page==frontend::Page::Profiles || mMenu.page==frontend::Page::Name || mMenu.page==frontend::Page::Reset) {
++        // 00429f60: portrait and name-panel geometry, no replacement art.
++        const auto& profile=mMenu.profiles.players[mMenu.profiles.selected];
++        mFrame.blit(mPortraits[mMenu.profiles.selected],268,192);
++        mFrame.blit(mNamePanel,228,342);
++        const auto name=mMenu.page==frontend::Page::Name?mMenu.nameEntry:profile.name;
++        mText.draw(mFrame,name,319-mText.measure(name)/2,356);
++        if(mMenu.page==frontend::Page::Profiles) {
++            if(int(mElapsed*25)%8<4) {
++                mText.draw(mFrame,"<",319-90-2*mText.measure("<"),356);
++                mText.draw(mFrame,">",319+90+mText.measure(">"),356);
++            }
++            mMiss.draw(mFrame,Text("del-key")+": "+Text("rename"),440,400);
++            mMiss.draw(mFrame,Text("r-key")+": "+Text("Reset"),440,400+mMiss.height);
++        } else if(mMenu.page==frontend::Page::Reset) {
++            mHead.draw(mFrame,Text("Cancel"),80,216);
++            mHead.draw(mFrame,Text("Reset"),80,216+mHead.height);
++            cursor(0,200+mMenu.row*mHead.height);
++        }
++        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
++        const auto accept=Text("rtn-key")+": "+Text(mMenu.page==frontend::Page::Name?"save":"Play");
++        mText.draw(mFrame,accept,640-mText.measure(accept),480-mText.height);
++        // 00429df0: show only the selected profile's unlocked chapter scores.
++        int y=202;
++        mText.draw(mFrame,Text("scores"),414-mText.measure(Text("scores"))/2,y);
++        for(int c=0;c<6;++c)if(profile.scores[c]>=0) {
++            y+=12;
++            mMiss.draw(mFrame,Text("mission"+std::to_string(c<2?1+c:c<4?102+c-2:202+c-4)),414,y);
++            const auto value=std::to_string(profile.scores[c]);
++            mMiss.draw(mFrame,value,414+128+std::max(0,72-mMiss.measure(value)),y);
++        }
 +    } else if(mMenu.page==frontend::Page::Cities) {
++        // 00427fc0: three public enemies for the selected chapter, low at bottom.
++        const auto title=Text("high-scores");
++        mText.draw(mFrame,title,440+(184-mText.measure(title))/2,130);
++        const auto& table=mMenu.profiles.highScores[mMenu.city*2+mMenu.chapter];
++        for(int rank=0;rank<3;++rank)if(table[rank].score) {
++            const int y=178-rank*12;
++            mMiss.draw(mFrame,table[rank].name,440,y);
++            const auto value=std::to_string(table[rank].score);
++            mMiss.draw(mFrame,value,552+std::max(0,72-mMiss.measure(value)),y);
++        }
 +        // FUN_004277c0: city order maps to icon fonts 4,1,3.
 +        const int xs[]={470,80,368},ys[]={242,230,338},dx[]={20,8,0};
-+        for(int i=0;i<3;++i) {
++        for(int i=0;i<=mMenu.lastCity();++i) {
 +            mCity[i].draw(mFrame,std::string(1,char(int(mElapsed*25)%int(mCity[i].glyphs.size())+1)),xs[i],ys[i]);
 +            int y=ys[i]+mCity[i].height;
 +            const std::string name=Text("city"+std::to_string(i));
 +            mText.draw(mFrame,name,xs[i]-mText.measure(name)/2,y);
 +            if(i==mMenu.city) {
 +                y+=mText.height;
-+                for(int j=0;j<2;++j) {
++                for(int j=0;j<=mMenu.lastChapter();++j) {
 +                    const int section=(i==0?1:i==1?102:202)+j;
 +                    const std::string title=std::to_string(j+1)+": "+Text("mission"+std::to_string(section));
 +                    mMiss.draw(mFrame,title,xs[i]+dx[i]-mMiss.measure(title)/2,y+j*mMiss.height);
@@ -2761,12 +2991,17 @@ index 9089238..de156d7 100644
 +        mMenu.row=(y-216)/mHead.height;Act(frontend::Action::Accept);
 +    } else if(mMenu.page==frontend::Page::Options && x>=110 && y>=224 && y<224+5*mText.height) {
 +        mMenu.row=(y-224)/mText.height;Act(x<320?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Profiles) {
++        if(x>=440 && y>=400 && y<400+2*mMiss.height)Act(y<400+mMiss.height?frontend::Action::Rename:frontend::Action::Reset);
++        else if(y>=192 && y<392)Act(x<319?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Reset && x<320 && y>=216 && y<216+2*mHead.height) {
++        mMenu.row=(y-216)/mHead.height;Act(frontend::Action::Accept);
 +    } else if(mMenu.page==frontend::Page::Cities) {
 +        const int xs[]={470,80,368},ys[]={242,230,338};
-+        for(int i=0;i<3;++i)if(x>=xs[i]-80 && x<xs[i]+140 && y>=ys[i] && y<ys[i]+mCity[i].height+mText.height+2*mMiss.height) {
++        for(int i=0;i<=mMenu.lastCity();++i)if(x>=xs[i]-80 && x<xs[i]+140 && y>=ys[i] && y<ys[i]+mCity[i].height+mText.height+2*mMiss.height) {
 +            const int top=ys[i]+mCity[i].height+mText.height;
 +            mMenu.city=i;
-+            if(y>=top)mMenu.chapter=std::min(1,(y-top)/mMiss.height);
++            if(y>=top)mMenu.chapter=std::min(mMenu.lastChapter(),(y-top)/mMiss.height);
 +            return;
 +        }
 +    }
@@ -2778,6 +3013,9 @@ index 9089238..de156d7 100644
 +        case eKeycode_DOWN:Act(frontend::Action::Down);break;
 +        case eKeycode_LEFT:Act(frontend::Action::Left);break;
 +        case eKeycode_RIGHT:Act(frontend::Action::Right);break;
++        case eKeycode_DELETE:if(mMenu.page==frontend::Page::Profiles)Act(frontend::Action::Rename);else return;break;
++        case eKeycode_BACKSPACE:Act(frontend::Action::Erase);break;
++        case eKeycode_R:if(mMenu.page==frontend::Page::Profiles)Act(frontend::Action::Reset);else return;break;
 +        case eKeycode_ENTER:Act(frontend::Action::Accept);break;
 +        case eKeycode_ESCAPE:Act(frontend::Action::Back);break;
 +        default:return;
@@ -2800,13 +3038,15 @@ index 9089238..de156d7 100644
 +}
 +void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent&) {}
 +void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent&) {}
-+void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent&) {}
++void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent& e) {
++    if(mMenu.page==frontend::Page::Name){mMenu.character(e.mUnicodeChar);e.SetConsumed();}
++}
 +void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;}
 diff --git a/src/MainMenuGamestate.h b/src/MainMenuGamestate.h
-index 38eedcd..d590399 100644
+index 38eedcd..8ee5098 100644
 --- a/src/MainMenuGamestate.h
 +++ b/src/MainMenuGamestate.h
-@@ -1,24 +1,28 @@
+@@ -1,24 +1,29 @@
 -#pragma once
 -
 -#include "GenericGamestate.h"
@@ -2851,8 +3091,9 @@ index 38eedcd..d590399 100644
 +    void Act(frontend::Action);
 +    void Tap(int,int);
 +    bool LoadAssets();
++    void SaveProfiles();
 +    frontend::Menu mMenu;
-+    frontend::Image mFrame, mLower[2], mLogos[8];
++    frontend::Image mFrame, mLower[2], mLogos[8],mPortraits[8],mNamePanel,mBadges[2];
 +    frontend::Font mHead,mText,mMiss,mKey,mCity[3];
 +    std::array<std::string,6> mMaps;
 +    GpuTexture2D* mTexture=nullptr;
@@ -4189,7 +4430,7 @@ index 0000000..255e8ee
 +};
 +}
 diff --git a/src/cvars.h b/src/cvars.h
-index dfc0703..a985b77 100644
+index dfc0703..03fea57 100644
 --- a/src/cvars.h
 +++ b/src/cvars.h
 @@ -15,6 +15,7 @@ extern CvarBoolean gCvarMouseAiming; // aim with mouse
@@ -4200,16 +4441,34 @@ index dfc0703..a985b77 100644
  extern CvarBoolean gCvarGraphicsTexFiltering; // is texture filtering enabled
  
  // physics
-@@ -63,7 +64,8 @@ inline void CvarsRegisterGlobal()
-     // vars
+@@ -41,6 +42,9 @@ extern CvarEnum<eWeatherEffect> gCvarWeatherEffect; // currently active weather
+ extern CvarBoolean gCvarCarSparksActive; // enable car sparks effect
+ 
+ // ui
++extern CvarString gCvarFrontendProfiles; // port-owned archive; original saves remain read-only
++extern CvarInt gCvarTextSpeed; // original 1..3 text speed
++extern CvarBoolean gCvarTransparencyEffects; // original preference; sprite consumer unresolved
+ extern CvarFloat gCvarUiScale; // ui elements scale factor
+ 
+ //////////////////////////////////////////////////////////////////////////
+@@ -64,6 +68,7 @@ inline void CvarsRegisterGlobal()
      gConsole.RegisterVariable(&gCvarGraphicsScreenDims);
      gConsole.RegisterVariable(&gCvarGraphicsFullscreen);
--    gConsole.RegisterVariable(&gCvarGraphicsVSync);
-+    gConsole.RegisterVariable(&gCvarGraphicsVSync);
+     gConsole.RegisterVariable(&gCvarGraphicsVSync);
 +    gConsole.RegisterVariable(&gCvarGraphicsAspect);
      gConsole.RegisterVariable(&gCvarGraphicsTexFiltering);
      gConsole.RegisterVariable(&gCvarPhysicsFramerate);
      gConsole.RegisterVariable(&gCvarMemEnableFrameHeapAllocator);
+@@ -82,6 +87,9 @@ inline void CvarsRegisterGlobal()
+     gConsole.RegisterVariable(&gCvarMusicVolume);
+     gConsole.RegisterVariable(&gCvarSoundsVolume);
+     gConsole.RegisterVariable(&gCvarUiScale);
++    gConsole.RegisterVariable(&gCvarFrontendProfiles);
++    gConsole.RegisterVariable(&gCvarTextSpeed);
++    gConsole.RegisterVariable(&gCvarTransparencyEffects);
+     // commands
+     gConsole.RegisterVariable(&gCvarSysQuit);
+     gConsole.RegisterVariable(&gCvarSysListCvars);
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
 index 0000000..2f691ad
