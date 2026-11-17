@@ -344,11 +344,25 @@ index d2483f9..b3bb998 100644
 +    float mDriveReverseTime = 0.0f; // > 0: backing away from an obstacle
  };
 \ No newline at end of file
+diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
+index 1bfac4c..a31a65d 100644
+--- a/src/CMakeLists.txt
++++ b/src/CMakeLists.txt
+@@ -1,4 +1,9 @@
+ set(CARNAGE3D_SRC
++    ${CMAKE_CURRENT_LIST_DIR}/mission/CarnageMissionWorld.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/mission/MissionSession.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/mission/MissionVM.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/mission/MissionScript.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/mission/GameEconomy.cpp
+ 	${CMAKE_CURRENT_LIST_DIR}/AiCharacterController.cpp
+ 	${CMAKE_CURRENT_LIST_DIR}/AiManager.cpp
+ 	${CMAKE_CURRENT_LIST_DIR}/AiPedestrianBehavior.cpp
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
-index bb509f8..debb9b8 100644
+index bb509f8..4f2fcf9 100644
 --- a/src/CarnageGame.cpp
 +++ b/src/CarnageGame.cpp
-@@ -63,7 +63,9 @@ bool CarnageGame::Initialize()
+@@ -63,14 +63,21 @@ bool CarnageGame::Initialize()
  
      ::memset(mHumanPlayers, 0, sizeof(mHumanPlayers));
  
@@ -359,7 +373,19 @@ index bb509f8..debb9b8 100644
  
      if (gCvarMapname.mValue.empty())
      {
-@@ -122,6 +124,30 @@ bool CarnageGame::IsInGameState() const
+         // try load first found map
+         if (!gFiles.mGameMapsList.empty())
+         {
++            // the original game starts in Liberty City (NYC.CMP, MISSION.INI section 1)
+             gCvarMapname.mValue = gFiles.mGameMapsList[0];
++            for (const std::string& mapName : gFiles.mGameMapsList)
++            {
++                if (cxx_stricmp(mapName.c_str(), "NYC.CMP") == 0) { gCvarMapname.mValue = mapName; break; }
++            }
+         }
+     }
+     gCvarMapname.ClearModified();
+@@ -122,6 +129,30 @@ bool CarnageGame::IsInGameState() const
  
  void CarnageGame::UpdateFrame()
  {
@@ -390,7 +416,7 @@ index bb509f8..debb9b8 100644
      if (mCurrentGamestate)
      {
          mCurrentGamestate->OnGamestateFrame();
-@@ -150,6 +176,18 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
+@@ -150,6 +181,18 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
          return;
      }
  
@@ -409,7 +435,7 @@ index bb509f8..debb9b8 100644
      if (inputEvent.HasPressed(eKeycode_C))
      {
          gGameCheatsWindow.mWindowShown = !gGameCheatsWindow.mWindowShown;
-@@ -277,6 +315,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
+@@ -277,6 +320,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
      }
  }
  
@@ -455,7 +481,7 @@ index bb509f8..debb9b8 100644
  void CarnageGame::SetupScreenLayout()
  {   
      const int MaxCols = 2;
-@@ -284,7 +361,8 @@ void CarnageGame::SetupScreenLayout()
+@@ -284,7 +366,8 @@ void CarnageGame::SetupScreenLayout()
  
      debug_assert(playersCount > 0);
  
@@ -465,7 +491,7 @@ index bb509f8..debb9b8 100644
  
      int numRows = (playersCount + MaxCols - 1) / MaxCols;
      debug_assert(numRows > 0);
-@@ -303,10 +381,16 @@ void CarnageGame::SetupScreenLayout()
+@@ -303,10 +386,16 @@ void CarnageGame::SetupScreenLayout()
          debug_assert(colsOnCurrentRow > 0);
          int frameSizePerW = screenResolution.x / colsOnCurrentRow;
  
@@ -1019,6 +1045,61 @@ index 85f2137..a82b020 100644
      // in car control actions
      float mAcceleration = 0.0f; // 0 means no acceleration, < 0 move reverse, > 0 full acceleration
      float mSteerDirection = 0.0f; // 0 means no steer, < 0 steer left, > 0 steer right
+diff --git a/src/GameplayGamestate.cpp b/src/GameplayGamestate.cpp
+index fc6c789..952b438 100644
+--- a/src/GameplayGamestate.cpp
++++ b/src/GameplayGamestate.cpp
+@@ -10,15 +10,19 @@
+ #include "ParticleEffectsManager.h"
+ #include "TrafficManager.h"
+ #include "AiManager.h"
++#include "cvars.h"
+ 
+ void GameplayGamestate::OnGamestateEnter()
+ {
+-    // todo
++    mission::MissionSession::SetCurrent(&mMissionSession);
++    // Section 1 is NYC Easy; LoadSection verifies its map metadata.
++    mMissionSession.LoadSection(1);
+ }
+ 
+ void GameplayGamestate::OnGamestateLeave()
+ {
+-    // todo
++    mission::MissionSession::SetCurrent(nullptr);
++    mMissionSession.Stop();
+ }
+ 
+ void GameplayGamestate::OnGamestateFrame()
+@@ -34,6 +38,7 @@ void GameplayGamestate::OnGamestateFrame()
+     gTrafficManager.UpdateFrame();
+     gAiManager.UpdateFrame();
+     gBroadcastEvents.UpdateFrame();
++    mMissionSession.Update(deltaTime);
+ }
+ 
+ void GameplayGamestate::OnGamestateInputEvent(KeyInputEvent& inputEvent)
+diff --git a/src/GameplayGamestate.h b/src/GameplayGamestate.h
+index bffe911..a2b0266 100644
+--- a/src/GameplayGamestate.h
++++ b/src/GameplayGamestate.h
+@@ -1,6 +1,7 @@
+ #pragma once
+ 
+ #include "GenericGamestate.h"
++#include "mission/MissionSession.h"
+ 
+ // Main game
+ class GameplayGamestate: public GenericGamestate
+@@ -22,6 +23,7 @@ public:
+     void OnGamestateBroadcastEvent(const BroadcastEvent& broadcastEvent) override;
+ 
+ private:
++    mission::MissionSession mMissionSession;
+     void OnHumanPlayerDie(int playerIndex);
+     void OnHumanPlayerStartDriveCar(int playerIndex);
+ };
+\ No newline at end of file
 diff --git a/src/GpuBuffer.cpp b/src/GpuBuffer.cpp
 index 2b9f269..52c8066 100644
 --- a/src/GpuBuffer.cpp
@@ -1169,8 +1250,85 @@ index a68fe52..3b05e55 100644
              gRenderManager.mSpritesProgram.UploadCameraTransformMatrices(mCamera2D);
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
+diff --git a/src/HUD.cpp b/src/HUD.cpp
+index da5e832..c059307 100644
+--- a/src/HUD.cpp
++++ b/src/HUD.cpp
+@@ -1,4 +1,6 @@
+ #include "stdafx.h"
++#include "mission/MissionSession.h"
++#include "CarnageGame.h"
+ #include "HUD.h"
+ #include "SpriteBatch.h"
+ #include "GuiContext.h"
+@@ -824,6 +826,12 @@ void HUD::PushHelpMessage()
+     // todo
+ }
+ 
++void HUD::ShowMissionText(const std::string& text)
++{
++    mBigFontMessage.SetText(text);
++    ShowAutoHidePanel(&mBigFontMessage, gGameParams.mHudBigFontMessageShowDuration);
++}
++
+ void HUD::PushMissionMessage()
+ {
+     // todo
+@@ -901,7 +909,10 @@ void HUD::UpdateScreen()
+     }
+ 
+     // update wanted level
+-    int currentWantedLevel = mHumanPlayer->GetWantedLevel();
++    mission::MissionSession::HUDNumbers numbers;
++    if (auto* session = mission::MissionSession::Current())
++        numbers = session->Numbers(gCarnageGame.GetHumanPlayerIndex(character));
++    int currentWantedLevel = numbers.wantedLevel;
+     mWantedLevelPanel.SetWantedLevel(currentWantedLevel);
+     if (currentWantedLevel == 0)
+     {
+@@ -913,7 +924,7 @@ void HUD::UpdateScreen()
+     }
+ 
+     // update scores
+-    mScoresPanel.SetScores(100, 4, 1); // todo: implement scores system
++    mScoresPanel.SetScores(numbers.money, numbers.lives, numbers.multiplier);
+ 
+                                        // todo: implement bonus
+     if (true)
+@@ -936,6 +947,19 @@ void HUD::DrawScreen(GuiContext& context)
+     mPanelsContainer.ComputeSize();
+     mPanelsContainer.ComputePosition();
+     mPanelsContainer.DrawFrame(context);
++    if (auto* session = mission::MissionSession::Current())
++    {
++        int owner = gCarnageGame.GetHumanPlayerIndex(mHumanPlayer->mCharacter);
++        if (auto target = session->World().Arrow(owner))
++        {
++            Sprite2D arrow;
++            gSpriteManager.GetSpriteTexture(GAMEOBJECT_ID_NULL, eSpriteID_Arrow_Pointer, 0, arrow);
++            arrow.mScale = HUD_SPRITE_SCALE;
++            arrow.mDrawOrder = eSpriteDrawOrder_HUD_Arrow;
++            mHumanPlayer->mViewCamera.ProjectPointToScreen(*target, arrow.mPosition);
++            context.mSpriteBatch.DrawSprite(arrow);
++        }
++    }
+ 
+     if (CheckCharacterObscure())
+     {
+diff --git a/src/HUD.h b/src/HUD.h
+index 7eb198f..f8b7f94 100644
+--- a/src/HUD.h
++++ b/src/HUD.h
+@@ -265,6 +265,7 @@ public:
+     void PushPagerMessage();
+     void PushHelpMessage();
+     void PushMissionMessage();
++    void ShowMissionText(const std::string& text);
+     void PushBombCostMessage();
+ 
+     void ShowBigFontMessage(eHUDBigFontMessage messageType);
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..857f3da 100644
+index a13af22..a7de203 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,5 +1,23 @@
@@ -1292,7 +1450,7 @@ index a13af22..857f3da 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +455,362 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +455,364 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -1549,6 +1707,8 @@ index a13af22..857f3da 100644
 +
 +    const float cameraHeading = mFollowCameraController.GetCameraHeading();
 +    ts.mMaxCameraStep = glm::max(ts.mMaxCameraStep, fabsf(reperspective::AngleDelta(ts.mLastCameraHeading, cameraHeading)));
++    if (deltaTime > 0.0f) ts.mMaxCameraRate = glm::max(ts.mMaxCameraRate, fabsf(reperspective::AngleDelta(ts.mLastCameraHeading, cameraHeading)) / deltaTime);
++    ts.mMaxFrameTime = glm::max(ts.mMaxFrameTime, deltaTime);
 +    ts.mLastCameraHeading = cameraHeading;
 +
 +    // new projectiles = alive now but not in the previous frame (objects get recycled, so compare frame to frame)
@@ -1576,13 +1736,13 @@ index a13af22..857f3da 100644
 +        const float speed = glm::length(velocity);
 +        const float bodyHeading = inCar ? mCharacter->mCurrentCar->mTransform.mOrientation.to_degrees() : mCharacter->mTransform.mOrientation.to_degrees();
 +        gConsole.LogMessage(eLogMessage_Debug,
-+            "RPT t=%.2f wpn=%d ui=%d focus=%d mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f pos=%.2f,%.2f",
++            "RPT t=%.2f wpn=%d ui=%d focus=%d mode=%s ctl=%s tw=%d car=%d cam=%.1f body=%.1f vel=%.1f spd=%.2f mv=%d:%.1f aimHold=%d fire=%d shots=%d shot=%.1f maxstep=%.2f maxrate=%.0f maxdt=%.3f pos=%.2f,%.2f",
 +            ts.mTime, (int) mCharacter->mCurrentWeapon, IsUiCapturingInput() ? 1 : 0, mInputFocusLost ? 0 : 1, gCvarCameraMode.mValue.c_str(), gCvarControlScheme.mValue.c_str(), ts.mTwinStick ? 1 : 0, inCar ? 1 : 0,
 +            glm::degrees(cameraHeading), bodyHeading, (speed > 0.05f) ? glm::degrees(atan2f(velocity.y, velocity.x)) : 0.0f, speed,
 +            ts.mMoving ? 1 : 0, glm::degrees(ts.mMoveHeading), mFollowCameraController.mHints.mAiming ? 1 : 0, ts.mFire ? 1 : 0,
-+            ts.mShots, ts.mLastShotHeading, glm::degrees(ts.mMaxCameraStep),
++            ts.mShots, ts.mLastShotHeading, glm::degrees(ts.mMaxCameraStep), glm::degrees(ts.mMaxCameraRate), ts.mMaxFrameTime,
 +            mCharacter->mTransform.mPosition.x, mCharacter->mTransform.mPosition.z);
-+        ts.mMaxCameraStep = 0.0f;
++        ts.mMaxCameraStep = 0.0f; ts.mMaxCameraRate = 0.0f; ts.mMaxFrameTime = 0.0f;
 +    }
 +}
 +
@@ -1656,7 +1816,7 @@ index a13af22..857f3da 100644
  {
      const auto& mapping = mActionsMapping.mActionToKeys[action];
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..1f953fa 100644
+index c272fba..3c2d455 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
 @@ -5,6 +5,8 @@
@@ -1668,7 +1828,7 @@ index c272fba..1f953fa 100644
  #include "FreeLookCameraController.h"
  #include "HUD.h"
  
-@@ -19,6 +21,35 @@ enum ePlayerCameraMode
+@@ -19,6 +21,37 @@ enum ePlayerCameraMode
  //////////////////////////////////////////////////////////////////////////
  
  // Contains human player related information but also processes character controller logic
@@ -1689,6 +1849,8 @@ index c272fba..1f953fa 100644
 +    float mLogTimer = 0.0f;
 +    float mLastCameraHeading = 0.0f;
 +    float mMaxCameraStep = 0.0f; // radians per frame since the last log line
++    float mMaxCameraRate = 0.0f; // radians per second since the last log line
++    float mMaxFrameTime = 0.0f; // seconds, since the last log line
 +    int mShots = 0;
 +    float mLastShotHeading = 0.0f;
 +    std::unordered_set<const void*> mSeenProjectiles; // projectiles alive in the previous frame
@@ -1704,7 +1866,7 @@ index c272fba..1f953fa 100644
  class HumanPlayer final: public CharacterController
  {
  public:
-@@ -90,6 +121,21 @@ private:
+@@ -90,6 +123,21 @@ private:
      float mRespawnTime = 0.0f;
      bool mUpdateInputs = false;
      bool mMouseAimingEnabled = false;
@@ -3061,6 +3223,1303 @@ index dfc0703..a985b77 100644
      gConsole.RegisterVariable(&gCvarGraphicsTexFiltering);
      gConsole.RegisterVariable(&gCvarPhysicsFramerate);
      gConsole.RegisterVariable(&gCvarMemEnableFrameHeapAllocator);
+diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
+new file mode 100755
+index 0000000..050b77b
+--- /dev/null
++++ b/src/mission/CarnageMissionWorld.cpp
+@@ -0,0 +1,169 @@
++#include "../stdafx.h"
++#include "CarnageMissionWorld.h"
++#include "../GameObjectsManager.h"
++#include "../GameMapManager.h"
++#include "../CarnageGame.h"
++#include "../HumanPlayer.h"
++#include "../Convert.h"
++#include "../GameTextsManager.h"
++#include <cmath>
++#include <sstream>
++#include <limits>
++
++namespace mission {
++namespace {
++bool integer(const std::string& s,int& value) {
++    try {std::size_t n; long long v=std::stoll(s,&n);
++        if(n!=s.size() || v<INT32_MIN || v>INT32_MAX) return false;
++        value=static_cast<int>(v); return true;
++    } catch(const std::exception&) {return false;}
++}
++HumanPlayer* player(int owner) {
++    return owner>=0 && owner<4 ? gCarnageGame.mHumanPlayers[owner] : nullptr;
++}
++}
++CarnageMissionWorld::~CarnageMissionWorld() {Reset();}
++bool CarnageMissionWorld::OwnerValid(int owner) const {return owner>=0 && owner<4;}
++void CarnageMissionWorld::Once(const std::string& key,const std::string& text) {
++    if(logged_.insert(key).second)
++        gConsole.LogMessage(eLogMessage_Warning,"Mission: %s",text.c_str());
++}
++void CarnageMissionWorld::diagnostic(const Diagnostic& d) {
++    // Deduplicate scheduler notices, including repeated partial-process messages.
++    Once(d.code+":"+d.detail+":"+std::to_string(d.line),
++         d.code+" line "+std::to_string(d.line)+" slot "+std::to_string(d.slot)+": "+d.detail);
++}
++std::optional<glm::vec3> CarnageMissionWorld::ScriptPosition(int x,int y,int z) {
++    if(x<0 || y<0 || z<0 || x>=MAP_DIMENSIONS*64 || y>=MAP_DIMENSIONS*64 || z>=MAP_LAYERS_COUNT*64)
++        return {};
++    // Engine Y is vertical; GTA script Y is map south. No height snapping.
++    return Convert::MapUnitsToMeters(glm::vec3(x/64.0f,z/64.0f,y/64.0f));
++}
++std::optional<glm::vec3> CarnageMissionWorld::DeclarationPosition(const Record& r) {
++    // Only tuple-bearing declarations have map-cell coordinates. Never apply
++    // this transform to POWERUP_ON fixed point, runtime handles or operands.
++    std::string text=r.coordinates;
++    for(char& c:text) if(c=='(' || c==')' || c==',') c=' ';
++    std::istringstream in(text); int x,y,z; std::string extra;
++    if(!(in>>x>>y>>z) || (in>>extra) || x<0 || x>=MAP_DIMENSIONS ||
++       y<0 || y>=MAP_DIMENSIONS || z<0 || z>=MAP_LAYERS_COUNT) return {};
++    return ScriptPosition(x*64,y*64,z*64);
++}
++void CarnageMissionWorld::Prepare(const Section& section) {
++    for(const auto& r:section.declarations) if(r.token=="TELEPHONE") {
++        int id=0; auto pos=DeclarationPosition(r);
++        if(!integer(r.label,id) || !pos) {Once("bad-phone","Invalid telephone declaration"); continue;}
++        int facing=0;
++        if(r.operands.size()>1) integer(r.operands[1],facing);
++        phones_.emplace(id,Phone{*pos,facing});
++    }
++    if(!phones_.empty()) Once("phone-service","Phone anchors loaded; engine has no telephone object/answer service. ANSWER/MPHONE block safely.");
++}
++void CarnageMissionWorld::Reset() {
++    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
++    ownedObjects_.clear(); phones_.clear(); arrows_={}; logged_.clear();
++}
++void CarnageMissionWorld::Update(float dt) {
++    if(!std::isfinite(dt) || dt<0) return;
++    // Original combo/VM timers are update counts, not seconds.
++    for(int i=0;i<4;++i) if(player(i)) economy_.tickCombo(i);
++}
++void CarnageMissionWorld::postDispatch(int,Process&) {
++    // No fabricated death/arrest/global END or original 004749c0 transition.
++}
++std::int32_t CarnageMissionWorld::score(int owner) {return OwnerValid(owner)?economy_.score(owner):0;}
++void CarnageMissionWorld::reward(int owner,std::int32_t base) {if(OwnerValid(owner)) economy_.reward(owner,base);}
++void CarnageMissionWorld::incrementMultiplier(int owner) {if(OwnerValid(owner)) economy_.incrementMultiplier(owner);}
++std::optional<glm::vec3> CarnageMissionWorld::Arrow(int owner) const {
++    return OwnerValid(owner)?arrows_[owner]:std::nullopt;
++}
++GameObject* CarnageMissionWorld::ResolveObject(const Entity& e) const {
++    // Only handles allocated by this adapter are trusted; declaration values
++    // (models, counters) must never alias another engine object's ID.
++    if(!e.value || *e.value<0 || !ownedObjects_.count(static_cast<unsigned>(*e.value))) return nullptr;
++    auto* o=gGameObjectsManager.GetGameObjectByID(static_cast<unsigned>(*e.value));
++    return o && !o->IsMarkedForDeletion()?o:nullptr;
++}
++std::optional<glm::vec3> CarnageMissionWorld::ResolvePosition(const Entity& e) const {
++    if(auto* object=ResolveObject(e)) return object->mTransform.mPosition;
++    if(e.declaration.token=="POINT" || e.declaration.token=="TELEPHONE" || e.declaration.token=="LOCATION")
++        return DeclarationPosition(e.declaration);
++    return {};
++}
++Pedestrian* CarnageMissionWorld::SpawnPedestrian(const glm::vec3& position,int remap) {
++    if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded() || remap!=NO_REMAP) {
++        Once("ped-spawn","Ped spawn requires loaded style and NO_REMAP; unverified palettes rejected"); return nullptr;
++    }
++    auto* ped=gGameObjectsManager.CreatePedestrian(position,cxx::angle_t::from_degrees(0),ePedestrianType_Civilian,remap);
++    if(ped) ownedObjects_.insert(ped->mObjectID);
++    return ped;
++}
++Vehicle* CarnageMissionWorld::SpawnVehicle(const glm::vec3& position,int model,int heading) {
++    if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return nullptr;
++    // Descriptor overload avoids the enum overload's assert on absent models.
++    for(auto& desc:gGameMap.mStyleData.mVehicles) if(static_cast<int>(desc.mModelID)==model) {
++        auto* car=gGameObjectsManager.CreateVehicle(position,-Convert::Fix16ToAngle(static_cast<unsigned short>(heading)),&desc);
++        if(car) ownedObjects_.insert(car->mObjectID);
++        return car;
++    }
++    Once("vehicle-model:"+std::to_string(model),"Vehicle model absent from current style"); return nullptr;
++}
++WorldResult CarnageMissionWorld::execute(WorldRequest& r) {
++    const auto& token=r.token; auto& i=r.instruction;
++    auto found=r.entities.find(i.A);
++    auto* entity=found==r.entities.end()?nullptr:&found->second;
++    if(!OwnerValid(r.owner)) {Once("owner","Invalid mission owner"); return WorldResult::Unresolved;}
++    if(token=="MESSAGE_BRIEF" || token=="BRIEF" || token=="P_BRIEF" || token=="P_BRIEF_TIMED" ||
++       token=="MOBILE_BRIEF" || token=="SPEECH_BRIEF" || token=="FRENZY_BRIEF" ||
++       token=="ARMEDMESS" || token=="DISARMMESS") {
++        std::string key=token=="ARMEDMESS"?"bomb_on":token=="DISARMMESS"?"bomb_off":std::to_string(i.E);
++        if(auto* p=player(r.owner)) p->mHUD.ShowMissionText(gGameTexts.GetText(key));
++        // Presentation only. Voice playback, original duration and briefing globals
++        // do not exist in this engine; no invented seconds conversion.
++        Once("brief-presentation","Mission text uses HUD big-font presentation; speech and briefing duration unsupported");
++        return token=="FRENZY_BRIEF"?WorldResult::Success:WorldResult::Done;
++    }
++    if(token=="ARROW_OFF" || token=="RED_ARROW_OFF") {arrows_[r.owner].reset(); return WorldResult::Done;}
++    if(token=="ARROW" || token=="RED_ARROW" || token=="ARROWCAR" || token=="ARROWPED") {
++        if(i.A==-1) {arrows_[r.owner].reset(); return WorldResult::Done;}
++        if(entity) if(auto position=ResolvePosition(*entity)) {
++            // E1c aligns both XY coordinates only when both are whole cells.
++            auto cell=Convert::MetersToMapUnits(glm::vec2(position->x,position->z));
++            if(cell.x==std::floor(cell.x) && cell.y==std::floor(cell.y)) {
++                position->x+=Convert::MapUnitsToMeters(0.5f); position->z+=Convert::MapUnitsToMeters(0.5f);
++            }
++            arrows_[r.owner]=position;
++            Once("arrow-render","Mission target uses projected HUD pointer; offscreen compass/red palette unsupported");
++            return WorldResult::Done;
++        }
++        // Original ARROWCAR/PED skip invalid handles and still succeed.
++        if(token=="ARROWCAR" || token=="ARROWPED") return WorldResult::Done;
++        Once("arrow-location","Mission arrow location unresolved"); return WorldResult::Unresolved;
++    }
++    if(token=="BANK_ROBBERY") {
++        economy_.bankRobbery(r.owner);
++        if(i.A>=0) Once("crime9-gate","BANK_ROBBERY crime9 witness/ownership gate unresolved; direct +1000/level4 applied");
++        return WorldResult::Done;
++    }
++    // Guarded effects with known VM failure contracts; do not guess engine health.
++    if((token=="KILL_DROP" || token=="REMAP_PED" || token=="CLOSE_DOOR") &&
++       (!entity || !entity->value || *entity->value<0)) return WorldResult::Failure;
++    if(token=="KILL_PED" && (!entity || entity->type!=99 || !entity->value || *entity->value<0))
++        return WorldResult::Failure;
++    // No broad success fallback: VM blocks unresolved commands after one dispatch.
++    Once("execute:"+token,"Unsupported world command "+token+" ("+r.evidence+")");
++    return WorldResult::Unresolved;
++}
++std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
++    if(r.token=="GOTO") {
++        auto at=r.entities.find(r.instruction.A); auto* p=player(r.owner);
++        if(at!=r.entities.end() && p && p->mCharacter) if(auto target=ResolvePosition(at->second)) {
++            const auto current=Convert::MetersToMapUnits(glm::vec2(p->mCharacter->mTransform.mPosition.x,p->mCharacter->mTransform.mPosition.z));
++            const auto goal=Convert::MetersToMapUnits(glm::vec2(target->x,target->z));
++            return std::floor(current.x)==std::floor(goal.x) && std::floor(current.y)==std::floor(goal.y);
++        }
++    }
++    Once("predicate:"+r.token,"Unsupported mission predicate "+r.token+"; engine health/state is not original script health/state");
++    return {};
++}
++}
+diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
+new file mode 100755
+index 0000000..2747733
+--- /dev/null
++++ b/src/mission/CarnageMissionWorld.h
+@@ -0,0 +1,46 @@
++#pragma once
++#include "MissionVM.h"
++#include "GameEconomy.h"
++#include <array>
++#include <set>
++#include <glm/vec3.hpp>
++class GameObject;
++class Pedestrian;
++class Vehicle;
++namespace mission {
++// Engine headers other than GLM intentionally stay in the implementation.
++class CarnageMissionWorld final: public IMissionWorld {
++public:
++    explicit CarnageMissionWorld(gta::GameEconomy& economy): economy_(economy) {}
++    ~CarnageMissionWorld() override;
++    WorldResult execute(WorldRequest&) override;
++    std::optional<bool> predicate(const WorldRequest&) override;
++    std::int32_t score(int owner) override;
++    void reward(int owner,std::int32_t base) override;
++    void incrementMultiplier(int owner) override;
++    void postDispatch(int,Process&) override;
++    void diagnostic(const Diagnostic&) override;
++    void Reset(); // call before map objects are destroyed
++    void Prepare(const Section&);
++    void Update(float dt);
++    struct Phone { glm::vec3 position; int facing=0; }; // script world anchors, not fake object handles
++    const std::map<int,Phone>& Phones() const {return phones_;}
++    std::optional<glm::vec3> Arrow(int owner) const;
++    // Explicit engine creation primitives. Callers must prove declaration/type/AI policy.
++    Pedestrian* SpawnPedestrian(const glm::vec3& position,int remap);
++    Vehicle* SpawnVehicle(const glm::vec3& position,int model,int heading);
++    // GTA declaration tuples are map cells. Resolved opcode XYZ are 1/64 cells.
++    static std::optional<glm::vec3> DeclarationPosition(const Record&);
++    static std::optional<glm::vec3> ScriptPosition(int x,int y,int z);
++private:
++    gta::GameEconomy& economy_;
++    std::set<std::string> logged_;
++    std::map<int,Phone> phones_;
++    std::set<unsigned int> ownedObjects_;
++    std::array<std::optional<glm::vec3>,4> arrows_{};
++    bool OwnerValid(int) const;
++    void Once(const std::string&,const std::string&);
++    GameObject* ResolveObject(const Entity&) const;
++    std::optional<glm::vec3> ResolvePosition(const Entity&) const;
++};
++}
+diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
+new file mode 100755
+index 0000000..b00395b
+--- /dev/null
++++ b/src/mission/CommandTable.inc
+@@ -0,0 +1,151 @@
++// Generated from ../exe-spec/command_table.json; no runtime JSON dependency.
++{"LOCATE_STOPPED", "0043e980", false}, // 0
++{"DESTROY", "0043ed90", true}, // 1
++{"ANSWER", "0043ef80", true}, // 2
++{"STEAL", "0043f360", true}, // 3
++{"SURVIVE", "004472fb", true}, // 4
++{"HUNTON", "0044733f", false}, // 5
++{"HUNTOFF", "004473b6", false}, // 6
++{"DRIVEON", "004749c0", false}, // 7
++{"DUMMYON", "0044747e", false}, // 8
++{"SENDTO", "0043f760", false}, // 9
++{"END", "0044750a", true}, // 10
++{"MAKEOBJ", "0043f950", false}, // 11
++{"EXPLODE", "00447654", true}, // 12
++{"OBTAIN", "0044756b", false}, // 13
++{"THROW", "004475e7", false}, // 14
++{"BRIEF", "00447259", true}, // 15
++{"MPHONE", "0043fb20", true}, // 16
++{"DONOWT", "004749c0", true}, // 17
++{"DISABLE", "004476ef", true}, // 18
++{"ENABLE", "00447752", true}, // 19
++{"DECCOUNT", "00447826", true}, // 20
++{"GOTO", "0043eb50", true}, // 21
++{"CRANE", "00440040", true}, // 22
++{"PARK", "004407c0", true}, // 23
++{"SETBOMB", "004477b8", true}, // 24
++{"ESCORT", "004473d9", false}, // 25
++{"ARROW", "00447867", true}, // 26
++{"LOCK_DOOR", "004477e2", false}, // 27
++{"UNLOCK_DOOR", "00447804", false}, // 28
++{"EXPL_LAST", "004478f9", false}, // 29
++{"DROP_ON", "00447935", true}, // 30
++{"PED_ON", "00441600", true}, // 31
++{"KILL_DROP", "00447a0f", true}, // 32
++{"CAR_ON", "00441cd0", false}, // 33
++{"ARMEDMESS", "00447a6b", true}, // 34
++{"DISARMMESS", "00447a85", true}, // 35
++{"ARROW_OFF", "00481a00", true}, // 36
++{"P_BRIEF", "00447aa9", true}, // 37
++{"PED_SENDTO", "00441fd0", true}, // 38
++{"WAIT_FOR_PED", "00447b2d", true}, // 39
++{"PED_BACK", "00447bae", true}, // 40
++{"SETUP_REPO", "00447c70", false}, // 41
++{"DO_REPO", "004421a0", false}, // 42
++{"KILL_OBJ", "00447cab", true}, // 43
++{"DO_GTA", "00447d12", true}, // 44
++{"MISSION_END", "0044a569", true}, // 45
++{"EXPLODE_CAR", "00447dae", false}, // 46
++{"START_MODEL", "004423f0", false}, // 47
++{"DO_MODEL", "004427c0", false}, // 48
++{"RETURN_CONTROL", "00442ca0", false}, // 49
++{"KILL_CAR", "00447e07", true}, // 50
++{"ARROWPED", "00447e5c", true}, // 51
++{"ARROWCAR", "00447e8f", true}, // 52
++{"REMAP_PED", "00447ec2", true}, // 53
++{"REMAP_CAR", "00447f29", false}, // 54
++{"ARE_BOTH_ONSCREEN", "00447f6a", false}, // 55
++{"THROW_TO_POINT", "00447ff2", false}, // 56
++{"GOTO_DROPOFF", "00442fc0", true}, // 57
++{"MODEL_HUNT", "004431d0", false}, // 58
++{"MODEL_FUTURE", "00443440", false}, // 59
++{"STARTUP", "004480af", true}, // 60
++{"CHECK_PEDBACK", "00447c1c", false}, // 61
++{"START_HIRED_ESC", "0044811b", false}, // 62
++{"DUMMY_OFF", "00448192", false}, // 63
++{"POWERUP_ON", "004481cb", true}, // 64
++{"PLAIN_EXPL_BUILDING", "004482bb", true}, // 65
++{"CHANGE_BLOCK", "0044834c", false}, // 66
++{"CHANGE_TYPE", "004483c9", false}, // 67
++{"P_BRIEF_TIMED", "0044846a", true}, // 68
++{"CHANGE_PED_TYPE", "00443690", true}, // 69
++{"DOOR_ON", "004484dd", true}, // 70
++{"DOOR_OFF", "0044850a", true}, // 71
++{"WRECK_CURR_TRAIN", "00448537", false}, // 72
++{"OPEN_DOOR", "0044857b", false}, // 73
++{"CLOSE_DOOR", "004485a8", true}, // 74
++{"PED_OUT_OF_CAR", "00443a90", false}, // 75
++{"BANK_ROBBERY", "0044860f", true}, // 76
++{"DELAY_CRIME", "004486a4", false}, // 77
++{"GET_DRIVER_INFO", "00443f20", false}, // 78
++{"KILL_PED", "004445d0", true}, // 79
++{"BANK_ALARM_ON", "00448709", true}, // 80
++{"BANK_ALARM_OFF", "0044876a", true}, // 81
++{"GARAGE_SEND", "00448847", false}, // 82
++{"DUMMY_DRIVE_ON", "0043f580", false}, // 83
++{"PLAYER_ARE_BOTH_ONSCREEN", "004488fb", true}, // 84
++{"CHECK_CAR", "00448a10", true}, // 85
++{"WAIT_FOR_PLAYER", "00448c0b", false}, // 86
++{"EXPL_PED", "00448d09", false}, // 87
++{"PARKED_ON", "00448d6a", true}, // 88
++{"KICKSTART", "00448edd", true}, // 89
++{"IS_PED_IN_CAR", "00449884", true}, // 90
++{"CANCEL_BRIEFING", "00449a0b", true}, // 91
++{"FREEZE_TIMED", "00449aa8", true}, // 92
++{"FREEZE_ENTER", "00449aba", true}, // 93
++{"UNFREEZE_ENTER", "00449ac7", true}, // 94
++{"EXPL_NO_FIRE", "00449ad4", false}, // 95
++{"KILL_PROCESS", "0044919d", true}, // 96
++{"NEXT_KICK", "0044904c", false}, // 97
++{"KILL_SIDE_PROC", "004493c1", true}, // 98
++{"SET_KILLTRIG", "00449b32", false}, // 99
++{"POWERUP_OFF", "0044824a", false}, // 100
++{"KILL_SPEC_PROC", "004495ea", true}, // 101
++{"SCORE_CHECK", "00449ba4", true}, // 102
++{"FRENZY_SET", "00449bed", true}, // 103
++{"FRENZY_CHECK", "00449c1b", true}, // 104
++{"IS_GOAL_DEAD", "00449c6d", true}, // 105
++{"GENERAL_ONSCREEN", "00449d08", true}, // 106
++{"GET_CAR_INFO", "00449d80", false}, // 107
++{"START_CHOPPER", "00449f46", false}, // 108
++{"LOCATE", "00449e31", false}, // 109
++{"SPEECH_BRIEF", "00449f33", true}, // 110
++{"MOBILE_BRIEF", "00449f20", true}, // 111
++{"PIXEL_CAR_ON", "00449fdf", false}, // 112
++{"SET_NO_COLLIDE", "0044a16a", false}, // 113
++{"PED_WEAPON", "0044a18d", false}, // 114
++{"FREEUP_CAR", "0044a1b7", false}, // 115
++{"MESSAGE_BRIEF", "0044a1ea", true}, // 116
++{"PARKED_PIXELS_ON", "0044a230", false}, // 117
++{"PED_POLICE", "0044a320", false}, // 118
++{"DROP_WANTED_LEVEL", "0044a37c", true}, // 119
++{"IS_PED_ARRESTED", "0044a3c0", true}, // 120
++{"HELL_ON", "0044a410", true}, // 121
++{"XXXX", "004749c0", false}, // 122
++{"XXXX", "004749c0", false}, // 123
++{"SET_PED_SPEED", "0044a583", true}, // 124
++{"IS_PLAYER_ON_TRAIN", "0044a5b9", true}, // 125
++{"WRECK_A_TRAIN", "0044a5fe", true}, // 126
++{"INCCOUNT", "0044a620", true}, // 127
++{"COMPARE", "0044a663", true}, // 128
++{"RESET", "0044a6ad", true}, // 129
++{"KEEP_THIS_PROC", "0044a6e0", true}, // 130
++{"SET_COLLIDE", "0044a6ed", false}, // 131
++{"DEAD_ARRESTED", "0044a710", true}, // 132
++{"IS_POWERUP_DONE", "004448a0", true}, // 133
++{"STOP_FRENZY", "0044a773", true}, // 134
++{"FRENZY_BRIEF", "00444180", true}, // 135
++{"ADD_A_LIFE", "004442b0", false}, // 136
++{"KF_BRIEF_TIMED", "004443d0", false}, // 137
++{"KF_CANCEL_BRIEFING", "004444b0", false}, // 138
++{"KF_BRIEF_GENERAL", "00444b60", false}, // 139
++{"KF_CANCEL_GENERAL", "00444c40", false}, // 140
++{"KF_PROCESS", "0043d150", true}, // 141
++{"RESET_KF", "00444d60", true}, // 142
++{"WAIT_FOR_PLAYERS", "00444f30", false}, // 143
++{"RED_ARROW", "00441320", true}, // 144
++{"RESET_WITH_BRIEFS", "0044a7f4", false}, // 145
++{"RED_ARROW_OFF", "004414e0", true}, // 146
++{"IS_A_TRAIN_WRECKED", "004450f0", false}, // 147
++{"INC_HEADS", "00445290", false}, // 148
++{"IS_PED_STUNNED", "004453c0", false}, // 149
+diff --git a/src/mission/GameEconomy.cpp b/src/mission/GameEconomy.cpp
+new file mode 100755
+index 0000000..4db4a54
+--- /dev/null
++++ b/src/mission/GameEconomy.cpp
+@@ -0,0 +1,166 @@
++#include "GameEconomy.h"
++#include <stdexcept>
++
++namespace gta {
++namespace {
++// Portable signed reinterpretation; avoid implementation-defined unsigned casts.
++std::int32_t s32(std::uint32_t u) {
++    return u<=0x7fffffffu ? static_cast<std::int32_t>(u)
++        : -1-static_cast<std::int32_t>(0xffffffffu-u);
++}
++std::int16_t s16(std::uint16_t u) {
++    return static_cast<std::int16_t>(u<=0x7fffu ? static_cast<int>(u)
++        : -1-static_cast<int>(0xffffu-u));
++}
++// Complete numeric event factors from switch00462000; names intentionally unknown.
++// SPEC_SCORE.md:47-73. Exceptional 24/26/default handled before Q multiplication.
++std::uint32_t factor(std::int32_t id) {
++    switch(id) {
++    case 1:case 3:case 4:case 7:case 8:case 9:case 14:case 15:
++    case 20:case 27:case 28:case 30:case 33:case 38:case 39:return 100;
++    case 2:case 21:case 37:case 45:return 1000;
++    case 5:case 13:return 500;
++    case 6:case 18:case 36:return 150;
++    case 10:case 11:case 25:return 10000;
++    case 12:return 5000;
++    case 16:case 17:return 10;
++    case 22:case 23:return 0;
++    case 29:case 31:return 50;
++    case 32:case 35:return 250;
++    case 34:return 200;
++    case 40:case 41:case 42:return 300;
++    case 43:return 500000;
++    default:return 100;
++    }
++}
++std::uint32_t methodFactor(int method) {
++    // 00462000 entry switch; SPEC_SCORE.md:42.
++    switch(method) {
++    case 2:return 3;
++    case 3:case 7:case 8:return 10;
++    case 4:return 7;
++    case 5:case 6:return 2;
++    default:return 1;
++    }
++}
++}
++EconomyState& GameEconomy::state(int owner) {
++    if(owner<0) throw std::out_of_range("negative economy owner");
++    return players_.at(static_cast<std::size_t>(owner));
++}
++const EconomyState& GameEconomy::state(int owner) const {
++    if(owner<0) throw std::out_of_range("negative economy owner");
++    return players_.at(static_cast<std::size_t>(owner));
++}
++std::int32_t GameEconomy::score(int owner) const {return state(owner).score;}
++std::int32_t GameEconomy::reward(int owner,std::int32_t base) {
++    auto& p=state(owner);
++    const auto amount=static_cast<std::uint32_t>(base)*p.multiplier;
++    p.score=s32(static_cast<std::uint32_t>(p.score)+amount);
++    // 00461f20: signed comparison AFTER x86 wrapping; no lower clamp.
++    if(p.score>999999999) p.score=999999999;
++    return s32(amount);
++}
++void GameEconomy::deduct(int owner,std::int32_t cost) {
++    auto& p=state(owner);
++    p.score=s32(static_cast<std::uint32_t>(p.score)-static_cast<std::uint32_t>(cost));
++    if(p.score<0) p.score=0; // 00461f90; cost is not multiplied
++}
++void GameEconomy::incrementMultiplier(int owner) {
++    ++state(owner).multiplier; // 00463070 uint16 addition, no cap
++}
++void GameEconomy::halveMultiplier(int owner) {
++    auto& m=state(owner).multiplier;
++    m>>=1; if(m==0) m=1; // 00464be0
++}
++void GameEconomy::missionEnd(int owner,std::int32_t e) {
++    if(e>0) reward(owner,e); // 0043e450; old multiplier first
++    incrementMultiplier(owner); // 0044a569, even when E<=0
++}
++EventAward GameEconomy::event(int owner,std::int32_t id,int method) {
++    auto& p=state(owner);
++    if(p.previousEvent==id) ++p.run;
++    else {p.previousEvent=id; p.run=1;}
++    p.expiry=13; // 00462000; update-count expiry, 00464880
++    const auto run=s16(p.run); // raw00462000 sign-extends run
++    auto q=static_cast<std::uint32_t>(static_cast<std::int32_t>(run));
++    auto t=methodFactor(method);
++    if(id==1) q*=t;
++    else {
++        // Raw00462000 doubles only while signed(run)-1>0. Unsigned
++        // multiply deliberately emulates x86 overflow, including V<=1 fallback.
++        for(int i=1;i<run;++i) t*=2;
++        if(s32(t)>1) q=t;
++    }
++    std::uint32_t base;
++    if(id==24) base=static_cast<std::uint32_t>(static_cast<std::int32_t>(p.event24Value))*10; // 00462000
++    else if(id==26) base=20; // 00462000, independent of Q
++    else if(id<1 || id>45 || id==19 || id==44) base=100; // default00462000
++    else base=q*factor(id);
++    EventAward result;
++    result.primary=reward(owner,s32(base));
++    if(id==7 && run==7) { // 00462000, text key004b221c
++        result.bonusTriggered=true;
++        result.bonus=reward(owner,12300); // 0x300c; separate award/clamp
++    }
++    return result;
++}
++void GameEconomy::tickCombo(int owner) {
++    auto& p=state(owner);
++    // 00464880 signed short countdown; clear at expiry<1.
++    if(s16(p.expiry)>0) --p.expiry;
++    if(s16(p.expiry)<1) {p.previousEvent=0; p.run=0;}
++}
++void GameEconomy::addLife(int owner) {
++    auto& n=state(owner).lives;
++    if(n!=99 && n!=255) ++n; // 004630b0; -1 sentinel is raw0xff
++}
++bool GameEconomy::consumeLife(int owner) {
++    auto& n=state(owner).lives;
++    // 00463100 signed byte tail: all negative bytes except -1 fail unchanged.
++    if(n==0 || n>=128) return n==255;
++    --n; return true;
++}
++void GameEconomy::resetState2(int owner) {
++    auto& p=state(owner);
++    if(!p.skipPenaltyOnce) halveMultiplier(owner); // 00464880/00464be0
++    p.skipPenaltyOnce=false;
++    clearWanted(owner); // 00464880, independent of exemption
++}
++void GameEconomy::addWantedPoints(int owner,std::int32_t delta) {
++    auto& n=state(owner).wantedPoints;
++    n=s16(static_cast<std::uint16_t>(static_cast<std::uint32_t>(n)+static_cast<std::uint16_t>(delta)));
++    if(n>2000) n=2000; // 004617e0 signed16 post-wrap cap; no lower clamp
++}
++void GameEconomy::clearWanted(int owner) {
++    auto& p=state(owner); p.wantedPoints=0; p.wantedLevel=0; // 004617a0/00461890
++}
++void GameEconomy::setWantedLevel(int owner,std::int32_t level) {
++    state(owner).wantedLevel=level; // 00461910 no clamp
++}
++int GameEconomy::classifyWanted(std::int16_t points,bool forceZero) {
++    // 004133c0; forceZero represents unresolved global00503184.
++    if(forceZero || points<151) return 0;
++    if(points<251) return 1;
++    if(points<351) return 2;
++    return 3+(points>500);
++}
++void GameEconomy::classifyWantedNow(int owner,bool forceZero) {
++    auto& p=state(owner); p.wantedLevel=classifyWanted(p.wantedPoints,forceZero);
++}
++bool GameEconomy::acceptedCrime(int owner,int crime) {
++    // 004136c0; SPEC_POLICE_LIVES.md:41-48. Record minimum3/6
++    // is deliberately NOT assigned to player wantedLevel.
++    static constexpr int deltas[]={2,50,10,15,50,1,100,100};
++    if(crime<2 || crime>9) return false;
++    addWantedPoints(owner,deltas[crime-2]); return true;
++}
++void GameEconomy::bankRobbery(int owner) {
++    addWantedPoints(owner,1000); setWantedLevel(owner,4); // opcode76/0044860f
++}
++void GameEconomy::witnessEscalation(int owner,int section) {
++    auto& p=state(owner);
++    p.wantedPoints=(section==1 || section==2)?152:102; // 004136c0 witness branch
++    if(p.wantedLevel==0) p.wantedLevel=1;
++}
++}
+diff --git a/src/mission/GameEconomy.h b/src/mission/GameEconomy.h
+new file mode 100755
+index 0000000..124323a
+--- /dev/null
++++ b/src/mission/GameEconomy.h
+@@ -0,0 +1,59 @@
++#pragma once
++#include <cstddef>
++#include <cstdint>
++#include <vector>
++
++namespace gta {
++// Recovered fields; raw byte/word storage preserves executable wrapping.
++struct EconomyState {
++    std::int32_t score=0;             // 0074f23c; normal init 00463290
++    std::uint16_t multiplier=1;        // 0074f240; normal init 00463290
++    std::int32_t previousEvent=0;      // 0074f2b8; cleared by 00464880
++    std::uint16_t run=0, expiry=0;      // 0074f2bc/0074f2b4
++    std::int16_t event24Value=0;        // 0074f2c8; caller-owned input
++    std::int16_t wantedPoints=0;       // 0074f298; 004617e0
++    std::int32_t wantedLevel=0;        // 0074f29c; 00461910
++    std::uint8_t lives=4;              // 0074f2df; normal-mode init 00463290
++    bool skipPenaltyOnce=false;        // 0074f242; 00464880
++};
++struct EventAward {
++    std::int32_t primary=0, bonus=0; // display amounts BEFORE score clamp
++    bool bonusTriggered=false;      // text key 004b221c, event7/run7
++};
++class GameEconomy {
++public:
++    // One record per explicitly participating player; no guessed maximum.
++    explicit GameEconomy(std::size_t participants): players_(participants) {}
++    EconomyState& state(int owner);
++    const EconomyState& state(int owner) const;
++    std::int32_t score(int owner) const;
++    // VM-compatible calls. reward implements primitive even for negative bases;
++    // VM is responsible for only paying positive E on decoded reward paths.
++    std::int32_t reward(int owner,std::int32_t base);
++    void deduct(int owner,std::int32_t cost);
++    void incrementMultiplier(int owner);
++    void halveMultiplier(int owner);
++    void missionEnd(int owner,std::int32_t e);
++    EventAward event(int owner,std::int32_t eventID,int methodID);
++    void tickCombo(int owner); // update count; NOT seconds
++    void addLife(int owner);
++    bool consumeLife(int owner); // life-counter tail only, no inventory cleanup
++    void resetState2(int owner); // economy subset; caller proves state2 entered
++    void addWantedPoints(int owner,std::int32_t delta);
++    void clearWanted(int owner);
++    void setWantedLevel(int owner,std::int32_t level);
++    static int classifyWanted(std::int16_t points,bool forceZero=false);
++    void classifyWantedNow(int owner,bool forceZero=false);
++    // Caller MUST first apply original ownership/witness/duplicate gates.
++    // Only points, not score or police-record mutations. Unknown ID -> false.
++    bool acceptedCrime(int owner,int crimeID);
++    void bankRobbery(int owner); // opcode76 direct effect; crime9 separately gated
++    void witnessEscalation(int owner,int section); // caller proves witness branch
++    static constexpr bool hasUnresolvedRules=true;
++    // TODO-evidence:004136c0 gates/vehicle mapping;00464880 reset entry;
++    // 004133c0 classifier cadence;004601a0/00460500 fees/respawn;
++    // 00462000 local audio/frenzy effects; natural wanted decay untraced.
++private:
++    std::vector<EconomyState> players_;
++};
++}
+diff --git a/src/mission/MissionScript.cpp b/src/mission/MissionScript.cpp
+new file mode 100755
+index 0000000..1d41912
+--- /dev/null
++++ b/src/mission/MissionScript.cpp
+@@ -0,0 +1,86 @@
++#include "MissionScript.h"
++#include <regex>
++#include <sstream>
++#include <stdexcept>
++#include <utility>
++
++namespace mission {
++namespace {
++std::string trim(const std::string& s) {
++    const auto first = s.find_first_not_of(" \t\r\n");
++    if (first == std::string::npos) return {};
++    return s.substr(first, s.find_last_not_of(" \t\r\n") - first + 1);
++}
++void tally(Inventory& inventory, const std::string& token, std::size_t line) {
++    auto& entry = inventory[token];
++    if (entry.count == 0) entry.firstLine = line;
++    ++entry.count;
++}
++std::vector<std::string> words(const std::string& text) {
++    std::istringstream input(text);
++    std::vector<std::string> result;
++    for (std::string word; input >> word;) result.push_back(word);
++    return result;
++}
++}
++MissionScript MissionScript::parse(std::istream& input) {
++    const std::regex header(R"(^\[([^\[\]]+)\]$)");
++    const std::regex declaration(R"(^([0-9]+)\s+(?:([+-]?[0-9]+)\s*)?(\([^()]*\))\s+([A-Z_][A-Z_0-9]*)(\s.*)?$)");
++    const std::regex instruction(R"(^([0-9]+)\s+([A-Z_][A-Z_0-9]*)(\s.*)?$)");
++    const std::regex title(R"(^[^,]+,\s*[0-9]+,\s*[^,\s]+\.[cC][mM][pP],\s*[+-]?[0-9]+,\s*$)");
++    const std::regex config(R"(^[0-9]+(?:\s+[0-9]+){5}$)");
++    // A fused terminator/header is retained as a marker, not silently repaired.
++    const std::regex marker(R"(^-1(?:\[[^\[\]]+\])?$)");
++    MissionScript result;
++    for (std::string raw; std::getline(input, raw);) {
++        const auto line = ++result.lineCount;
++        auto text = trim(raw);
++        if (text.empty()) continue;
++        if (text == std::string(1, '\x1a')) {
++            if (!result.sections.empty()) result.sections.back().markers.push_back({line, raw});
++            else result.unparsed.push_back({line, raw});
++            continue;
++        }
++        std::smatch match;
++        if (std::regex_match(text, match, header)) {
++            Section section;
++            section.line = line; section.raw = raw; section.name = match[1].str();
++            result.sections.push_back(std::move(section));
++            continue;
++        }
++        if (result.sections.empty()) { result.unparsed.push_back({line, raw}); continue; }
++        auto& section = result.sections.back();
++        // Match against left-trimmed input to keep trailing operand whitespace exact.
++        auto body = raw.substr(raw.find_first_not_of(" \t"));
++        if (!body.empty() && body.back() == '\r') body.pop_back();
++        bool isDeclaration = std::regex_match(body, match, declaration);
++        if (isDeclaration || std::regex_match(body, match, instruction)) {
++            Record record;
++            record.line = line; record.raw = raw; record.label = match[1].str();
++            if (isDeclaration) {
++                record.prefix = match[2].str(); record.coordinates = match[3].str();
++                record.token = match[4].str(); record.rawOperands = match[5].str();
++            } else { record.token = match[2].str(); record.rawOperands = match[3].str(); }
++            record.operands = words(record.rawOperands);
++            tally(section.tokens, record.token, line); tally(result.tokens, record.token, line);
++            if (isDeclaration) section.declarations.push_back(std::move(record));
++            else {
++                section.instructionsByLabel[record.label].push_back(section.instructions.size());
++                section.instructions.push_back(std::move(record));
++            }
++        } else if (std::regex_match(text, marker)) section.markers.push_back({line, raw});
++        else if (std::regex_match(text, title) || std::regex_match(text, config)) section.metadata.push_back({line, raw});
++        else result.unparsed.push_back({line, raw});
++    }
++    if (input.bad() || (input.fail() && !input.eof())) throw std::runtime_error("MISSION input read failure");
++    return result;
++}
++void writeUnsupportedReport(const MissionScript& script, std::ostream& out) {
++    for (const auto& section : script.sections) {
++        out << "## [" << section.name << "]\n\nToken | Count | First line | Execution\n--- | ---: | ---: | ---\n";
++        for (const auto& item : section.tokens)
++            out << item.first << " | " << item.second.count << " | " << item.second.firstLine << " | unsupported\n";
++        out << '\n';
++    }
++}
++}
+diff --git a/src/mission/MissionScript.h b/src/mission/MissionScript.h
+new file mode 100755
+index 0000000..6c8003b
+--- /dev/null
++++ b/src/mission/MissionScript.h
+@@ -0,0 +1,41 @@
++#pragma once
++#include <cstddef>
++#include <istream>
++#include <map>
++#include <ostream>
++#include <string>
++#include <vector>
++
++namespace mission {
++struct SourceLine { std::size_t line = 0; std::string raw; };
++struct Record : SourceLine {
++    std::string label;
++    std::string token;
++    std::vector<std::string> operands;
++    std::string rawOperands;
++    // Empty for instructions. Preserved, never converted or interpreted.
++    std::string coordinates;
++    std::string prefix; // Optional integer between declaration label and tuple.
++};
++struct TokenCount { std::size_t count = 0; std::size_t firstLine = 0; };
++using Inventory = std::map<std::string, TokenCount>;
++struct Section : SourceLine {
++    std::string name;
++    std::vector<Record> declarations;
++    std::vector<Record> instructions;
++    // Lexical label -> all indices in instructions (duplicates retained).
++    std::map<std::string, std::vector<std::size_t>> instructionsByLabel;
++    Inventory tokens;
++    std::vector<SourceLine> metadata;
++    std::vector<SourceLine> markers;
++};
++struct MissionScript {
++    std::vector<Section> sections;
++    Inventory tokens;
++    std::vector<SourceLine> unparsed;
++    std::size_t lineCount = 0;
++    static MissionScript parse(std::istream& input);
++};
++// No execution support exists: all observed tokens are reported unsupported.
++void writeUnsupportedReport(const MissionScript&, std::ostream&);
++}
+diff --git a/src/mission/MissionSession.cpp b/src/mission/MissionSession.cpp
+new file mode 100755
+index 0000000..3813ea8
+--- /dev/null
++++ b/src/mission/MissionSession.cpp
+@@ -0,0 +1,62 @@
++#include "../stdafx.h"
++#include "MissionSession.h"
++#include "../FileSystem.h"
++#include "../CarnageGame.h"
++#include "../HumanPlayer.h"
++#include "../cvars.h"
++#include <algorithm>
++#include <cctype>
++#include <cmath>
++#include <fstream>
++namespace mission {
++namespace {
++MissionSession* current=nullptr;
++std::string normalized(std::string s) {
++    const auto begin=s.find_first_not_of(" \t\r\n");
++    if(begin==std::string::npos) return {};
++    s=s.substr(begin,s.find_last_not_of(" \t\r\n")-begin+1);
++    const auto slash=s.find_last_of("/\\"); if(slash!=std::string::npos) s=s.substr(slash+1);
++    std::transform(s.begin(),s.end(),s.begin(),[](unsigned char c){return std::tolower(c);}); return s;
++}
++}
++MissionSession* MissionSession::Current() {return current;}
++void MissionSession::SetCurrent(MissionSession* p) {current=p;}
++void MissionSession::Stop() {loaded_=false; world_.Reset();}
++bool MissionSession::LoadSection(int section) {
++    Stop(); economy_=gta::GameEconomy(4); script_={};
++    std::ifstream input;
++    // FileSystem searches g_data first; Android sets it to the imported GTADATA.
++    if(!gFiles.OpenTextFile("MISSION.INI",input)) {
++        world_.diagnostic({"load","MISSION.INI missing in configured GTADATA",0,-1}); return false;
++    }
++    script_=MissionScript::parse(input);
++    for(const auto& line:script_.unparsed)
++        world_.diagnostic({"parser-unparsed",line.raw,line.line,-1});
++    auto it=std::find_if(script_.sections.begin(),script_.sections.end(),[&](const Section& s){return s.name==std::to_string(section);});
++    if(it==script_.sections.end()) {world_.diagnostic({"load","Section not found",0,-1}); return false;}
++    bool mapMatches=false;
++    for(const auto& m:it->metadata) {
++        auto first=m.raw.find(','); if(first==std::string::npos) continue;
++        auto second=m.raw.find(',',first+1); auto third=m.raw.find(',',second==std::string::npos?m.raw.size():second+1);
++        if(second!=std::string::npos && third!=std::string::npos)
++            mapMatches=mapMatches||normalized(m.raw.substr(second+1,third-second-1))==normalized(gCvarMapname.mValue);
++    }
++    if(!mapMatches) {world_.diagnostic({"load","Section map does not match g_mapname="+gCvarMapname.mValue,it->line,-1}); return false;}
++    auto report=vm_.load(*it);
++    for(const auto& d:report.diagnostics) if(d.code=="load-invalid") return false;
++    world_.Prepare(*it);
++    for(int i=0;i<4;++i) if(gCarnageGame.mHumanPlayers[i] && gCarnageGame.mHumanPlayers[i]->mCharacter)
++        loaded_=vm_.start(i)||loaded_;
++    if(!loaded_) world_.diagnostic({"load","No participating human character",it->line,-1});
++    return loaded_;
++}
++void MissionSession::Update(float dt) {
++    if(!loaded_ || !std::isfinite(dt) || dt<0) return;
++    world_.Update(dt); vm_.tick(); // exactly one VM tick per engine gameplay update
++}
++MissionSession::HUDNumbers MissionSession::Numbers(int owner) const {
++    if(owner<0 || owner>=4) return {};
++    const auto& s=economy_.state(owner);
++    return {s.score,static_cast<int>(s.multiplier),static_cast<int>(s.lives),s.wantedLevel};
++}
++}
+diff --git a/src/mission/MissionSession.h b/src/mission/MissionSession.h
+new file mode 100755
+index 0000000..2a9c6a0
+--- /dev/null
++++ b/src/mission/MissionSession.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include "CarnageMissionWorld.h"
++namespace mission {
++class MissionSession final {
++public:
++    MissionSession():economy_(4),world_(economy_),vm_(world_) {}
++    bool LoadSection(int section);
++    void Stop();
++    void Update(float dt);
++    struct HUDNumbers {std::int32_t money=0; int multiplier=1,lives=4,wantedLevel=0;};
++    HUDNumbers Numbers(int owner) const;
++    const MissionVM& VM() const {return vm_;}
++    const CarnageMissionWorld& World() const {return world_;}
++    bool Loaded() const {return loaded_;}
++    // Hooks expose one current session without a global constructor/destructor.
++    static MissionSession* Current();
++    static void SetCurrent(MissionSession*);
++private:
++    gta::GameEconomy economy_;
++    CarnageMissionWorld world_;
++    MissionVM vm_;
++    MissionScript script_;
++    bool loaded_=false;
++};
++}
+diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
+new file mode 100755
+index 0000000..14bfd53
+--- /dev/null
++++ b/src/mission/MissionVM.cpp
+@@ -0,0 +1,325 @@
++#include "MissionVM.h"
++#include <algorithm>
++#include <limits>
++#include <set>
++#include <stdexcept>
++#include <utility>
++
++namespace mission {
++namespace {
++struct Command { const char* name; const char* evidence; bool supported; };
++const Command commands[]={
++#include "CommandTable.inc"
++};
++std::int32_t number(const std::string& s) {
++    std::size_t n=0; auto v=std::stoll(s,&n,10);
++    if(n!=s.size() || v<std::numeric_limits<std::int32_t>::min() ||
++       v>std::numeric_limits<std::int32_t>::max()) throw std::invalid_argument("int32 operand");
++    return static_cast<std::int32_t>(v);
++}
++std::int32_t wrap(std::uint32_t n) {
++    return n<=0x7fffffffU ? static_cast<std::int32_t>(n) :
++        -1-static_cast<std::int32_t>(0xffffffffU-n);
++}
++std::int16_t low16(std::int32_t n) {
++    const auto u=static_cast<std::uint32_t>(n)&65535U;
++    return static_cast<std::int16_t>(u<32768U ? static_cast<int>(u) : static_cast<int>(u)-65536);
++}
++bool oneOf(std::uint16_t id,std::initializer_list<int> ids) {
++    return std::find(ids.begin(),ids.end(),id)!=ids.end();
++}
++}
++LoadReport MissionVM::load(const Section& section) {
++    processes_={}; instructions_.clear(); lines_.clear(); labels_.clear();
++    entities_.clear(); children_.clear(); valid_=true;
++    LoadReport report; std::set<std::string> unsupported;
++    auto error=[&](const Record& r,const std::string& message) {
++        Diagnostic d{"load-invalid",message,r.line,-1};
++        report.diagnostics.push_back(d); world_.diagnostic(d); valid_=false;
++    };
++    for(const auto& r:section.declarations) {
++        try {
++            const auto id=number(r.label); Entity e; e.declaration=r;
++            // Raw loader initializes other runtime values via type-specific helpers.
++            if(r.token=="COUNTER") {
++                if(r.operands.empty()) throw std::invalid_argument("counter value missing");
++                e.value=number(r.operands[0]);
++            }
++            if(!entities_.emplace(id,std::move(e)).second) error(r,"duplicate entity ID");
++        } catch(const std::exception& e) {error(r,e.what());}
++    }
++    for(const auto& r:section.instructions) {
++        Instruction i;
++        for(std::size_t op=0;op<std::size(commands);++op) {
++            if(r.token==commands[op].name) {i.opcode=static_cast<std::uint16_t>(op); break;}
++        }
++        if(i.opcode==0xffff || !commands[i.opcode].supported) unsupported.insert(r.token);
++        try {
++            if(instructions_.size()>=32768) throw std::invalid_argument("signed16 PC capacity exceeded");
++            if(!labels_.emplace(number(r.label),instructions_.size()).second)
++                error(r,"duplicate instruction label: unsafe original behavior rejected");
++            // Lexical parser preserves comments; strip brace comments before integer reading.
++            std::string text; bool comment=false;
++            for(char c:r.rawOperands) {
++                if(c=='{') {comment=true; text+=' ';}
++                else if(c=='}') comment=false;
++                else if(!comment) text+=c;
++            }
++            if(comment) throw std::invalid_argument("unterminated operand comment");
++            std::vector<std::int32_t> values;
++            std::size_t begin=0;
++            while(begin<text.size()) {
++                begin=text.find_first_not_of(" \t\r\n",begin);
++                if(begin==std::string::npos) break;
++                auto end=text.find_first_of(" \t\r\n",begin);
++                values.push_back(number(text.substr(begin,end-begin)));
++                if(end==std::string::npos) break;
++                begin=end;
++            }
++            if(values.size()!=5) throw std::invalid_argument("instruction requires five int32 operands");
++            i.A=values[0]; i.B=values[1]; i.C=values[2]; i.D=values[3]; i.E=values[4];
++        } catch(const std::exception& e) {error(r,e.what());}
++        instructions_.push_back(i); lines_.push_back(r.line);
++    }
++    report.unsupported.assign(unsupported.begin(),unsupported.end());
++    for(const auto& token:report.unsupported) {
++        Diagnostic d{"unsupported",token,section.line,-1};
++        report.diagnostics.push_back(d); world_.diagnostic(d);
++    }
++    return report;
++}
++std::size_t MissionVM::indexOf(std::int32_t label) const {return labels_.at(label);}
++void MissionVM::issue(std::string code,std::string detail,int slot) {
++    std::size_t line=0;
++    if(slot>=0 && slot<32 && processes_[slot].pc>=0 &&
++       static_cast<std::size_t>(processes_[slot].pc)<lines_.size()) line=lines_[processes_[slot].pc];
++    world_.diagnostic({std::move(code),std::move(detail),line,slot});
++}
++void MissionVM::block(int slot,const std::string& detail) {
++    processes_[slot].blocked=true; issue("unresolved",detail,slot);
++}
++bool MissionVM::start(int slot,std::optional<std::int32_t> label) {
++    if(slot<0 || slot>=32 || !valid_ || instructions_.empty()) return false;
++    std::size_t pc=0;
++    if(label) {
++        auto at=labels_.find(*label);
++        if(at==labels_.end()) {issue("invalid-start","missing label",slot); return false;}
++        pc=at->second;
++    }
++    Process p; p.active=true; p.pc=static_cast<std::int16_t>(pc); p.player=static_cast<std::int16_t>(slot);
++    // Loader has trigger 0 for participants; children use -1 (00445800 / 00448edd).
++    p.trigger=slot<4 ? 0 : -1; processes_[slot]=p; return true;
++}
++int MissionVM::owner(int slot) const {
++    for(int depth=0;depth<32;++depth) {
++        const int parent=processes_[slot].parent;
++        if(parent<0) return slot;
++        if(parent>=32) return -1;
++        slot=parent;
++    }
++    return -1;
++}
++void MissionVM::pay(int slot,const Instruction& i) {
++    if(i.E>0) world_.reward(owner(slot),i.E);
++}
++void MissionVM::cleanup(int slot) {
++    auto& p=processes_[slot];
++    if(p.trigger!=-1) {
++        Instruction trigger; trigger.A=p.trigger;
++        WorldRequest request{"CLEANUP_TRIGGER","0043e2b0/00474d10",slot,owner(slot),
++                             trigger,p,entities_,instructions_,labels_};
++        if(world_.execute(request)!=WorldResult::Done) {
++            issue("cleanup-unresolved","TODO-evidence:0043e2b0 trigger re-enable",slot);
++        }
++    }
++    p.active=false; p.pc=0; p.timer=0; p.trigger=0; p.protection=0;
++}
++void MissionVM::branch(int slot,std::int32_t target) {
++    auto& p=processes_[slot]; p.state=1;
++    if(target==-1) {cleanup(slot); return;}
++    if(target<0) {
++        p.active=false; block(slot,"negative destination other than -1 would index outside original label table"); return;
++    }
++    if(target==0) {p.pc=low16(static_cast<std::int32_t>(p.pc)+1); return;}
++    auto at=labels_.find(target);
++    if(at==labels_.end()) {block(slot,"missing destination label "+std::to_string(target)); return;}
++    p.pc=static_cast<std::int16_t>(at->second);
++}
++bool MissionVM::wait(int slot,const Instruction& i) {
++    auto& state=processes_[slot].state;
++    if(state==1) state=i.D>0 ? low16(wrap(static_cast<std::uint32_t>(i.D)+5U)) : 0;
++    if(state>5) {state=low16(state-1); return state==5;}
++    return false;
++}
++WorldResult MissionVM::execute(int slot,Instruction& i) {
++    const auto& c=commands[i.opcode];
++    WorldRequest request{c.name,std::string("TODO-evidence:")+c.evidence,slot,owner(slot),
++                         i,processes_[slot],entities_,instructions_,labels_};
++    return world_.execute(request);
++}
++bool MissionVM::predicate(int slot,Instruction& i,bool& value) {
++    const auto& c=commands[i.opcode];
++    WorldRequest r{c.name,std::string("TODO-evidence:")+c.evidence,slot,owner(slot),
++                   i,processes_[slot],entities_,instructions_,labels_};
++    auto result=world_.predicate(r);
++    if(!result) {block(slot,std::string(c.name)+" predicate unresolved"); return false;}
++    value=*result; return true;
++}
++void MissionVM::tick() {
++    // 00446fe0: inspect live active array, slots 0..31, exactly one dispatch each.
++    for(int slot=0;slot<32;++slot) {
++        auto& p=processes_[slot];
++        if(!p.active || p.blocked) continue;
++        if(p.pc<0 || static_cast<std::size_t>(p.pc)>=instructions_.size()) {
++            block(slot,"physical PC out of range"); continue;
++        }
++        if(owner(slot)<0) {block(slot,"invalid/cyclic parent chain"); continue;}
++        step(slot);
++        world_.postDispatch(slot,p); // Also for DONOWT and newly deactivated processes.
++    }
++}
++void MissionVM::step(int slot) {
++    auto& p=processes_[slot]; auto& i=instructions_[p.pc];
++    const auto op=i.opcode;
++    if(op>=std::size(commands) || !commands[op].supported) {block(slot,"unsupported opcode"); return;}
++    auto success=[&] {pay(slot,i); branch(slot,i.B);};
++    auto effect=[&](bool reward=true) {
++        auto r=execute(slot,i);
++        if(r==WorldResult::Failure && oneOf(op,{32,40,53,74,79})) {
++            branch(slot,i.C); return; // Known invalid-handle/dead guard, no R.
++        }
++        if(r!=WorldResult::Done) {block(slot,std::string(commands[op].name)+" immediate effect unresolved"); return;}
++        if(op==18) p.trigger=-1;
++        if(reward) pay(slot,i);
++        branch(slot,i.B);
++    };
++    auto counter=[&]() -> std::int32_t* {
++        auto at=entities_.find(i.A);
++        if(at==entities_.end() || !at->second.value) {block(slot,"entity value/handle unresolved"); return nullptr;}
++        return &*at->second.value;
++    };
++    if(op==17) return;
++    if(op==4) {
++        if(p.state==1) {p.state=2; i.C=i.D; return;}
++        i.C=wrap(static_cast<std::uint32_t>(i.C)-1U);
++        if(i.C<=0) success();
++        return;
++    }
++    if(op==20 || op==127 || op==128) {
++        auto v=counter(); if(!v) return;
++        if(op==20) *v=wrap(static_cast<std::uint32_t>(*v)-1U);
++        if(op==127) *v=wrap(static_cast<std::uint32_t>(*v)+1U);
++        const bool yes=op==20 ? *v<=0 : op==127 ? i.D>=0 && *v>=i.D : *v==i.D;
++        if(yes) success(); else branch(slot,i.C);
++        return;
++    }
++    if(op==10) {
++        int at=slot;
++        while(at>=0) {
++            auto& proc=processes_[at]; proc.active=false; proc.outcome=low16(i.A); at=proc.parent;
++        }
++        // Original changes current-slot global while walking ancestors; the
++        // epilogue PC/timer alias for this case is not normalized silently.
++        issue("partial","TODO-evidence:0044750a END epilogue owner alias",slot); return;
++    }
++    if(op==89) {
++        int child=4; while(child<32 && processes_[child].active) ++child;
++        if(child==32) {block(slot,"KICKSTART exhaustion: original writes via -1 index"); return;}
++        std::size_t dest=static_cast<std::size_t>(p.pc)+1;
++        if(i.A!=0) {
++            auto at=labels_.find(i.A);
++            if(at==labels_.end()) {block(slot,"KICKSTART missing child label"); return;}
++            dest=at->second;
++        }
++        if(dest>=instructions_.size()) {block(slot,"KICKSTART child PC out of range"); return;}
++        Process c; c.active=true; c.pc=static_cast<std::int16_t>(dest);
++        c.parent=static_cast<std::int16_t>(owner(slot)); c.player=processes_[owner(slot)].player;
++        c.protection=p.protection; processes_[child]=c;
++        children_[static_cast<std::size_t>(p.pc)].push_back(child);
++        issue("partial","TODO-evidence:00448edd bookkeeping entity allocation and D/E mutation omitted",slot);
++        branch(slot,i.B); return;
++    }
++    if(op==96 || op==98 || op==101) {
++        // Partial contract: A points to spawning instruction; never interpret A as slot.
++        auto at=labels_.find(i.A);
++        if(at==labels_.end()) {block(slot,"process cancellation references missing label"); return;}
++        auto children=children_.find(at->second);
++        if(children!=children_.end()) {
++            auto& list=children->second;
++            if(op==101) {
++                if(i.D>=1 && i.D<=4 && static_cast<std::size_t>(i.D)<=list.size()) {
++                    if(list[i.D-1]>=0) cleanup(list[i.D-1]);
++                    list[i.D-1]=-1;
++                } else if(i.D<1 || i.D>4) instructions_[at->second].E=-1;
++            } else {
++                for(auto& child:list) {if(child>=0) cleanup(child); child=-1;}
++                if(op==96) instructions_[at->second].E=-1;
++            }
++        }
++        issue("partial","TODO-evidence:004493c1/004495ea/004491xx cancellation bookkeeping and nested cleanup",slot);
++        success(); return;
++    }
++    if(op==130) {p.protection=1; success(); return;}
++    if(op==141) {
++        if(execute(slot,i)!=WorldResult::Done) {block(slot,"KF_PROCESS unlock unresolved"); return;}
++        p.protection=2; success(); return;
++    }
++    if(op==142) {
++        if(execute(slot,i)!=WorldResult::Done) {block(slot,"RESET_KF relock unresolved"); return;}
++        for(int at=3;at<32;++at) if(at!=slot && processes_[at].protection==2) cleanup(at);
++        success(); return;
++    }
++    if(op==45) {pay(slot,i); world_.incrementMultiplier(owner(slot)); branch(slot,i.B); return;}
++    if(op==103) {
++        auto at=labels_.find(i.A);
++        if(at==labels_.end()) {block(slot,"FRENZY_SET missing instruction label"); return;}
++        instructions_[at->second].D=world_.score(owner(slot)); success(); return;
++    }
++    if(op==102 || op==104) {
++        const auto score=world_.score(owner(slot));
++        bool yes=(op==102 ? score : wrap(static_cast<std::uint32_t>(score)-static_cast<std::uint32_t>(i.D)))>=i.A;
++        if(yes) effect(); else branch(slot,i.C); // score flag / sound4 is a world effect.
++        return;
++    }
++    // Known predicates, with VM-owned W(D), R/S/F. World implements exact entity
++    // health/state/model/screen tests rather than synthesizing engine handles here.
++    if(oneOf(op,{1,3,21,39,70,71,84,85,90,105,106,120,132,133})) {
++        bool yes=false;
++        // W(D) initialized on entry before testing in original; unsuccessful visit
++        // performs the decrement. Preserve state on successful branches as well.
++        if(oneOf(op,{1,3,21,133}) && p.state==1)
++            p.state=i.D>0 ? low16(wrap(static_cast<std::uint32_t>(i.D)+5U)) : 0;
++        if(!predicate(slot,i,yes)) return;
++        if(yes) {
++            if(op==3) effect(); // STEAL also emits sound 0x11.
++            else success();
++        } else if(oneOf(op,{1,3,21,133})) {
++            if(op==133 && i.D<=0) branch(slot,i.C);
++            else if(wait(slot,i)) branch(slot,i.C);
++        } else if(!oneOf(op,{39,70,71})) branch(slot,i.C);
++        return;
++    }
++    // Complex partial handler protocol. No default success or reward guess.
++    if(oneOf(op,{2,16,22,23,31,44,57,60,69,88,121,125,135})) {
++        if(op==2 && p.state==1) {
++            p.state=low16(wrap(static_cast<std::uint32_t>(i.D)+10U)); i.E=1;
++        }
++        auto result=execute(slot,i);
++        if(result==WorldResult::Unresolved || result==WorldResult::Done) {
++            block(slot,std::string(commands[op].name)+" requires explicit partial-handler flow"); return;
++        }
++        if(result==WorldResult::Hold) return;
++        if(result==WorldResult::Failure) {branch(slot,i.C); return;}
++        // E1c: PED_ON / CHANGE_PED_TYPE E is a target, never money.
++        if(!oneOf(op,{2,16,31,44,60,69,135})) pay(slot,i);
++        branch(slot,i.B); return;
++    }
++    // Immediate commands with known outer S and explicit reward exclusions.
++    // Guards/spawn fields/coordinate transforms remain part of execute's contract.
++    if(oneOf(op,{12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,
++                 64,65,68,74,76,79,80,81,91,92,93,94,110,111,116,119,124,126,129,134,144,146})) {
++        effect(!oneOf(op,{15,37,64,68,80,110,111,116})); return;
++    }
++    block(slot,std::string(commands[op].name)+" dispatch missing");
++}
++}
+diff --git a/src/mission/MissionVM.h b/src/mission/MissionVM.h
+new file mode 100755
+index 0000000..b831ad7
+--- /dev/null
++++ b/src/mission/MissionVM.h
+@@ -0,0 +1,101 @@
++#pragma once
++#include "MissionScript.h"
++#include <array>
++#include <cstdint>
++#include <cstddef>
++#include <map>
++#include <optional>
++#include <string>
++#include <vector>
++
++namespace mission {
++// Exact recovered record layout. PC is a physical record index, never a label.
++struct Instruction {
++    std::uint16_t opcode=0xffff, padding=0;
++    std::int32_t A=0, B=0, C=0, D=0, E=0;
++};
++static_assert(sizeof(Instruction)==24 && offsetof(Instruction,A)==4 &&
++              offsetof(Instruction,E)==20, "exe instruction layout");
++struct Process {
++    bool active=false, blocked=false;
++    std::int16_t pc=0, state=1, timer=0, parent=-1, player=-1;
++    std::int16_t trigger=-1, outcome=0;
++    std::int32_t protection=0;
++};
++struct Entity {
++    Record declaration; // Original coordinates and operands: no universal scale conversion.
++    std::optional<std::int32_t> value; // Known COUNTER value; world installs runtime handles.
++    std::int32_t type=-1, aux=0;
++};
++struct Diagnostic {
++    std::string code, detail;
++    std::size_t line=0;
++    int slot=-1;
++};
++enum class WorldResult { Unresolved, Done, Hold, Success, Failure };
++// execute must not award E or branch itself. Success/Failure are reserved for
++// partially decoded state machines; Done confirms a known immediate effect.
++struct WorldRequest {
++    std::string token, evidence; // TODO-evidence:<VA> means incomplete semantics.
++    int slot, owner;
++    Instruction& instruction; // Shared mutable operands (ANSWER/MPHONE etc.).
++    Process& process;
++    std::map<std::int32_t,Entity>& entities;
++    std::vector<Instruction>& instructions;
++    const std::map<std::int32_t,std::size_t>& labels;
++};
++class IMissionWorld {
++public:
++    virtual ~IMissionWorld()=default;
++    // All effects: phones, briefing/text/audio/arrows, entity creation/removal,
++    // ped/car behavior, doors, explosions, wanted/lives and reset cleanup.
++    // A partial handler can mutate state/timer/operands; Unresolved blocks the slot.
++    virtual WorldResult execute(WorldRequest&)=0;
++    // Command-specific predicate, nullopt means unknown. See evidence table.
++    virtual std::optional<bool> predicate(const WorldRequest&)=0;
++    virtual std::int32_t score(int owner)=0;
++    // Implement 00461f20 (including multiplier, x86 wrapping and upper clamp).
++    virtual void reward(int owner,std::int32_t positiveBase)=0;
++    virtual void incrementMultiplier(int owner)=0; // uint16 addition, no cap.
++    // 004749c0/common epilogue and external scheduler pre/post work belong here.
++    virtual void postDispatch(int slot,Process&)=0;
++    virtual void diagnostic(const Diagnostic&)=0;
++};
++struct LoadReport {
++    std::vector<std::string> unsupported;
++    std::vector<Diagnostic> diagnostics;
++};
++class MissionVM {
++public:
++    explicit MissionVM(IMissionWorld& world):world_(world) {}
++    LoadReport load(const Section&);
++    // Explicit participant activation; label omitted means physical instruction zero.
++    bool start(int slot,std::optional<std::int32_t> label=std::nullopt);
++    void tick();
++    const std::array<Process,32>& processes() const {return processes_;}
++    const std::vector<Instruction>& instructions() const {return instructions_;}
++    const std::map<std::int32_t,Entity>& entities() const {return entities_;}
++    std::size_t indexOf(std::int32_t label) const;
++private:
++    IMissionWorld& world_;
++    std::array<Process,32> processes_{};
++    std::vector<Instruction> instructions_;
++    std::vector<std::size_t> lines_;
++    std::map<std::int32_t,std::size_t> labels_;
++    std::map<std::int32_t,Entity> entities_;
++    // Logical bookkeeping per spawning instruction; deliberately not a fabricated
++    // original entity ID. D/E mutation remains unresolved and is flagged.
++    std::map<std::size_t,std::vector<int>> children_;
++    bool valid_=true;
++    void step(int slot);
++    void branch(int slot,std::int32_t target);
++    void cleanup(int slot);
++    void issue(std::string code,std::string detail,int slot=-1);
++    void block(int slot,const std::string& detail);
++    int owner(int slot) const;
++    void pay(int slot,const Instruction&);
++    bool wait(int slot,const Instruction&);
++    bool predicate(int slot,Instruction&,bool&);
++    WorldResult execute(int slot,Instruction&);
++};
++}
 diff --git a/src/path_utils.cpp b/src/path_utils.cpp
 index 117d3a9..50017e4 100644
 --- a/src/path_utils.cpp
