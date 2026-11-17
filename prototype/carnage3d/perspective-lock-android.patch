@@ -2173,6 +2173,33 @@ index af31f7a..03de8ea 100644
          desiredVelocity = moveDirection * walkingSpeed;
          
          if (!isSlideOverCar)
+diff --git a/src/PedestrianStates.cpp b/src/PedestrianStates.cpp
+index e5fbabd..bfa9527 100644
+--- a/src/PedestrianStates.cpp
++++ b/src/PedestrianStates.cpp
+@@ -9,6 +9,7 @@
+ #include "BroadcastEventsManager.h"
+ #include "AudioManager.h"
+ #include "GameObjectHelpers.h"
++#include "mission/MissionSession.h"
+ 
+ PedestrianStatesManager::PedestrianStatesManager(Pedestrian* pedestrian)
+     : mPedestrian(pedestrian)
+@@ -478,6 +479,14 @@ void PedestrianStatesManager::StateEnterCar_ProcessEnter(const PedestrianStateEv
+     // pullout passenger
+     if (Pedestrian* prevDriver = mPedestrian->mCurrentCar->GetFirstPassenger(mPedestrian->mCurrentSeat))
+     {
++        // 0045ddc0 emits crime5 only when replacing an existing driver.
++        // Notify at this transition, independently of coalesced broadcast events.
++        if (mPedestrian->mCurrentSeat == eCarSeat_Driver && prevDriver != mPedestrian)
++        {
++            if (auto* session = mission::MissionSession::Current())
++                session->Police().occupiedDriverTakeover(mPedestrian,
++                    static_cast<int>(mPedestrian->mCurrentCar->mCarInfo->mModelID));
++        }
+         PedestrianStateEvent ev {ePedestrianStateEvent_PullOutFromCar};
+         prevDriver->mStatesManager.ProcessEvent(ev);
+     }
 diff --git a/src/RenderingManager.cpp b/src/RenderingManager.cpp
 index c626ef7..62d6bc6 100644
 --- a/src/RenderingManager.cpp
@@ -5702,10 +5729,10 @@ index 117d3a9..50017e4 100644
          enumproc(currentFile.filename().generic_string());
 diff --git a/src/police/PoliceRuntime.cpp b/src/police/PoliceRuntime.cpp
 new file mode 100755
-index 0000000..c6d985d
+index 0000000..f290c6b
 --- /dev/null
 +++ b/src/police/PoliceRuntime.cpp
-@@ -0,0 +1,117 @@
+@@ -0,0 +1,122 @@
 +#include "../stdafx.h"
 +#include "PoliceRuntime.h"
 +#include "../CarnageGame.h"
@@ -5729,6 +5756,11 @@ index 0000000..c6d985d
 +}
 +void PoliceRuntime::reset(int section) {
 +    system_.reset(); section_=section; representation2_.fill(false); placement_.fill(Action::None); reported_.fill(false);
++}
++void PoliceRuntime::occupiedDriverTakeover(Pedestrian* actor,int model) {
++    if(!actor || !actor->IsHumanPlayerCharacter() || actor->IsDead()) return;
++    const int owner=gCarnageGame.GetHumanPlayerIndex(actor);
++    system_.occupiedDriverTakeover(owner,model,section_);
 +}
 +void PoliceRuntime::clear(Pedestrian* ped) {
 +    ped->ClearAmmunition(); ped->ChangeWeapon(eWeapon_Fists); ped->mArmorHitPoints=0;
@@ -5825,10 +5857,10 @@ index 0000000..c6d985d
 +}}
 diff --git a/src/police/PoliceRuntime.h b/src/police/PoliceRuntime.h
 new file mode 100755
-index 0000000..1b0e1e7
+index 0000000..6f06afd
 --- /dev/null
 +++ b/src/police/PoliceRuntime.h
-@@ -0,0 +1,23 @@
+@@ -0,0 +1,24 @@
 +#pragma once
 +#include "PoliceSystem.h"
 +class Pedestrian;
@@ -5839,6 +5871,7 @@ index 0000000..1b0e1e7
 +    explicit PoliceRuntime(GameEconomy& economy):system_(economy,4) {}
 +    PoliceSystem& system() {return system_;}
 +    void reset(int section);
++    void occupiedDriverTakeover(Pedestrian* actor,int model);
 +    void update(); // caller supplies one engine mission update
 +    bool death(int owner);
 +    bool captured(int owner); // confirmed original capture, never proximity guessed
@@ -5854,10 +5887,10 @@ index 0000000..1b0e1e7
 +}}
 diff --git a/src/police/PoliceSystem.cpp b/src/police/PoliceSystem.cpp
 new file mode 100755
-index 0000000..93ec4c9
+index 0000000..ff0e6d8
 --- /dev/null
 +++ b/src/police/PoliceSystem.cpp
-@@ -0,0 +1,129 @@
+@@ -0,0 +1,177 @@
 +#include "PoliceSystem.h"
 +#include <cstdlib>
 +#include <limits>
@@ -5899,7 +5932,7 @@ index 0000000..93ec4c9
 +void PoliceSystem::reset() {
 +    std::fill(players_.begin(),players_.end(),Player{});
 +    std::fill(records_.begin(),records_.end(),Record{});
-+    groups_={}; pending_.clear();
++    groups_={}; pending_.clear(); queue_={};
 +}
 +Classification PoliceSystem::classify(int owner,int section,bool forceZero) {
 +    economy_.classifyWantedInSection(owner,section,forceZero);
@@ -5908,6 +5941,7 @@ index 0000000..93ec4c9
 +    if(section==102 || section==103) {static constexpr int table[]={0,1,2,4,6}; response=table[level];}
 +    else if(section!=1 && section!=2) response=level>0?1:0;
 +    records_.at(owner).response=response;
++    if(level!=0) records_.at(owner).delay=1; // 004133c0/004134d0/004135e0
 +    for(auto& g:groups_) if(g.record==owner) {g.flag5=level==4; g.flag6=level>=3;}
 +    return {level,response};
 +}
@@ -5915,6 +5949,53 @@ index 0000000..93ec4c9
 +    if(!economy_.acceptedCrime(owner,crime)) return false;
 +    auto& r=records_.at(owner); r.crime=crime;
 +    r.response=std::max(r.response,crime<7?3:6); return true;
++}
++bool PoliceSystem::occupiedDriverTakeover(int owner,int model,int section) {
++    return vehicleCrime(owner,-1,model,5,section,false);
++}
++bool PoliceSystem::queueCrime(int slot,int type,int entity,int crime,unsigned char countdown) {
++    if(slot<0 || slot>=4 || type<0 || type>2 || entity<0 || crime<2 || crime>9) return false;
++    auto& q=queue_[slot];
++    if(q.crime!=-1) return false;
++    q={type,entity,crime,0,countdown}; return true;
++}
++void PoliceSystem::updateCrimeQueue(const std::function<void(int,int,int)>& dispatch) {
++    for(auto& q:queue_) if(q.status==1) {
++        const auto old=q.countdown; --q.countdown;
++        if(old!=0) continue;
++        const auto event=q;
++        q.status=2; // must bypass duplicate suppression in reentrant intake
++        dispatch(event.type,event.entity,event.crime);
++        q.type=q.entity=q.crime=-1; q.countdown=255;
++    }
++}
++bool PoliceSystem::vehicleCrime(int owner,int entity,int model,int crime,int section,bool witness) {
++    if(owner<0 || static_cast<std::size_t>(owner)>=players_.size() || model==0x2f || crime<2 || crime>9) return false;
++    for(auto& q:queue_) if(q.entity==entity && q.type==0 && q.crime==crime && q.status<=1) {
++        q.status=1; return false;
++    }
++    auto& r=records_.at(owner);
++    const bool fresh=r.crime==0;
++    if(fresh && witness) {
++        auto& state=economy_.state(owner);
++        const int floor=(section==1 || section==2)?152:102;
++        if(state.wantedLevel==0 && state.wantedPoints<floor) economy_.witnessEscalation(owner,section);
++    }
++    if(!acceptedCrime(owner,crime)) return false;
++    r.type=0;
++    if(fresh) r.delay=witness?1:100;
++    if(classify(owner,section).level==0) {
++        std::vector<Unit> units; release(owner,units);
++    }
++    return true;
++}
++bool PoliceSystem::pedestrianCrime(int owner,int crime,int section) {
++    if(owner<0 || static_cast<std::size_t>(owner)>=players_.size() || crime<2 || crime>9) return false;
++    auto& r=records_.at(owner); const bool fresh=r.crime==0;
++    if(!acceptedCrime(owner,crime)) return false;
++    r.type=1; if(fresh) r.delay=200;
++    if(classify(owner,section).level==0) {std::vector<Unit> units; release(owner,units);}
++    return true;
 +}
 +bool PoliceSystem::beginDeath(int owner,bool repr2) {
 +    auto& p=players_.at(owner);
@@ -5989,10 +6070,10 @@ index 0000000..93ec4c9
 +}}
 diff --git a/src/police/PoliceSystem.h b/src/police/PoliceSystem.h
 new file mode 100755
-index 0000000..5733223
+index 0000000..658e1ae
 --- /dev/null
 +++ b/src/police/PoliceSystem.h
-@@ -0,0 +1,58 @@
+@@ -0,0 +1,70 @@
 +#pragma once
 +#include "../mission/GameEconomy.h"
 +#include <algorithm>
@@ -6026,6 +6107,16 @@ index 0000000..5733223
 +    Classification classify(int owner,int section,bool forceZero=false);
 +    // Original ownership/witness/duplicate gates MUST already have accepted this event.
 +    bool acceptedCrime(int owner,int crime);
++    // 0045ddc0: caller proves occupied driver-seat takeover; 004136c0 vehicle gates.
++    bool occupiedDriverTakeover(int owner,int model,int section);
++    // Caller proves original ownership, active vehicle, crime2 speed and witness-link gates.
++    // linkedWitness means vehicle+0xb8 resolves to a vehicle with field+4 == 3.
++    bool vehicleCrime(int owner,int entity,int model,int crime,int section,bool linkedWitness);
++    // Caller proves human pedestrian ownership (+0x1c low byte ==1).
++    bool pedestrianCrime(int owner,int crime,int section);
++    // 00473ea0/00473ef0: four script-selected slots; countdown is a byte.
++    bool queueCrime(int slot,int type,int entity,int crime,unsigned char countdown);
++    void updateCrimeQueue(const std::function<void(int,int,int)>& dispatch);
 +    bool beginDeath(int owner,bool representation2);
 +    // Caller proves captured state9 and live officer/target, not a guessed proximity test.
 +    bool beginArrest(int owner,bool provenCapture);
@@ -6044,6 +6135,8 @@ index 0000000..5733223
 +private:
 +    enum class Phase {Alive,Arrest1,Arrest2,Death,Respawn,Terminal};
 +    struct Player {Phase phase=Phase::Alive; int updates=0,deadline=100; bool clear=true;};
++    struct QueuedCrime {int type=-1,entity=-1,crime=-1,status=0; unsigned char countdown=255;};
++    std::array<QueuedCrime,4> queue_{};
 +    GameEconomy& economy_;
 +    std::vector<Player> players_;
 +    std::vector<Record> records_;

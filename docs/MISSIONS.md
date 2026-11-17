@@ -25,5 +25,7 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
 - Police (`src/police/`): wanted thresholds per section, response levels, arrest-vs-death penalties, lives (game over on
   the next death at 0 lives) and ranked respawn points, from the original executable. Not live yet: automatic crime
   detection, pursuit/roadblock control, arrest trigger and radius, and wanted-level decay are not recovered.
+- Crime intake (P-2/P-3): taking over an occupied car is a crime with the original point value; witness
+  escalation and the delayed crime queue follow the original. Other crime events are not connected yet.
 - Nonempty RESET cleanup, parked-car overlap/slope variants and some state transitions are not recovered.
 - Police pursuit, arrest, death/respawn, pickups, frenzies, front-end menu, saves and radio.
