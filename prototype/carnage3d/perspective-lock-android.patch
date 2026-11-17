@@ -533,6 +533,33 @@ index c6b1c2e..28adce0 100644
      if (messageCat > eLogMessage_Debug)
      {
          printf("%s\n", ConsoleMessageBuffer);
+diff --git a/src/Decoration.cpp b/src/Decoration.cpp
+index c4c8ad1..c87247a 100644
+--- a/src/Decoration.cpp
++++ b/src/Decoration.cpp
+@@ -70,3 +70,10 @@ void Decoration::SetMoveVelocity(const glm::vec3& moveVelocity)
+ {
+     mMoveVelocity = moveVelocity;
+ }
++
++void Decoration::SetStaticSprite(int spriteIndex)
++{
++    mAnimationState.ClearState();
++    mAnimationState.mAnimDesc.SetFrames(spriteIndex, 1);
++    SetSprite(spriteIndex, 0);
++}
+diff --git a/src/Decoration.h b/src/Decoration.h
+index 80c49d3..15b4b1d 100644
+--- a/src/Decoration.h
++++ b/src/Decoration.h
+@@ -16,6 +16,7 @@ public:
+ 
+     // Setup current position and rotation
+     void SetScale(float scale);
++    void SetStaticSprite(int spriteIndex);
+     void SetLifeDuration(int numAnimationCycles);
+ 
+     // Set decoration move in direction
 diff --git a/src/FileSystem.cpp b/src/FileSystem.cpp
 index feb69e3..4610835 100644
 --- a/src/FileSystem.cpp
@@ -1251,7 +1278,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HUD.cpp b/src/HUD.cpp
-index da5e832..c059307 100644
+index da5e832..8d64a00 100644
 --- a/src/HUD.cpp
 +++ b/src/HUD.cpp
 @@ -1,4 +1,6 @@
@@ -1261,7 +1288,37 @@ index da5e832..c059307 100644
  #include "HUD.h"
  #include "SpriteBatch.h"
  #include "GuiContext.h"
-@@ -824,6 +826,12 @@ void HUD::PushHelpMessage()
+@@ -550,23 +552,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
+ 
+ void HUDScoresPanel::SetScores(int score, int lives, int multiplier)
+ {
+-    if (score != mCurrScore)
+-    {
+-        mCurrScore = score;
+-        mScoreCounter.SetText(cxx::va("%d", score));
+-    }
+-
+-    if (lives != mCurrLives)
+-    {
+-        mCurrLives = lives;
+-        mLivesCounter.SetText(cxx::va(":%d", lives));
+-    }
+-
+-    if (multiplier != mCurrMultiplier)
+-    {
+-        mCurrMultiplier = multiplier;
+-        mMultiplierCounter.SetText(cxx::va(":%d", multiplier));
+-    }
++    mCurrScore = score;
++    mCurrLives = lives;
++    mCurrMultiplier = multiplier;
++    mScoreCounter.SetText(cxx::va("%d", score));
++    mLivesCounter.SetText(cxx::va(":%d", lives));
++    mMultiplierCounter.SetText(cxx::va(":%d", multiplier));
+ }
+ 
+ void HUDScoresPanel::Self_SetupHUD()
+@@ -824,6 +815,12 @@ void HUD::PushHelpMessage()
      // todo
  }
  
@@ -1274,7 +1331,7 @@ index da5e832..c059307 100644
  void HUD::PushMissionMessage()
  {
      // todo
-@@ -901,7 +909,10 @@ void HUD::UpdateScreen()
+@@ -901,7 +898,10 @@ void HUD::UpdateScreen()
      }
  
      // update wanted level
@@ -1286,7 +1343,7 @@ index da5e832..c059307 100644
      mWantedLevelPanel.SetWantedLevel(currentWantedLevel);
      if (currentWantedLevel == 0)
      {
-@@ -913,7 +924,7 @@ void HUD::UpdateScreen()
+@@ -913,7 +913,7 @@ void HUD::UpdateScreen()
      }
  
      // update scores
@@ -1295,7 +1352,7 @@ index da5e832..c059307 100644
  
                                         // todo: implement bonus
      if (true)
-@@ -936,6 +947,19 @@ void HUD::DrawScreen(GuiContext& context)
+@@ -936,6 +936,19 @@ void HUD::DrawScreen(GuiContext& context)
      mPanelsContainer.ComputeSize();
      mPanelsContainer.ComputePosition();
      mPanelsContainer.DrawFrame(context);
@@ -3225,10 +3282,10 @@ index dfc0703..a985b77 100644
      gConsole.RegisterVariable(&gCvarMemEnableFrameHeapAllocator);
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..050b77b
+index 0000000..cdd056c
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,169 @@
+@@ -0,0 +1,284 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -3236,6 +3293,8 @@ index 0000000..050b77b
 +#include "../CarnageGame.h"
 +#include "../HumanPlayer.h"
 +#include "../Convert.h"
++#include "../Decoration.h"
++#include "PhoneRules.h"
 +#include "../GameTextsManager.h"
 +#include <cmath>
 +#include <sstream>
@@ -3281,18 +3340,33 @@ index 0000000..050b77b
 +    return ScriptPosition(x*64,y*64,z*64);
 +}
 +void CarnageMissionWorld::Prepare(const Section& section) {
++    Reset();
 +    for(const auto& r:section.declarations) if(r.token=="TELEPHONE") {
 +        int id=0; auto pos=DeclarationPosition(r);
 +        if(!integer(r.label,id) || !pos) {Once("bad-phone","Invalid telephone declaration"); continue;}
 +        int facing=0;
 +        if(r.operands.size()>1) integer(r.operands[1],facing);
-+        phones_.emplace(id,Phone{*pos,facing});
++        Phone phone{*pos,facing,0};
++        // Existing gta_objects.json identifies style object #40 as phone.
++        if(gGameMap.IsLoaded() && gGameMap.mStyleData.IsLoaded())
++            for(auto& desc:gGameMap.mStyleData.mObjects) if(desc.mObjectType==40) {
++                if(auto* object=gGameObjectsManager.CreateDecoration(*pos,
++                    -Convert::Fix16ToAngle(static_cast<unsigned short>(facing)),&desc)) {
++                    object->SetLifeDuration(0); phone.object=object->mObjectID;
++                    if(!desc.mAnimationData.mFrames.empty()) phone.baseSprite=desc.mAnimationData.mFrames.front().mSprite;
++                    object->SetStaticSprite(phone.baseSprite);
++                    ownedObjects_.insert(phone.object);
++                }
++                break;
++            }
++        if(!phone.object) Once("phone-style","Phone style object #40 unavailable; anchor retained");
++        phones_.emplace(id,phone);
 +    }
-+    if(!phones_.empty()) Once("phone-service","Phone anchors loaded; engine has no telephone object/answer service. ANSWER/MPHONE block safely.");
++
 +}
 +void CarnageMissionWorld::Reset() {
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    ownedObjects_.clear(); phones_.clear(); arrows_={}; logged_.clear();
++    ownedObjects_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
@@ -3344,9 +3418,62 @@ index 0000000..050b77b
 +    auto found=r.entities.find(i.A);
 +    auto* entity=found==r.entities.end()?nullptr:&found->second;
 +    if(!OwnerValid(r.owner)) {Once("owner","Invalid mission owner"); return WorldResult::Unresolved;}
++    if(token=="PHONE_START" || token=="PHONE_ANSWER_START" || token=="PHONE_RING" || token=="PHONE_STOP") {
++        auto phone=phones_.find(i.A);
++        if(phone==phones_.end() || !phone->second.object) return WorldResult::Unresolved;
++        auto* object=gGameObjectsManager.GetGameObjectByID(phone->second.object);
++        if(!object || object->IsMarkedForDeletion()) return WorldResult::Unresolved;
++        auto& ph=phone->second;
++        if(token=="PHONE_STOP") {
++            ph.mode=1; object->StopGameObjectSounds();
++            for(auto& handle:soundPhones_) if(handle==i.A) handle=-1;
++        } else if(token=="PHONE_START" || token=="PHONE_ANSWER_START") {
++            ph.mode=token=="PHONE_START"?3:2;
++            bool registered=false;
++            for(int handle:soundPhones_) if(handle==i.A) registered=true;
++            if(!registered) for(auto& handle:soundPhones_) if(handle==-1) {
++                handle=i.A; registered=true;
++                // Candidate28 is known; original mixer/retrigger cadence is not.
++                object->StartGameObjectSound(0,eSfxSampleType_Level,28,SfxFlags_None);
++                break;
++            }
++            if(!registered) Once("phone-sound-full","Four phone sources occupied; original replacement visibility helper unresolved");
++            Once("phone-audio","Sample28 emitted once per registration; original mixer loop/retrigger unresolved");
++        } else if(ph.mode==2 || ph.mode==3) ph.mode=5-ph.mode;
++        static_cast<Decoration*>(object)->SetStaticSprite(ph.baseSprite+ph.mode-1);
++        return WorldResult::Done;
++    }
++    if(token=="RESET") {
++        for(auto& phone:phones_) {
++            phone.second.mode=1;
++            if(auto* o=gGameObjectsManager.GetGameObjectByID(phone.second.object)) {
++                o->StopGameObjectSounds();
++                static_cast<Decoration*>(o)->SetStaticSprite(phone.second.baseSprite);
++            }
++        }
++        soundPhones_.fill(-1); arrows_={};
++        Once("reset-nested","RESET known phone/UI effects applied; original tracked-entity nested cleanup unresolved");
++        return WorldResult::Unresolved;
++    }
++    if(token=="PARKED_ON") {
++        if(!entity) return WorldResult::Failure;
++        auto position=DeclarationPosition(entity->declaration);
++        int model=0,heading=0;
++        if(!position || entity->declaration.operands.size()<2 ||
++           !integer(entity->declaration.operands[0],model) || !integer(entity->declaration.operands[1],heading)) return WorldResult::Unresolved;
++        Once("parked-constructor","PARKED_ON wrapper decoded; original constructor/collision rejection and cell cleanup unresolved; no fake spawn success");
++        return WorldResult::Unresolved;
++    }
++    if(token=="PHONE_MISSION_CLEANUP") {
++        Once("phone-cleanup","MPHONE nested cleanup helpers unresolved");
++        return WorldResult::Unresolved;
++    }
 +    if(token=="MESSAGE_BRIEF" || token=="BRIEF" || token=="P_BRIEF" || token=="P_BRIEF_TIMED" ||
 +       token=="MOBILE_BRIEF" || token=="SPEECH_BRIEF" || token=="FRENZY_BRIEF" ||
 +       token=="ARMEDMESS" || token=="DISARMMESS") {
++        if(token!="MESSAGE_BRIEF" && token!="ARMEDMESS" && token!="DISARMMESS" &&
++           static_cast<std::int16_t>(i.E)<1000)
++            return token=="FRENZY_BRIEF"?WorldResult::Success:WorldResult::Done;
 +        std::string key=token=="ARMEDMESS"?"bomb_on":token=="DISARMMESS"?"bomb_off":std::to_string(i.E);
 +        if(auto* p=player(r.owner)) p->mHUD.ShowMissionText(gGameTexts.GetText(key));
 +        // Presentation only. Voice playback, original duration and briefing globals
@@ -3386,6 +3513,51 @@ index 0000000..050b77b
 +    return WorldResult::Unresolved;
 +}
 +std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
++    if(r.token=="PHONE_NEAR" || r.token=="PHONE_RANGE" || r.token=="PHONE_ON_FOOT" ||
++       r.token=="PHONE_ELIGIBLE" || r.token=="MPHONES_TRIGGER") {
++        auto* human=player(r.owner);
++        if(!human || !human->mCharacter) return false;
++        auto* ped=human->mCharacter;
++        if(r.token=="PHONE_ON_FOOT") {
++            // MPHONE tests original numeric states6/7, NOT a sentinel/on-foot test.
++            Once("phone-state","Original ped state6/7 mapping unavailable; MPHONE answer remains Unresolved");
++            return {};
++        }
++        if(r.token=="PHONE_ELIGIBLE") {
++            auto e=r.entities.find(r.instruction.A); if(e==r.entities.end()) return {};
++            int requested=e->second.aux-1;
++            if(requested==2) return false; // helper returns2, caller requires exactly1
++            if(requested==0 || requested==1) {
++                Once("phone-classification","Engine association/driver projection used; original vehicle ID range/sentinel lifecycle unresolved");
++                return phoneEligibility(requested,ped->mCurrentCar!=nullptr,
++                    ped->mCurrentCar && ped->mCurrentCar->GetCarDriver()==ped,false)==1;
++            }
++            return requested==-1;
++        }
++        auto current=ped->mTransform.mPosition;
++        if(r.token=="PHONE_RANGE" || r.token=="MPHONES_TRIGGER")
++            if(ped->mCurrentCar) current=ped->mCurrentCar->mTransform.mPosition;
++        int px=static_cast<int>(std::floor(Convert::MetersToMapUnits(current.x)*64));
++        int py=static_cast<int>(std::floor(Convert::MetersToMapUnits(current.z)*64));
++        auto at=r.entities.find(r.instruction.A); if(at==r.entities.end()) return {};
++        auto target=DeclarationPosition(at->second.declaration); if(!target) return {};
++        int x=static_cast<int>(std::lround(Convert::MetersToMapUnits(target->x)*64));
++        int y=static_cast<int>(std::lround(Convert::MetersToMapUnits(target->z)*64));
++        if(r.token=="PHONE_NEAR") return phoneNear(px,py,x,y);
++        if(r.token=="MPHONES_TRIGGER") {
++            if(ped->mCurrentCar && static_cast<int>(ped->mCurrentCar->mCarInfo->mModelID)==47) return false;
++            if(ped->IsEnteringOrExitingCar()) {
++                Once("trigger-mode","Original player mode mapping during vehicle transition unresolved"); return {};
++            }
++        }
++        return phoneArea(px,py,x/64,y/64,r.token=="PHONE_RANGE"?15:r.instruction.D);
++    }
++    if(r.token=="PHONE_VALID") {
++        auto phone=phones_.find(r.instruction.A);
++        if(phone==phones_.end() || !phone->second.object) return false;
++        auto* object=gGameObjectsManager.GetGameObjectByID(phone->second.object);
++        return object && !object->IsMarkedForDeletion();
++    }
 +    if(r.token=="GOTO") {
 +        auto at=r.entities.find(r.instruction.A); auto* p=player(r.owner);
 +        if(at!=r.entities.end() && p && p->mCharacter) if(auto target=ResolvePosition(at->second)) {
@@ -3400,10 +3572,10 @@ index 0000000..050b77b
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..2747733
+index 0000000..5b2b3bb
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,46 @@
+@@ -0,0 +1,47 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -3429,7 +3601,7 @@ index 0000000..2747733
 +    void Reset(); // call before map objects are destroyed
 +    void Prepare(const Section&);
 +    void Update(float dt);
-+    struct Phone { glm::vec3 position; int facing=0; }; // script world anchors, not fake object handles
++    struct Phone { glm::vec3 position; int facing=0; unsigned int object=0; int mode=1,baseSprite=0; };
 +    const std::map<int,Phone>& Phones() const {return phones_;}
 +    std::optional<glm::vec3> Arrow(int owner) const;
 +    // Explicit engine creation primitives. Callers must prove declaration/type/AI policy.
@@ -3444,6 +3616,7 @@ index 0000000..2747733
 +    std::map<int,Phone> phones_;
 +    std::set<unsigned int> ownedObjects_;
 +    std::array<std::optional<glm::vec3>,4> arrows_{};
++    std::array<int,4> soundPhones_{{-1,-1,-1,-1}};
 +    bool OwnerValid(int) const;
 +    void Once(const std::string&,const std::string&);
 +    GameObject* ResolveObject(const Entity&) const;
@@ -3985,10 +4158,10 @@ index 0000000..6c8003b
 +}
 diff --git a/src/mission/MissionSession.cpp b/src/mission/MissionSession.cpp
 new file mode 100755
-index 0000000..3813ea8
+index 0000000..48530e4
 --- /dev/null
 +++ b/src/mission/MissionSession.cpp
-@@ -0,0 +1,62 @@
+@@ -0,0 +1,64 @@
 +#include "../stdafx.h"
 +#include "MissionSession.h"
 +#include "../FileSystem.h"
@@ -4012,7 +4185,7 @@ index 0000000..3813ea8
 +}
 +MissionSession* MissionSession::Current() {return current;}
 +void MissionSession::SetCurrent(MissionSession* p) {current=p;}
-+void MissionSession::Stop() {loaded_=false; world_.Reset();}
++void MissionSession::Stop() {loaded_=false; clock_=MissionClock{}; world_.Reset();}
 +bool MissionSession::LoadSection(int section) {
 +    Stop(); economy_=gta::GameEconomy(4); script_={};
 +    std::ifstream input;
@@ -4043,7 +4216,9 @@ index 0000000..3813ea8
 +}
 +void MissionSession::Update(float dt) {
 +    if(!loaded_ || !std::isfinite(dt) || dt<0) return;
-+    world_.Update(dt); vm_.tick(); // exactly one VM tick per engine gameplay update
++    for(int steps=clock_.advance(dt); steps>0; --steps) {
++        world_.Update(1.0f/25); vm_.tick();
++    }
 +}
 +MissionSession::HUDNumbers MissionSession::Numbers(int owner) const {
 +    if(owner<0 || owner>=4) return {};
@@ -4053,12 +4228,13 @@ index 0000000..3813ea8
 +}
 diff --git a/src/mission/MissionSession.h b/src/mission/MissionSession.h
 new file mode 100755
-index 0000000..2a9c6a0
+index 0000000..d203285
 --- /dev/null
 +++ b/src/mission/MissionSession.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,27 @@
 +#pragma once
 +#include "CarnageMissionWorld.h"
++#include "PhoneRules.h"
 +namespace mission {
 +class MissionSession final {
 +public:
@@ -4080,14 +4256,15 @@ index 0000000..2a9c6a0
 +    MissionVM vm_;
 +    MissionScript script_;
 +    bool loaded_=false;
++    MissionClock clock_;
 +};
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..14bfd53
+index 0000000..625b987
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
-@@ -0,0 +1,325 @@
+@@ -0,0 +1,473 @@
 +#include "MissionVM.h"
 +#include <algorithm>
 +#include <limits>
@@ -4121,7 +4298,7 @@ index 0000000..14bfd53
 +}
 +LoadReport MissionVM::load(const Section& section) {
 +    processes_={}; instructions_.clear(); lines_.clear(); labels_.clear();
-+    entities_.clear(); children_.clear(); valid_=true;
++    entities_.clear(); triggers_.clear(); bookkeeping_.clear(); childRecords_.clear(); phoneRing_=false; phoneMission_={}; valid_=true;
 +    LoadReport report; std::set<std::string> unsupported;
 +    auto error=[&](const Record& r,const std::string& message) {
 +        Diagnostic d{"load-invalid",message,r.line,-1};
@@ -4135,9 +4312,15 @@ index 0000000..14bfd53
 +                if(r.operands.empty()) throw std::invalid_argument("counter value missing");
 +                e.value=number(r.operands[0]);
 +            }
++            if(r.token=="TELEPHONE" && !r.operands.empty()) e.aux=number(r.operands[0]);
++            if(r.token=="MPHONES" && r.operands.size()>=2) {
++                triggers_[id]={1,number(r.operands[0]),number(r.operands[1]),r.prefix=="1"};
++                e.value=id; e.type=34;
++            }
 +            if(!entities_.emplace(id,std::move(e)).second) error(r,"duplicate entity ID");
 +        } catch(const std::exception& e) {error(r,e.what());}
 +    }
++    for(std::size_t n=0;n<section.declarations.size();++n) bookkeeping_[static_cast<int>(n)].type=0;
 +    for(const auto& r:section.instructions) {
 +        Instruction i;
 +        for(std::size_t op=0;op<std::size(commands);++op) {
@@ -4214,7 +4397,8 @@ index 0000000..14bfd53
 +}
 +void MissionVM::cleanup(int slot) {
 +    auto& p=processes_[slot];
-+    if(p.trigger!=-1) {
++    if(triggers_.count(p.trigger)) triggers_.at(p.trigger).state=1;
++    else if(p.trigger!=-1) {
 +        Instruction trigger; trigger.A=p.trigger;
 +        WorldRequest request{"CLEANUP_TRIGGER","0043e2b0/00474d10",slot,owner(slot),
 +                             trigger,p,entities_,instructions_,labels_};
@@ -4222,7 +4406,7 @@ index 0000000..14bfd53
 +            issue("cleanup-unresolved","TODO-evidence:0043e2b0 trigger re-enable",slot);
 +        }
 +    }
-+    p.active=false; p.pc=0; p.timer=0; p.trigger=0; p.protection=0;
++    p.active=false; p.pc=0; p.timer=0; p.trigger=0; p.protection=0; p.aux=-1;
 +}
 +void MissionVM::branch(int slot,std::int32_t target) {
 +    auto& p=processes_[slot]; p.state=1;
@@ -4256,7 +4440,27 @@ index 0000000..14bfd53
 +    value=*result; return true;
 +}
 +void MissionVM::tick() {
-+    // 00446fe0: inspect live active array, slots 0..31, exactly one dispatch each.
++    // Type12 triggers precede the live scheduler, allowing same-update dispatch.
++    for(auto& item:triggers_) for(int root=0;root<4;++root) {
++        auto& t=item.second;
++        if(t.state==4 || processes_[root].player<0) continue;
++        Instruction query; query.A=item.first; query.D=t.radius;
++        WorldRequest request{"MPHONES_TRIGGER","0047a3a0",root,root,query,processes_[root],entities_,instructions_,labels_};
++        auto inside=world_.predicate(request);
++        if(!inside) {issue("unresolved","Type12 player mode/model mapping unavailable",root); continue;}
++        if(t.state==0) {t.state=1; continue;}
++        if(!*inside || t.state!=1) continue;
++        t.state=0;
++        if(phoneRing_ || phoneMission_[root]) continue;
++        int child=4; while(child<32 && processes_[child].active) ++child;
++        if(child==32) {issue("trigger-exhausted","No free process slot; unsafe original write rejected",root); t.state=3; continue;}
++        auto target=labels_.find(t.target);
++        if(target==labels_.end()) {issue("unresolved","Missing trigger target",root); continue;}
++        auto& c=processes_[child]; c.active=true; c.blocked=false; c.state=1;
++        c.pc=static_cast<std::int16_t>(target->second); c.parent=root;
++        c.player=processes_[root].player; c.trigger=item.first; t.state=3;
++    }
++    // 00446fe0: ascending live slots; END aliases the loop cursor to its root.
 +    for(int slot=0;slot<32;++slot) {
 +        auto& p=processes_[slot];
 +        if(!p.active || p.blocked) continue;
@@ -4264,8 +4468,10 @@ index 0000000..14bfd53
 +            block(slot,"physical PC out of range"); continue;
 +        }
 +        if(owner(slot)<0) {block(slot,"invalid/cyclic parent chain"); continue;}
++        epilogueSlot_=slot;
 +        step(slot);
-+        world_.postDispatch(slot,p); // Also for DONOWT and newly deactivated processes.
++        slot=epilogueSlot_;
++        world_.postDispatch(slot,processes_[slot]); // Also for DONOWT and newly deactivated processes.
 +    }
 +}
 +void MissionVM::step(int slot) {
@@ -4288,6 +4494,115 @@ index 0000000..14bfd53
 +        if(at==entities_.end() || !at->second.value) {block(slot,"entity value/handle unresolved"); return nullptr;}
 +        return &*at->second.value;
 +    };
++    // Nested exe geometry/state predicates remain world-owned and may be unknown.
++    auto phoneQuery=[&](const char* token,int id)->std::optional<bool> {
++        Instruction query=i; query.A=id;
++        WorldRequest r{token,"00476340/00478630/00478700",slot,owner(slot),query,p,entities_,instructions_,labels_};
++        return world_.predicate(r);
++    };
++    auto phoneEffect=[&](const char* token,int id) {
++        Instruction event=i; event.A=id;
++        WorldRequest r{token,"00478900/00478b30/00478c90/00478d80",slot,owner(slot),event,p,entities_,instructions_,labels_};
++        if(world_.execute(r)!=WorldResult::Done) issue("partial",std::string(token)+" presentation/cleanup unresolved",slot);
++    };
++    if(op==2) {
++        if(p.state==1) {
++            p.state=low16(wrap(static_cast<std::uint32_t>(i.D)+10U)); i.E=1;
++            phoneEffect("PHONE_ANSWER_START",i.A);
++        }
++        auto entity=entities_.find(i.A);
++        if(entity==entities_.end()) {block(slot,"ANSWER missing phone"); return;}
++        bool eligible=true;
++        if(entity->second.aux>0 && i.E==1) {
++            auto result=phoneQuery("PHONE_ELIGIBLE",i.A);
++            if(!result) {block(slot,"00476340 eligibility unresolved"); return;}
++            eligible=*result; i.E=eligible?1:0;
++        }
++        const bool expired=p.timer==0;
++        if(expired) {
++            phoneEffect("PHONE_RING",i.A); p.timer=50; p.state=low16(p.state-1);
++            if(p.state==10) {phoneEffect("PHONE_STOP",i.A); branch(slot,i.C); return;}
++        } else p.timer=low16(p.timer-1);
++        if(!eligible) return;
++        auto near=phoneQuery("PHONE_NEAR",i.A);
++        if(!near) {block(slot,"00478630 answer geometry unresolved"); return;}
++        if(!*near) return;
++        auto state=phoneQuery("PHONE_ON_FOOT",i.A);
++        if(!state) {block(slot,"original ped state6/7 mapping unresolved"); return;}
++        if(!*state) return;
++        phoneEffect("PHONE_STOP",i.A);
++        branch(slot,expired && i.E!=1?i.C:i.B); return;
++    }
++    if(op==16) {
++        const int root=owner(slot);
++        if(root>=4) {block(slot,"MPHONE requires participant root"); return;}
++        if(phoneMission_[root]) return;
++        if(i.C<0 || i.C>0x578 || i.A<0 || i.A>INT32_MAX-i.C) {
++            block(slot,"invalid phone group"); return;
++        }
++        auto validPhone=[&](int id) {
++            auto at=entities_.find(id);
++            if(at==entities_.end() || at->second.declaration.token!="TELEPHONE") return false;
++            if(at->second.value) return *at->second.value>=0;
++            auto valid=phoneQuery("PHONE_VALID",id);
++            if(!valid) {block(slot,"phone runtime handle validity unresolved"); return false;}
++            return *valid;
++        };
++        auto group=[&](const char* event) {
++            for(int n=0;n<i.C;++n) if(validPhone(i.A+n)) phoneEffect(event,i.A+n);
++        };
++        if(p.state==1) {
++            p.state=0;
++            if(!phoneRing_) {phoneRing_=true; i.D=25; group("PHONE_START");}
++        }
++        i.D=wrap(static_cast<std::uint32_t>(i.D)-1U);
++        auto range=phoneQuery("PHONE_RANGE",i.A);
++        if(!range) {block(slot,"00478700 group range geometry unresolved"); return;}
++        if(!*range) {group("PHONE_STOP"); phoneRing_=false; p.active=false; return;}
++        bool rang=false;
++        for(int n=0;n<i.C;++n) {
++            if(!validPhone(i.A+n)) continue;
++            if(i.D==0 || i.D==-10) {phoneEffect("PHONE_RING",i.A+n); rang=true;}
++            auto near=phoneQuery("PHONE_NEAR",i.A+n);
++            if(!near) {block(slot,"00478630 answer geometry unresolved"); return;}
++            if(!*near) continue;
++            auto foot=phoneQuery("PHONE_ON_FOOT",i.A+n);
++            if(!foot) {block(slot,"phone player state mapping unresolved"); return;}
++            if(!*foot) continue;
++            group("PHONE_STOP");
++            for(int other=3;other<32;++other) {
++                auto& c=processes_[other];
++                if(other==slot || !c.active || c.protection==1 || c.protection==2) continue;
++                if(c.pc>=0 && static_cast<std::size_t>(c.pc)<instructions_.size() && instructions_[c.pc].opcode==16) continue;
++                cleanup(other);
++            }
++            phoneEffect("PHONE_MISSION_CLEANUP",i.A+n);
++            branch(slot,i.B); p.pc=low16(static_cast<int>(p.pc)+n);
++            entities_.at(i.A+n).value=-1; phoneRing_=false; phoneMission_[root]=true;
++            return;
++        }
++        if(rang) i.D=i.D==0?-1:25;
++        return;
++    }
++    if(op==18 || op==19) {
++        auto trigger=triggers_.find(i.A);
++        if(trigger!=triggers_.end()) {
++            trigger->second.state=op==18?4:1;
++            if(op==18) p.trigger=-1;
++            success(); return;
++        }
++    }
++    if(op==129) {
++        for(int other=3;other<32;++other) {
++            const auto& c=processes_[other];
++            if(other==slot || !c.active || c.protection==1 || c.protection==2) continue;
++            if(c.pc>=0 && static_cast<std::size_t>(c.pc)<instructions_.size() && instructions_[c.pc].opcode==16) continue;
++            cleanup(other);
++        }
++        for(auto& t:triggers_) if(!t.second.preserve) t.second.state=4;
++        // Known VM effects apply even when nested world cleanup remains unresolved.
++        effect(); return;
++    }
 +    if(op==17) return;
 +    if(op==4) {
 +        if(p.state==1) {p.state=2; i.C=i.D; return;}
@@ -4308,13 +4623,13 @@ index 0000000..14bfd53
 +        while(at>=0) {
 +            auto& proc=processes_[at]; proc.active=false; proc.outcome=low16(i.A); at=proc.parent;
 +        }
-+        // Original changes current-slot global while walking ancestors; the
-+        // epilogue PC/timer alias for this case is not normalized silently.
-+        issue("partial","TODO-evidence:0044750a END epilogue owner alias",slot); return;
++        const int root=owner(slot);
++        processes_[root].pc=p.pc; processes_[root].timer=p.timer;
++        epilogueSlot_=root; return;
 +    }
 +    if(op==89) {
 +        int child=4; while(child<32 && processes_[child].active) ++child;
-+        if(child==32) {block(slot,"KICKSTART exhaustion: original writes via -1 index"); return;}
++        if(child==32) {branch(slot,i.C); return;}
 +        std::size_t dest=static_cast<std::size_t>(p.pc)+1;
 +        if(i.A!=0) {
 +            auto at=labels_.find(i.A);
@@ -4322,31 +4637,41 @@ index 0000000..14bfd53
 +            dest=at->second;
 +        }
 +        if(dest>=instructions_.size()) {block(slot,"KICKSTART child PC out of range"); return;}
-+        Process c; c.active=true; c.pc=static_cast<std::int16_t>(dest);
++        int record=0x577;
++        for(;record>=0;--record) {
++            auto& entry=bookkeeping_[record];
++            if(entry.type==-1 && entry.cells[0]==-1 && entry.cells[1]==-1 && entry.cells[2]==-1) break;
++        }
++        if(record<0) {block(slot,"KICKSTART bookkeeping exhaustion: unsafe original write rejected"); return;}
++        auto& c=processes_[child]; c.active=true; c.blocked=false; c.state=1; c.trigger=-1;
++        c.pc=static_cast<std::int16_t>(dest);
 +        c.parent=static_cast<std::int16_t>(owner(slot)); c.player=processes_[owner(slot)].player;
-+        c.protection=p.protection; processes_[child]=c;
-+        children_[static_cast<std::size_t>(p.pc)].push_back(child);
-+        issue("partial","TODO-evidence:00448edd bookkeeping entity allocation and D/E mutation omitted",slot);
-+        branch(slot,i.B); return;
++        c.protection=p.protection;
++        const auto target=i.B;
++        branch(slot,target); // Original branches before writing shared D/E.
++        i.D=child; i.E=slot; childRecords_[child]=record;
++        bookkeeping_[record].type=100; bookkeeping_[record].cells[0]=child;
++        return;
 +    }
 +    if(op==96 || op==98 || op==101) {
 +        // Partial contract: A points to spawning instruction; never interpret A as slot.
 +        auto at=labels_.find(i.A);
 +        if(at==labels_.end()) {block(slot,"process cancellation references missing label"); return;}
-+        auto children=children_.find(at->second);
-+        if(children!=children_.end()) {
-+            auto& list=children->second;
++        auto& parent=instructions_[at->second];
++        auto mapped=childRecords_.find(parent.D);
++        auto record=bookkeeping_.find(mapped==childRecords_.end()?-1:mapped->second);
++        if(record!=bookkeeping_.end()) {
++            auto& entry=record->second;
++            auto cancel=[&](int cell) {
++                const int child=entry.cells[cell];
++                if(child>=0 && child<32) cleanup(child);
++                entry.type=100; entry.cells[cell]=-1;
++            };
 +            if(op==101) {
-+                if(i.D>=1 && i.D<=4 && static_cast<std::size_t>(i.D)<=list.size()) {
-+                    if(list[i.D-1]>=0) cleanup(list[i.D-1]);
-+                    list[i.D-1]=-1;
-+                } else if(i.D<1 || i.D>4) instructions_[at->second].E=-1;
-+            } else {
-+                for(auto& child:list) {if(child>=0) cleanup(child); child=-1;}
-+                if(op==96) instructions_[at->second].E=-1;
-+            }
-+        }
-+        issue("partial","TODO-evidence:004493c1/004495ea/004491xx cancellation bookkeeping and nested cleanup",slot);
++                if(i.D>=1 && i.D<=4) cancel(i.D-1);
++            } else for(int cell=0;cell<4;++cell) cancel(cell);
++        } else issue("partial","Cancellation record absent; original uninitialized access rejected",slot);
++        if(op==96 || (op==101 && (i.D<1 || i.D>4))) if(parent.E>=0) parent.E=-1;
 +        success(); return;
 +    }
 +    if(op==130) {p.protection=1; success(); return;}
@@ -4415,10 +4740,10 @@ index 0000000..14bfd53
 +}
 diff --git a/src/mission/MissionVM.h b/src/mission/MissionVM.h
 new file mode 100755
-index 0000000..b831ad7
+index 0000000..8d9f626
 --- /dev/null
 +++ b/src/mission/MissionVM.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,107 @@
 +#pragma once
 +#include "MissionScript.h"
 +#include <array>
@@ -4441,7 +4766,7 @@ index 0000000..b831ad7
 +    bool active=false, blocked=false;
 +    std::int16_t pc=0, state=1, timer=0, parent=-1, player=-1;
 +    std::int16_t trigger=-1, outcome=0;
-+    std::int32_t protection=0;
++    std::int32_t protection=0, aux=0;
 +};
 +struct Entity {
 +    Record declaration; // Original coordinates and operands: no universal scale conversion.
@@ -4504,9 +4829,15 @@ index 0000000..b831ad7
 +    std::vector<std::size_t> lines_;
 +    std::map<std::int32_t,std::size_t> labels_;
 +    std::map<std::int32_t,Entity> entities_;
-+    // Logical bookkeeping per spawning instruction; deliberately not a fabricated
-+    // original entity ID. D/E mutation remains unresolved and is flagged.
-+    std::map<std::size_t,std::vector<int>> children_;
++    // Raw entity-record indices, separate from declaration-ID lookup.
++    struct Bookkeeping { int type=-1; std::array<int,4> cells{{-1,-1,-1,-1}}; };
++    std::map<int,Bookkeeping> bookkeeping_;
++    std::map<int,int> childRecords_;
++    int epilogueSlot_=-1;
++    bool phoneRing_=false;
++    std::array<bool,4> phoneMission_{};
++    struct Trigger { int state=1,target=0,radius=0; bool preserve=false; };
++    std::map<int,Trigger> triggers_;
 +    bool valid_=true;
 +    void step(int slot);
 +    void branch(int slot,std::int32_t target);
@@ -4518,6 +4849,43 @@ index 0000000..b831ad7
 +    bool wait(int slot,const Instruction&);
 +    bool predicate(int slot,Instruction&,bool&);
 +    WorldResult execute(int slot,Instruction&);
++};
++}
+diff --git a/src/mission/PhoneRules.h b/src/mission/PhoneRules.h
+new file mode 100755
+index 0000000..3f64bf1
+--- /dev/null
++++ b/src/mission/PhoneRules.h
+@@ -0,0 +1,31 @@
++#pragma once
++#include <algorithm>
++#include <cmath>
++namespace mission {
++inline bool phoneNear(int px,int py,int x,int y) {
++    return px-16<x && x<px+16 && py-16<y && y<py+16;
++}
++inline bool phoneArea(int px64,int py64,int x,int y,int radius) {
++    const int px=static_cast<int>(std::floor(px64/64.0)), py=static_cast<int>(std::floor(py64/64.0));
++    return x-radius<=px && px<=x+radius && y-radius<=py && py<=y+radius;
++}
++// Engine association/driver state projects the recovered sentinel and ownership.
++// Numeric original states 6/7 and field+18 have no proven engine mapping.
++inline int phoneEligibility(int requested,bool associated,bool driver,bool originalVehicleState) {
++    if(requested==-1) return 1;
++    if(requested==0) return associated && driver ? 1:0;
++    if(requested==1) return !associated ? 1:0;
++    if(requested==2) return originalVehicleState ? 2:0;
++    return 0;
++}
++class MissionClock {
++    double remainder_=0;
++public:
++    int advance(float dt) {
++        if(!std::isfinite(dt) || dt<0) return 0;
++        remainder_+=std::min(static_cast<double>(dt),8.0/25.0);
++        const int steps=std::min(8,static_cast<int>((remainder_+1e-9)*25));
++        remainder_-=steps/25.0; return steps;
++    }
 +};
 +}
 diff --git a/src/path_utils.cpp b/src/path_utils.cpp

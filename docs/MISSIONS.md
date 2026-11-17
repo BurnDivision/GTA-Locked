@@ -13,6 +13,11 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
 - HUD: money, multiplier, lives and wanted level come from GameEconomy (were fixed placeholder values).
 - The game starts in Liberty City (NYC.CMP) as the original does, when that map is present.
 
+- Payphones (M1-9b): placed as the original phone object; answer box +-16/64 cell, range +-15 cells, ring trigger +-3 cells
+  (recovered from gta.exe, no height/speed test). The mission interpreter runs at the original 25 updates/s.
+
 ## Not yet working
-- Payphones are loaded as positions only: they don't ring and can't be answered, so missions can't start yet.
+- The first mission chain can't finish in-game: original player states 6/7, RESET cleanup and PARKED_ON car creation
+  are not recovered yet, so those steps block.
+- The score/lives/multiplier HUD panel is not visible on Android (pre-existing, under investigation).
 - Police pursuit, arrest, death/respawn, pickups, frenzies, front-end menu, saves and radio.
