@@ -1597,11 +1597,148 @@ index 85f2137..a82b020 100644
      // in car control actions
      float mAcceleration = 0.0f; // 0 means no acceleration, < 0 move reverse, > 0 full acceleration
      float mSteerDirection = 0.0f; // 0 means no steer, < 0 steer left, > 0 steer right
+diff --git a/src/GameMapHelpers.cpp b/src/GameMapHelpers.cpp
+index 7d2a749..87ede89 100644
+--- a/src/GameMapHelpers.cpp
++++ b/src/GameMapHelpers.cpp
+@@ -8,8 +8,8 @@ bool GameMapHelpers::BuildMapMesh(GameMapManager& cityScape, const Rect& area, i
+     debug_assert(layerIndex > -1 && layerIndex < MAP_LAYERS_COUNT);
+ 
+     // preallocate
+-    meshData.mBlocksIndices.reserve(1 * 1024 * 1024);
+-    meshData.mBlocksVertices.reserve(1 * 1024 * 1024);
++    meshData.mBlocksIndices.reserve(area.w * area.h * 30);
++    meshData.mBlocksVertices.reserve(area.w * area.h * 30);
+ 
+     // prepare
+     for (int tiley = 0; tiley < area.h; ++tiley)
+@@ -21,7 +21,7 @@ bool GameMapHelpers::BuildMapMesh(GameMapManager& cityScape, const Rect& area, i
+ 
+         for (int iface = 0; iface < eBlockFace_COUNT; ++iface)
+         {
+-            if (mapBlock->mFaces[iface] == 0)
++            if (cityScape.FaceTexture(tilex + area.x, tiley + area.y, layerIndex, (eBlockFace)iface) < 0)
+                 continue;
+ 
+             eBlockFace faceid = (eBlockFace) iface;
+@@ -34,8 +34,8 @@ bool GameMapHelpers::BuildMapMesh(GameMapManager& cityScape, const Rect& area, i
+ bool GameMapHelpers::BuildMapMesh(GameMapManager& cityScape, const Rect& area, CityMeshData& meshData)
+ {
+     // preallocate
+-    meshData.mBlocksIndices.reserve(4 * 1024 * 1024);
+-    meshData.mBlocksVertices.reserve(4 * 1024 * 1024);
++    meshData.mBlocksIndices.reserve(area.w * area.h * MAP_LAYERS_COUNT * 30);
++    meshData.mBlocksVertices.reserve(area.w * area.h * MAP_LAYERS_COUNT * 30);
+ 
+     // prepare
+     for (int tilez = 0; tilez < MAP_LAYERS_COUNT; ++tilez)
+@@ -48,7 +48,7 @@ bool GameMapHelpers::BuildMapMesh(GameMapManager& cityScape, const Rect& area, C
+ 
+         for (int iface = 0; iface < eBlockFace_COUNT; ++iface)
+         {
+-            if (mapBlock->mFaces[iface] == 0)
++            if (cityScape.FaceTexture(tilex + area.x, tiley + area.y, tilez, (eBlockFace)iface) < 0)
+                 continue;
+ 
+             eBlockFace faceid = (eBlockFace) iface;
+@@ -60,10 +60,9 @@ bool GameMapHelpers::BuildMapMesh(GameMapManager& cityScape, const Rect& area, C
+ 
+ void GameMapHelpers::PutBlockFace(GameMapManager& cityScape, CityMeshData& meshData, int x, int y, int z, eBlockFace face, const MapBlockInfo* blockInfo)
+ {
+-    assert(blockInfo && blockInfo->mFaces[face]);
+-    eBlockType blockType = (face == eBlockFace_Lid) ? eBlockType_Lid : eBlockType_Side;
+-
+-    const int blockTexIndex = cityScape.mStyleData.GetBlockTextureLinearIndex(blockType, blockInfo->mFaces[face]);
++    assert(blockInfo);
++    const int blockTexIndex = cityScape.FaceTexture(x,y,z,face);
++    assert(blockTexIndex>=0);
+ 
+     // setup base cube vertices
+     glm::vec3 cubePoints[] =
+diff --git a/src/GameMapManager.cpp b/src/GameMapManager.cpp
+index ac93788..eea45bb 100644
+--- a/src/GameMapManager.cpp
++++ b/src/GameMapManager.cpp
+@@ -95,6 +95,7 @@ bool GameMapManager::LoadFromFile(const std::string& filename)
+ 
+ void GameMapManager::Cleanup()
+ {
++    mRuntimeFaces.clear(); mDirtyMeshChunks.clear(); mDirtyCollisionColumns.clear(); mDirtyCollisionFaces.clear(); ++mMeshRevision; ++mCollisionRevision;
+     mStyleData.Cleanup();
+     for (int tiley = 0; tiley < MAP_DIMENSIONS; ++tiley)
+     for (int tilex = 0; tilex < MAP_DIMENSIONS; ++tilex)
+@@ -602,3 +603,56 @@ std::string GameMapManager::GetStyleFileName(int styleNumber) const
+     std::string styleName = cxx::va("STYLE%03d.G24", styleNumber);
+     return styleName;
+ }
++
++namespace {
++bool validCell(int x,int y,int z) {
++    return x>=0 && x<MAP_DIMENSIONS && y>=0 && y<MAP_DIMENSIONS && z>=0 && z<MAP_LAYERS_COUNT;
++}
++}
++bool GameMapManager::SetBlockInfo(int x,int y,int z,const MapBlockInfo& block) {
++    if(!IsLoaded() || !validCell(x,y,z)) return false;
++    auto& old=mMapTiles[z][y][x];
++    // Compare fields, never padding or bitfield storage bytes.
++    bool same=old.mRemap==block.mRemap && old.mGroundType==block.mGroundType &&
++        old.mLidRotation==block.mLidRotation && old.mTrafficHint==block.mTrafficHint &&
++        old.mSlopeType==block.mSlopeType && old.mUpDirection==block.mUpDirection &&
++        old.mDownDirection==block.mDownDirection && old.mLeftDirection==block.mLeftDirection &&
++        old.mRightDirection==block.mRightDirection && old.mIsFlat==block.mIsFlat &&
++        old.mFlipTopBottomFaces==block.mFlipTopBottomFaces &&
++        old.mFlipLeftRightFaces==block.mFlipLeftRightFaces && old.mIsRailway==block.mIsRailway &&
++        std::equal(std::begin(old.mFaces),std::end(old.mFaces),std::begin(block.mFaces));
++    if(same) return true;
++    if(old.mGroundType!=block.mGroundType) {
++        ++mCollisionRevision;
++        // A column fixture also depends on the four adjacent ground types.
++        for(auto offset:{std::pair<int,int>{0,0},{1,0},{-1,0},{0,1},{0,-1}}) {
++            int cx=x+offset.first,cy=y+offset.second;
++            if(validCell(cx,cy,z)) mDirtyCollisionColumns.emplace(cx,cy);
++        }
++    }
++    old=block; ++mMeshRevision; DirtyMeshCell(x,y); return true;
++}
++bool GameMapManager::SetRuntimeFace(int x,int y,int z,eBlockFace face,int texture,bool solid) {
++    if(!IsLoaded() || !validCell(x,y,z) || face<0 || face>=eBlockFace_Lid ||
++       texture<0 || texture>=mStyleData.GetBlockTexturesCount()) return false;
++    FaceKey key{x,y,z,face}; auto at=mRuntimeFaces.find(key);
++    if(at==mRuntimeFaces.end() || at->second.solid!=solid) {
++        ++mCollisionRevision;
++        if(face==eBlockFace_W || face==eBlockFace_N) mDirtyCollisionFaces.insert(key);
++    }
++    if(at==mRuntimeFaces.end() || at->second.texture!=texture) { ++mMeshRevision; DirtyMeshCell(x,y); }
++    mRuntimeFaces[key]={texture,solid}; return true;
++}
++void GameMapManager::ClearRuntimeFace(int x,int y,int z,eBlockFace face) {
++    if(mRuntimeFaces.erase(FaceKey{x,y,z,face})) {
++        ++mMeshRevision; ++mCollisionRevision; DirtyMeshCell(x,y);
++        if(face==eBlockFace_W || face==eBlockFace_N) mDirtyCollisionFaces.emplace(x,y,z,face);
++    }
++}
++int GameMapManager::FaceTexture(int x,int y,int z,eBlockFace face) const {
++    auto at=mRuntimeFaces.find(FaceKey{x,y,z,face});
++    if(at!=mRuntimeFaces.end()) return at->second.texture;
++    const auto* block=GetBlockInfo(x,y,z);
++    if(!block || !block->mFaces[face]) return -1;
++    return mStyleData.GetBlockTextureLinearIndex(face==eBlockFace_Lid?eBlockType_Lid:eBlockType_Side,block->mFaces[face]);
++}
 diff --git a/src/GameMapManager.h b/src/GameMapManager.h
-index 8cfa15c..d60f533 100644
+index 8cfa15c..450821d 100644
 --- a/src/GameMapManager.h
 +++ b/src/GameMapManager.h
-@@ -27,6 +27,11 @@ public:
+@@ -2,6 +2,9 @@
+ 
+ #include "GameDefs.h"
+ #include "StyleData.h"
++#include <map>
++#include <tuple>
++#include <set>
+ 
+ // this class manages GTA map and style data which get loaded from CMP/G24-files
+ class GameMapManager final: public cxx::noncopyable
+@@ -27,11 +30,32 @@ public:
      // test whether city scape data was loaded, including style data
      bool IsLoaded() const;
  
@@ -1613,6 +1750,36 @@ index 8cfa15c..d60f533 100644
      // get map block info at specific location
      // note that location coords should never exceed MAP_DIMENSIONS for x,y and MAP_LAYERS_COUNT for layer
      // @param coordx, coordy, layer: Block location
+     const MapBlockInfo* GetBlockInfo(int coordx, int coordy, int layer) const;
+ 
++    // Runtime changes are per CELL, never shared compressed block/style IDs.
++    using FaceKey = std::tuple<int,int,int,int>; // x,y,engine layer,face
++    struct RuntimeFace {int texture; bool solid;}; // linear style texture index
++    bool SetBlockInfo(int x,int y,int layer,const MapBlockInfo& block);
++    bool SetRuntimeFace(int x,int y,int layer,eBlockFace face,int texture,bool solid);
++    void ClearRuntimeFace(int x,int y,int layer,eBlockFace face);
++    int FaceTexture(int x,int y,int layer,eBlockFace face) const;
++    const std::map<FaceKey,RuntimeFace>& RuntimeFaces() const {return mRuntimeFaces;}
++    // Single consumers: renderer and physics drain their own coalesced queues.
++    std::set<int> mDirtyMeshChunks;
++    std::set<std::pair<int,int>> mDirtyCollisionColumns;
++    std::set<FaceKey> mDirtyCollisionFaces;
++    void DirtyMeshCell(int x,int y) { mDirtyMeshChunks.insert(((y+4)/22)*12+(x+4)/22); }
++    unsigned long long MeshRevision() const {return mMeshRevision;}
++    unsigned long long CollisionRevision() const {return mCollisionRevision;}
++
+     // Get navigation data sector at specific map point
+     // @param position: Current position on map, meters
+     // @returns null on error
+@@ -68,6 +92,8 @@ private:
+     std::string GetStyleFileName(int styleNumber) const;
+ 
+ private:
++    std::map<FaceKey,RuntimeFace> mRuntimeFaces;
++    unsigned long long mMeshRevision=0,mCollisionRevision=0;
+     MapBlockInfo mMapTiles[MAP_LAYERS_COUNT][MAP_DIMENSIONS][MAP_DIMENSIONS]; // z, y, x
+     int mBaseTilesData[MAP_DIMENSIONS][MAP_DIMENSIONS]; // y x
+ 
 diff --git a/src/GameplayGamestate.cpp b/src/GameplayGamestate.cpp
 index fc6c789..b7af869 100644
 --- a/src/GameplayGamestate.cpp
@@ -3100,6 +3267,280 @@ index 38eedcd..8ee5098 100644
 +    bool mReady=false,mStartPending=false,mQuitPending=false;
 +    float mElapsed=0,mCreditsElapsed=0;
 +};
+diff --git a/src/MapRenderer.cpp b/src/MapRenderer.cpp
+index 8f57957..f6f9563 100644
+--- a/src/MapRenderer.cpp
++++ b/src/MapRenderer.cpp
+@@ -47,10 +47,15 @@ bool MapRenderer::Initialize()
+ 
+     return true;
+ }
+-
++
+ void MapRenderer::Deinit()
+ {
+     mSpriteBatch.Deinit();
++    for(auto& chunk:mMapBlocksChunks) {
++        if(chunk.vertices) gGraphicsDevice.DestroyBuffer(chunk.vertices);
++        if(chunk.indices) gGraphicsDevice.DestroyBuffer(chunk.indices);
++        chunk.vertices=chunk.indices=nullptr;
++    }
+     if (mCityMeshBufferV)
+     {
+         gGraphicsDevice.DestroyBuffer(mCityMeshBufferV);
+@@ -67,14 +72,15 @@ void MapRenderer::Deinit()
+ void MapRenderer::RenderFrameBegin()
+ {
+     mRenderStats.FrameBegin();
++    if(!gGameMap.mDirtyMeshChunks.empty()) UpdateMapMesh();
+ 
+     // pre draw game objects
+-    for (GameObject* gameObject: gGameObjectsManager.mAllObjects)
+-    {
+-        if (gameObject->IsAttachedToObject())
+-            continue;
+-
+-        PreDrawGameObject(gameObject);
++    for (GameObject* gameObject: gGameObjectsManager.mAllObjects)
++    {
++        if (gameObject->IsAttachedToObject())
++            continue;
++
++        PreDrawGameObject(gameObject);
+     }
+ }
+ 
+@@ -94,42 +100,42 @@ void MapRenderer::PreDrawGameObject(GameObject* gameObject)
+         PreDrawGameObject(currAttachment);
+     }
+ }
+-
+-void MapRenderer::RenderFrame(GameCamera* renderview)
+-{
+-    debug_assert(renderview);
+-
+-    gGraphicsDevice.BindTexture(eTextureUnit_3, gSpriteManager.mPalettesTable);
+-    gGraphicsDevice.BindTexture(eTextureUnit_2, gSpriteManager.mPaletteIndicesTable);
+-
++
++void MapRenderer::RenderFrame(GameCamera* renderview)
++{
++    debug_assert(renderview);
++
++    gGraphicsDevice.BindTexture(eTextureUnit_3, gSpriteManager.mPalettesTable);
++    gGraphicsDevice.BindTexture(eTextureUnit_2, gSpriteManager.mPaletteIndicesTable);
++
+     if (gGameCheatsWindow.mEnableDrawCityMesh)
+-    {
+-        DrawCityMesh(renderview);
+-    }
+-
+-    mSpriteBatch.BeginBatch(SpriteBatch::DepthAxis_Y, eSpritesSortMode_HeightAndDrawOrder);
+-
+-    // collect and render game objects sprites
+-    for (GameObject* gameObject: gGameObjectsManager.mAllObjects)
+-    {
+-        // attached objects must be drawn after the object to which they are attached
+-        if (gameObject->IsAttachedToObject())
+-            continue;
+-
+-        DrawGameObject(renderview, gameObject);
+-    }
+-
+-    gRenderManager.mSpritesProgram.Activate();
+-    gRenderManager.mSpritesProgram.UploadCameraTransformMatrices(*renderview);
+-
+-    RenderStates renderStates = RenderStates()
+-        .Disable(RenderStateFlags_FaceCulling)
+-        .Disable(RenderStateFlags_DepthWrite);
+-    gGraphicsDevice.SetRenderStates(renderStates);
+-
+-    mSpriteBatch.Flush();
+-
+-    gRenderManager.mSpritesProgram.Deactivate();
++    {
++        DrawCityMesh(renderview);
++    }
++
++    mSpriteBatch.BeginBatch(SpriteBatch::DepthAxis_Y, eSpritesSortMode_HeightAndDrawOrder);
++
++    // collect and render game objects sprites
++    for (GameObject* gameObject: gGameObjectsManager.mAllObjects)
++    {
++        // attached objects must be drawn after the object to which they are attached
++        if (gameObject->IsAttachedToObject())
++            continue;
++
++        DrawGameObject(renderview, gameObject);
++    }
++
++    gRenderManager.mSpritesProgram.Activate();
++    gRenderManager.mSpritesProgram.UploadCameraTransformMatrices(*renderview);
++
++    RenderStates renderStates = RenderStates()
++        .Disable(RenderStateFlags_FaceCulling)
++        .Disable(RenderStateFlags_DepthWrite);
++    gGraphicsDevice.SetRenderStates(renderStates);
++
++    mSpriteBatch.Flush();
++
++    gRenderManager.mSpritesProgram.Deactivate();
+ }
+ 
+ void MapRenderer::DrawGameObject(GameCamera* renderview, GameObject* gameObject)
+@@ -173,36 +179,54 @@ void MapRenderer::DebugDraw(DebugRenderer& debugRender)
+ 
+ void MapRenderer::DrawCityMesh(GameCamera* renderview)
+ {
+-    RenderStates cityMeshRenderStates;
+-
+-    gGraphicsDevice.SetRenderStates(cityMeshRenderStates);
+-
+-    gRenderManager.mCityMeshProgram.Activate();
+-    gRenderManager.mCityMeshProgram.UploadCameraTransformMatrices(*renderview);
+-
+-    if (mCityMeshBufferV && mCityMeshBufferI)
+-    {
+-        gGraphicsDevice.BindVertexBuffer(mCityMeshBufferV, CityVertex3D_Format::Get());
+-        gGraphicsDevice.BindIndexBuffer(mCityMeshBufferI);
+-        gGraphicsDevice.BindTexture(eTextureUnit_0, gSpriteManager.mBlocksTextureArray);
+-        gGraphicsDevice.BindTexture(eTextureUnit_1, gSpriteManager.mBlocksIndicesTable);
+-
+-        for (const MapBlocksChunk& currChunk: mMapBlocksChunks)
+-        {
+-            if (!renderview->mFrustum.contains(currChunk.mBounds))
+-                continue;
+-
+-            gGraphicsDevice.RenderIndexedPrimitives(ePrimitiveType_Triangles, eIndicesType_i32, 
+-                currChunk.mIndicesStart * Sizeof_DrawIndex, currChunk.mIndicesCount);
+-
+-            ++mRenderStats.mBlockChunksDrawnCount;
+-        }
+-    }
++    RenderStates cityMeshRenderStates;
++
++    gGraphicsDevice.SetRenderStates(cityMeshRenderStates);
++
++    gRenderManager.mCityMeshProgram.Activate();
++    gRenderManager.mCityMeshProgram.UploadCameraTransformMatrices(*renderview);
++
++    if (mCityMeshBufferV && mCityMeshBufferI)
++    {
++        gGraphicsDevice.BindVertexBuffer(mCityMeshBufferV, CityVertex3D_Format::Get());
++        gGraphicsDevice.BindIndexBuffer(mCityMeshBufferI);
++        gGraphicsDevice.BindTexture(eTextureUnit_0, gSpriteManager.mBlocksTextureArray);
++        gGraphicsDevice.BindTexture(eTextureUnit_1, gSpriteManager.mBlocksIndicesTable);
++
++        GpuBuffer* boundVertices=mCityMeshBufferV;
++        GpuBuffer* boundIndices=mCityMeshBufferI;
++        for (const MapBlocksChunk& currChunk: mMapBlocksChunks)
++        {
++            if (!renderview->mFrustum.contains(currChunk.mBounds))
++                continue;
++
++            auto* vertices=currChunk.vertices?currChunk.vertices:mCityMeshBufferV;
++            auto* indices=currChunk.indices?currChunk.indices:mCityMeshBufferI;
++            if(vertices!=boundVertices) {
++                gGraphicsDevice.BindVertexBuffer(vertices, CityVertex3D_Format::Get());
++                boundVertices=vertices;
++            }
++            if(indices!=boundIndices) {
++                gGraphicsDevice.BindIndexBuffer(indices); boundIndices=indices;
++            }
++            gGraphicsDevice.RenderIndexedPrimitives(ePrimitiveType_Triangles, eIndicesType_i32,
++                (currChunk.indices?0:currChunk.mIndicesStart) * Sizeof_DrawIndex, currChunk.mIndicesCount);
++
++            ++mRenderStats.mBlockChunksDrawnCount;
++        }
++    }
+     gRenderManager.mCityMeshProgram.Deactivate();
+ }
+ 
+ void MapRenderer::BuildMapMesh()
+ {
++    mMapMeshRevision=gGameMap.MeshRevision();
++    gGameMap.mDirtyMeshChunks.clear();
++    for(auto& chunk:mMapBlocksChunks) {
++        if(chunk.vertices) gGraphicsDevice.DestroyBuffer(chunk.vertices);
++        if(chunk.indices) gGraphicsDevice.DestroyBuffer(chunk.indices);
++        chunk.vertices=chunk.indices=nullptr;
++    }
+     CityMeshData blocksMesh;
+     for (int batchy = 0; batchy < BlocksBatchesPerSide; ++batchy)
+     {
+@@ -253,4 +277,29 @@ void MapRenderer::BuildMapMesh()
+         memcpy(pdata, blocksMesh.mBlocksIndices.data(), totalIndexDataBytes);
+         mCityMeshBufferI->Unlock();
+     }
+-}
+\ No newline at end of file
++}
++
++void MapRenderer::UpdateMapMesh()
++{
++    for(int index:gGameMap.mDirtyMeshChunks) {
++        auto& chunk=mMapBlocksChunks[index];
++        CityMeshData mesh;
++        Rect area{(index%BlocksBatchesPerSide)*BlocksBatchDims-ExtraBlocksPerSide,
++                  (index/BlocksBatchesPerSide)*BlocksBatchDims-ExtraBlocksPerSide,
++                  BlocksBatchDims,BlocksBatchDims};
++        GameMapHelpers::BuildMapMesh(gGameMap,area,mesh);
++        if(mesh.mBlocksIndices.empty()) {
++            chunk.mIndicesCount=chunk.mVerticesCount=0; continue;
++        }
++        if(!chunk.vertices) chunk.vertices=gGraphicsDevice.CreateBuffer(eBufferContent_Vertices);
++        if(!chunk.indices) chunk.indices=gGraphicsDevice.CreateBuffer(eBufferContent_Indices);
++        debug_assert(chunk.vertices && chunk.indices);
++        if(!chunk.vertices || !chunk.indices) return; // retry pending dirt after allocation failure
++        chunk.vertices->Setup(eBufferUsage_Static,mesh.mBlocksVertices.size()*Sizeof_CityVertex3D,mesh.mBlocksVertices.data());
++        chunk.indices->Setup(eBufferUsage_Static,mesh.mBlocksIndices.size()*Sizeof_DrawIndex,mesh.mBlocksIndices.data());
++        chunk.mIndicesCount=mesh.mBlocksIndices.size();
++        chunk.mVerticesCount=mesh.mBlocksVertices.size();
++    }
++    gGameMap.mDirtyMeshChunks.clear();
++    mMapMeshRevision=gGameMap.MeshRevision();
++}
+diff --git a/src/MapRenderer.h b/src/MapRenderer.h
+index f58d79d..4b8924b 100644
+--- a/src/MapRenderer.h
++++ b/src/MapRenderer.h
+@@ -27,15 +27,16 @@ public:
+     MapRenderStats mRenderStats;
+ 
+ public:
+-    bool Initialize();
+-    void Deinit();
+-    void RenderFrameBegin();
++    bool Initialize();
++    void Deinit();
++    void RenderFrameBegin();
+     void RenderFrame(GameCamera* renderview);
+     void DebugDraw(DebugRenderer& debugRender);
+     void RenderFrameEnd();
+     void BuildMapMesh();
+ 
+ private:
++    void UpdateMapMesh();
+     void DrawCityMesh(GameCamera* renderview);
+     void DrawGameObject(GameCamera* renderview, GameObject* gameObject);
+     void PreDrawGameObject(GameObject* gameObject);
+@@ -50,6 +51,8 @@ private:
+     };
+     struct MapBlocksChunk
+     {
++        GpuBuffer* vertices=nullptr;
++        GpuBuffer* indices=nullptr;
+         cxx::aabbox_t mBounds; // for culling
+         // index/vertex data offset in vbo
+         unsigned int mIndicesStart = 0, mIndicesCount = 0;
+@@ -57,6 +60,7 @@ private:
+     };
+     MapBlocksChunk mMapBlocksChunks[BlocksBatchCount];
+ 
++    unsigned long long mMapMeshRevision=0;
+     GpuBuffer* mCityMeshBufferV;
+     GpuBuffer* mCityMeshBufferI;
+ 
 diff --git a/src/Pedestrian.cpp b/src/Pedestrian.cpp
 index af31f7a..03de8ea 100644
 --- a/src/Pedestrian.cpp
@@ -3143,6 +3584,185 @@ index e5fbabd..bfa9527 100644
          PedestrianStateEvent ev {ePedestrianStateEvent_PullOutFromCar};
          prevDriver->mStatesManager.ProcessEvent(ev);
      }
+diff --git a/src/PhysicsManager.cpp b/src/PhysicsManager.cpp
+index b1fe918..f63f8c9 100644
+--- a/src/PhysicsManager.cpp
++++ b/src/PhysicsManager.cpp
+@@ -29,7 +29,7 @@ union b2FixtureData_map
+ 
+     struct
+     {
+-        unsigned char mX, mZ;
++        unsigned char mX, mZ, mLayer, mFacePlusOne;
+     };
+ 
+     void* mAsPointer;
+@@ -75,6 +75,7 @@ void PhysicsManager::ClearWorld()
+         mBox2World->DestroyBody(mBox2MapBody);
+         mBox2MapBody = nullptr;
+     }
++    mColumnFixtures.clear(); mDoorFixtures.clear();
+     SafeDelete(mBox2World);
+ }
+ 
+@@ -93,6 +94,9 @@ void PhysicsManager::UpdateFrame()
+ 
+ void PhysicsManager::ProcessSimulationStep()
+ {
++    // Mutate static map fixtures only between Box2D steps.
++    if(!gGameMap.mDirtyCollisionColumns.empty() || !gGameMap.mDirtyCollisionFaces.empty())
++        UpdateMapCollision();
+     const int velocityIterations = 6;
+     const int positionIterations = 4;
+ 
+@@ -168,6 +172,7 @@ PhysicsBody* PhysicsManager::CreateBody(GameObject* gameObject, const CollisionS
+ 
+ void PhysicsManager::CreateMapCollisionShape()
+ {
++    mMapCollisionRevision=gGameMap.CollisionRevision();
+     b2BodyDef bodyDef;
+     bodyDef.type = b2_staticBody;
+     bodyDef.userData.pointer = reinterpret_cast<uintptr_t>(nullptr); // make sure userdata is nullptr
+@@ -175,12 +180,42 @@ void PhysicsManager::CreateMapCollisionShape()
+     mBox2MapBody = mBox2World->CreateBody(&bodyDef);
+     debug_assert(mBox2MapBody);
+ 
+-    int numFixtures = 0;
+-    // for each block create fixture
+-    for (int x = 0; x < MAP_DIMENSIONS; ++x)
+-    {
+-        for (int y = 0; y < MAP_DIMENSIONS; ++y)
+-        {
++    mColumnFixtures.clear(); mDoorFixtures.clear();
++    for(const auto& entry:gGameMap.RuntimeFaces()) UpdateDoorFixture(entry.first);
++    for(int x=0;x<MAP_DIMENSIONS;++x)
++        for(int y=0;y<MAP_DIMENSIONS;++y) UpdateColumnFixture(x,y);
++    gGameMap.mDirtyCollisionColumns.clear(); gGameMap.mDirtyCollisionFaces.clear();
++}
++
++void PhysicsManager::UpdateDoorFixture(const std::tuple<int,int,int,int>& key)
++{
++    auto previous=mDoorFixtures.find(key);
++    if(previous!=mDoorFixtures.end()) {
++        mBox2MapBody->DestroyFixture(previous->second); mDoorFixtures.erase(previous);
++    }
++        auto [x,y,layer,face]=key;
++        if(face!=eBlockFace_W && face!=eBlockFace_N) return;
++        auto at=gGameMap.RuntimeFaces().find(key);
++        if(at==gGameMap.RuntimeFaces().end() || !at->second.solid) return;
++        b2EdgeShape shape;
++        auto a=Convert::MapUnitsToMeters(glm::vec2(x,y));
++        auto b=Convert::MapUnitsToMeters(glm::vec2(x+(face==eBlockFace_N),y+(face==eBlockFace_W)));
++        shape.SetTwoSided(b2Vec2(a.x,a.y),b2Vec2(b.x,b.y));
++        b2FixtureData_map data; data.mX=x; data.mZ=y;
++        data.mLayer=layer; data.mFacePlusOne=face+1;
++        b2FixtureDef fixture; fixture.shape=&shape;
++        fixture.userData.pointer=reinterpret_cast<uintptr_t>(data.mAsPointer);
++        fixture.filter.categoryBits=CollisionGroup_MapBlock;
++        mDoorFixtures[key]=mBox2MapBody->CreateFixture(&fixture);
++
++}
++
++void PhysicsManager::UpdateColumnFixture(int x,int y)
++{
++    auto previous=mColumnFixtures.find({x,y});
++    if(previous!=mColumnFixtures.end()) {
++        mBox2MapBody->DestroyFixture(previous->second); mColumnFixtures.erase(previous);
++    }
+             for (int layer = 0; layer < MAP_LAYERS_COUNT; ++layer)
+             {
+                 const MapBlockInfo* blockData = gGameMap.GetBlockInfo(x, y, layer);
+@@ -231,11 +266,17 @@ void PhysicsManager::CreateMapCollisionShape()
+                 b2Fixture* b2fixture = mBox2MapBody->CreateFixture(&b2fixtureDef);
+                 debug_assert(b2fixture);
+ 
+-                ++numFixtures;
++                mColumnFixtures[{x,y}]=b2fixture;
+                 break; // single fixture per block column
+             }
+-        }
+-    }
++}
++
++void PhysicsManager::UpdateMapCollision()
++{
++    for(const auto& key:gGameMap.mDirtyCollisionFaces) UpdateDoorFixture(key);
++    for(const auto& cell:gGameMap.mDirtyCollisionColumns) UpdateColumnFixture(cell.first,cell.second);
++    gGameMap.mDirtyCollisionFaces.clear(); gGameMap.mDirtyCollisionColumns.clear();
++    mMapCollisionRevision=gGameMap.CollisionRevision();
+ }
+ 
+ void PhysicsManager::DestroyBody(PhysicsBody* physicsBody)
+@@ -506,6 +547,14 @@ bool PhysicsManager::ShouldCollide_ObjectWithMap(b2Contact* contact, b2Fixture*
+     // todo: this is temporary implementation
+ 
+     b2FixtureData_map fxdata = (b2FixtureData_map*) mapFixture->GetUserData().pointer;
++    if(fxdata.mFacePlusOne) {
++        // 0040e350 samples (min(original polygon Z)-1)>>22. For the
++        // engine's horizontal bodies, original Z=(5-engineY)*cell, so its
++        // inverted volume index is floor(engineY)+1, NOT the ground layer.
++        // Original swept/sloped polygon response remains the engine solver.
++        const int volumeLayer=static_cast<int>(std::floor(Convert::MetersToMapUnits(gameObject->mPhysicsBody->mPositionY)))+1;
++        return volumeLayer==fxdata.mLayer;
++    }
+     const MapBlockInfo* blockData = gGameMap.GetBlockInfo(fxdata.mX, fxdata.mZ, mapLayer);
+     return (blockData->mGroundType == eGroundType_Building);
+ }
+@@ -578,7 +627,7 @@ void PhysicsManager::HandleCollision_ObjectWithMap(b2Fixture* objectFixture, b2F
+     collisionEvent.mBox2Impulse = *impulse;
+     collisionEvent.mBox2Contact = contact;
+     collisionEvent.mBox2FixtureA = objectFixture;
+-    collisionEvent.mMapBlockInfo = gGameMap.GetBlockInfo(fxdata.mX, fxdata.mZ, mapLayer);
++    collisionEvent.mMapBlockInfo = gGameMap.GetBlockInfo(fxdata.mX, fxdata.mZ, fxdata.mFacePlusOne?fxdata.mLayer:mapLayer);
+     debug_assert(collisionEvent.mMapBlockInfo);
+ 
+     if (Vehicle* carObject = ToVehicle(gameObject))
+diff --git a/src/PhysicsManager.h b/src/PhysicsManager.h
+index fde54f2..20c74a4 100644
+--- a/src/PhysicsManager.h
++++ b/src/PhysicsManager.h
+@@ -1,4 +1,6 @@
+ #pragma once
++#include <map>
++#include <tuple>
+ 
+ #include "PhysicsDefs.h"
+ #include "GameDefs.h"
+@@ -38,10 +40,10 @@ public:
+     void QueryObjectsWithinBox(const glm::vec2& center, const glm::vec2& extents, PhysicsQueryResult& outputResult, CollisionGroup collisionMask) const;
+ 
+ private:
+-    // override b2ContactListener
+-    void BeginContact(b2Contact* contact) override;
+-    void EndContact(b2Contact* contact) override;
+-    void PreSolve(b2Contact* contact, const b2Manifold* oldManifold) override;
++    // override b2ContactListener
++    void BeginContact(b2Contact* contact) override;
++    void EndContact(b2Contact* contact) override;
++    void PreSolve(b2Contact* contact, const b2Manifold* oldManifold) override;
+     void PostSolve(b2Contact* contact, const b2ContactImpulse* impulse) override;
+ 
+     bool ShouldCollide_ObjectWithMap(b2Contact* contact, b2Fixture* objectFixture, b2Fixture* mapFixture) const;
+@@ -56,6 +58,9 @@ private:
+ 
+     // create level map body, used internally
+     void CreateMapCollisionShape();
++    void UpdateDoorFixture(const std::tuple<int,int,int,int>& key);
++    void UpdateColumnFixture(int x,int y);
++    void UpdateMapCollision();
+ 
+     void ProcessInterpolation();
+     void ProcessSimulationStep();
+@@ -86,6 +91,9 @@ private:
+ 
+ private:
+ 
++    std::map<std::pair<int,int>,b2Fixture*> mColumnFixtures;
++    std::map<std::tuple<int,int,int,int>,b2Fixture*> mDoorFixtures;
++    unsigned long long mMapCollisionRevision=0;
+     b2Body* mBox2MapBody;
+     b2World* mBox2World;
+ 
 diff --git a/src/RenderingManager.cpp b/src/RenderingManager.cpp
 index c626ef7..62d6bc6 100644
 --- a/src/RenderingManager.cpp
@@ -4471,10 +5091,10 @@ index dfc0703..03fea57 100644
      gConsole.RegisterVariable(&gCvarSysListCvars);
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..2f691ad
+index 0000000..ddbb9d3
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,573 @@
+@@ -0,0 +1,756 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -4541,6 +5161,7 @@ index 0000000..2f691ad
 +            playerBindings_.emplace(id,human->mCharacter->mObjectID);
 +        break;
 +    }
++    PrepareDoors(section);
 +    for(const auto& r:section.declarations) if(r.token=="TELEPHONE") {
 +        int id=0; auto pos=DeclarationPosition(r);
 +        if(!integer(r.label,id) || !pos) {Once("bad-phone","Invalid telephone declaration"); continue;}
@@ -4565,11 +5186,22 @@ index 0000000..2f691ad
 +
 +}
 +void CarnageMissionWorld::Reset() {
++    for(const auto& entry:doors_) {
++        const auto& d=entry.second; int x=d.x+(d.direction==1),y=d.y+(d.direction==3),z=INVERT_MAP_LAYER(d.z);
++        int a=d.direction<2?0:2;
++        gGameMap.ClearRuntimeFace(x,y,z,static_cast<eBlockFace>(a));
++        gGameMap.ClearRuntimeFace(x,y,z,static_cast<eBlockFace>(a+1));
++    }
++    for(const auto& saved:savedDoorBlocks_) {
++        auto [x,y,z]=saved.first; gGameMap.SetBlockInfo(x,y,z,saved.second);
++    }
++    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
 +    playerBindings_.clear(); pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
++    UpdateDoors();
 +    UpdatePickups();
 +    // Original combo/VM timers are update counts, not seconds.
 +    for(int i=0;i<4;++i) if(player(i)) economy_.tickCombo(i);
@@ -4882,6 +5514,21 @@ index 0000000..2f691ad
 +        }
 +        return WorldResult::Unresolved;
 +    }
++    if(token=="CLOSE_DOOR") {
++        auto at=doors_.find(i.A);
++        if(at==doors_.end() || !entity || entity->declaration.token!="DOOR") return WorldResult::Failure;
++        AnimateDoor(at->second,false); return WorldResult::Done;
++    }
++    if(token=="PARK") {
++        // 004407c0's first call returns without progressing unless mode0 has
++        // an associated car. Its vehicle AI99, acceleration/braking, predicted
++        // box, forced participant walk and cleanup mappings are not proved.
++        auto* human=player(r.owner); auto* ped=human?human->mCharacter:nullptr;
++        if(!ped || !entity || entity->declaration.token!="DOOR" || !doors_.count(i.A)) return WorldResult::Unresolved;
++        if(!ped->mCurrentCar && (ped->IsStanding() || ped->IsWalking())) return WorldResult::Hold;
++        Once("park-control","Unresolved PARK004407c0: original AI99, vehicle control/predicted box and forced participant movement/cleanup mappings; E is not awarded");
++        return WorldResult::Unresolved;
++    }
 +    // Guarded effects with known VM failure contracts; do not guess engine health.
 +    if((token=="KILL_DROP" || token=="REMAP_PED" || token=="CLOSE_DOOR") &&
 +       (!entity || !entity->value || *entity->value<0)) return WorldResult::Failure;
@@ -4892,6 +5539,34 @@ index 0000000..2f691ad
 +    return WorldResult::Unresolved;
 +}
 +std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
++    if(r.token=="DOOR_ON" || r.token=="DOOR_OFF") {
++        auto at=doors_.find(r.instruction.A);
++        auto entity=r.entities.find(r.instruction.A);
++        if(at==doors_.end() || entity==r.entities.end() || entity->second.declaration.token!="DOOR") return {};
++        if(!at->second.enable(r.token=="DOOR_ON")) return false;
++        enabledDoors_.clear();
++        for(int id:doorOrder_) if(!doors_.at(id).disabled) enabledDoors_.push_back(&doors_.at(id));
++        return true;
++    }
++    if(r.token=="GENERAL_ONSCREEN") {
++        if(!OwnerValid(r.owner) || !rectangles_[r.owner]) {
++            Once("original-rectangle","Unresolved GENERAL_ONSCREEN: original camera height/centre/zoom record is unavailable; no culling-bound substitution");
++            return {};
++        }
++        auto at=r.entities.find(r.instruction.A); if(at==r.entities.end()) return {};
++        int x=0,y=0;
++        if(at->second.declaration.token=="TARGET") {
++            std::string text=at->second.declaration.coordinates;
++            for(char& c:text) if(c=='(' || c==')' || c==',') c=' ';
++            std::istringstream input(text); int z; std::string extra;
++            if(!(input>>x>>y>>z) || (input>>extra)) return {};
++        } else {
++            auto pos=ResolvePosition(at->second); if(!pos) return {};
++            x=static_cast<int>(std::floor(Convert::MetersToMapUnits(pos->x)*64));
++            y=static_cast<int>(std::floor(Convert::MetersToMapUnits(pos->z)*64));
++        }
++        return rectangles_[r.owner]->contains(x,y);
++    }
 +    if(r.token=="AREA_TRIGGER") {
 +        auto at=r.entities.find(r.instruction.A); auto* human=player(r.owner);
 +        if(at==r.entities.end() || at->second.declaration.token!="TRIGGER" || !human || !human->mCharacter)
@@ -5047,17 +5722,147 @@ index 0000000..2f691ad
 +    Once("predicate:"+r.token,"Unsupported mission predicate "+r.token+"; engine health/state is not original script health/state");
 +    return {};
 +}
++
++bool CarnageMissionWorld::SetOriginalView(int owner,const OriginalView& view) {
++    if(!OwnerValid(owner)) return false;
++    rectangles_[owner]=originalRectangle(view); return rectangles_[owner].has_value();
++}
++void CarnageMissionWorld::PrepareDoors(const Section& section) {
++    if(!gGameMap.IsLoaded()) return;
++    for(const auto& r:section.declarations) if(r.token=="DOOR") {
++        int id=0,direction=0,base=0,roof=0;
++        auto pos=DeclarationPosition(r);
++        if(!integer(r.label,id) || !pos || r.operands.size()!=3 ||
++           !integer(r.operands[0],direction) || !integer(r.operands[1],base) ||
++           !integer(r.operands[2],roof) || direction<0 || direction>3 ||
++           base<0 || base+8>gGameMap.mStyleData.GetBlockTexturesCount(eBlockType_Aux) ||
++           roof<0 || roof>=gGameMap.mStyleData.GetBlockTexturesCount(eBlockType_Lid)) {
++            Once("door-declaration","Unresolved DOOR constructor variant"); continue;
++        }
++        DoorState d; d.x=static_cast<int>(Convert::MetersToMapUnits(pos->x));
++        d.y=static_cast<int>(Convert::MetersToMapUnits(pos->z));
++        d.z=static_cast<int>(Convert::MetersToMapUnits(pos->y));
++        d.direction=direction; d.frames=8; d.base=base; d.roof=roof;
++        int x=d.x+(direction==1),y=d.y+(direction==3),z=INVERT_MAP_LAYER(d.z);
++        if(x>=MAP_DIMENSIONS || y>=MAP_DIMENSIONS ||
++           (roof && (d.z+1>=MAP_LAYERS_COUNT || (direction<2?(d.y<1 || d.y>=255):(d.x<1 || d.x>=255))))) continue;
++        // Reject overlaps rather than corrupt another door's dynamic texture.
++        if(savedDoorBlocks_.count({d.x,d.y,z}) || savedDoorBlocks_.count({x,y,z})) {
++            Once("door-overlap","Unresolved overlapping door constructors"); continue;
++        }
++        auto save=[&](int bx,int by) {
++            savedDoorBlocks_.emplace(std::make_tuple(bx,by,z),*gGameMap.GetBlockInfo(bx,by,z));
++        };
++        save(d.x,d.y); save(x,y);
++        auto block=*gGameMap.GetBlockInfo(d.x,d.y,z);
++        // 004740f0:1/3 erase the old east/south face and flatten both cells.
++        if(direction==1 || direction==3) {
++            block.mFaces[direction]=0; block.mIsFlat=true;
++            gGameMap.SetBlockInfo(d.x,d.y,z,block);
++        }
++        block=*gGameMap.GetBlockInfo(x,y,z); block.mIsFlat=true;
++        gGameMap.SetBlockInfo(x,y,z,block);
++        if(roof) for(int offset=-1;offset<=1;++offset) {
++            int rx=d.x+(direction>=2?offset:0), ry=d.y+(direction<2?offset:0), rz=INVERT_MAP_LAYER(d.z+1);
++            savedDoorBlocks_.emplace(std::make_tuple(rx,ry,rz),*gGameMap.GetBlockInfo(rx,ry,rz));
++            auto lid=*gGameMap.GetBlockInfo(rx,ry,rz); lid.mFaces[eBlockFace_Lid]=roof;
++            gGameMap.SetBlockInfo(rx,ry,rz,lid);
++        }
++        doors_.emplace(id,d); doorOrder_.push_back(id); CopyDoorFrame(d);
++    }
++}
++void CarnageMissionWorld::CopyDoorFrame(const DoorState& d) {
++    int x=d.x+(d.direction==1),y=d.y+(d.direction==3),z=INVERT_MAP_LAYER(d.z);
++    int face=d.direction<2?0:2;
++    int texture=gGameMap.mStyleData.GetBlockTextureLinearIndex(eBlockType_Aux,d.texture());
++    // Both faces use one dynamic slot in the exe. Per-cell linear overrides
++    // preserve that identity without exhausting/reusing global side bytes.
++    gGameMap.SetRuntimeFace(x,y,z,static_cast<eBlockFace>(face),texture,d.solid);
++    gGameMap.SetRuntimeFace(x,y,z,static_cast<eBlockFace>(face+1),texture,d.solid);
++}
++void CarnageMissionWorld::AnimateDoor(DoorState& d,bool open) {
++    d.animate(open);
++    // Rebuild scheduling only on a state transition, preserving declaration
++    // order even when doors started animating in a different order.
++    animatingDoors_.clear();
++    for(int id:doorOrder_) {
++        auto& door=doors_.at(id);
++        if(door.state==2 || door.state==3) animatingDoors_.push_back(&door);
++    }
++    if(open) {
++        int z=INVERT_MAP_LAYER(d.z); auto block=*gGameMap.GetBlockInfo(d.x,d.y,z);
++        block.mGroundType=eGroundType_Field; //00437cb0(...,0x40), not collision removal callback
++        gGameMap.SetBlockInfo(d.x,d.y,z,block);
++    }
++    CopyDoorFrame(d);
++}
++void CarnageMissionWorld::UpdateDoors() {
++    // Original00430c00: animation tick BEFORE scheduler00479e00/00479f00.
++    if(enabledDoors_.empty() && animatingDoors_.empty()) return;
++    for(auto* door:animatingDoors_) {
++        auto& d=*door;
++        if(d.tick()) {
++            if(d.state<2) {
++                //00404810 ->004046b0 ->004728d0 is positional sample38.
++                auto at=Convert::MapUnitsToMeters(glm::vec3(d.x,INVERT_MAP_LAYER(d.z),d.y));
++                gAudioManager.StartSound(eSfxSampleType_Level,38,SfxFlags_None,at);
++                Once("door-audio","Door sample38 emitted; original three-channel arbitration/attenuation unresolved");
++            }
++            CopyDoorFrame(d);
++        }
++    }
++    animatingDoors_.erase(std::remove_if(animatingDoors_.begin(),animatingDoors_.end(),
++        [](const DoorState* d){return d->state!=2 && d->state!=3;}),animatingDoors_.end());
++    // Preserve original ascending participant decisions, including multiple
++    // participants starting another animation during the same enumeration.
++    for(auto* door:enabledDoors_) {
++        auto& d=*door; if(d.state!=0 && d.state!=1) continue;
++        for(int owner=0;owner<4;++owner) {
++            auto* human=player(owner); auto* ped=human?human->mCharacter:nullptr;
++            if(!ped || ped->IsMarkedForDeletion()) continue;
++            if(ped->IsEnteringOrExitingCar()) {
++                Once("door-participant","Unresolved automatic door participant mode during vehicle transition"); continue;
++            }
++            GameObject* participant=ped; bool mode0=false;
++            if(ped->IsCarDriver() && ped->mCurrentCar && ped->mCurrentCar->GetCarDriver()==ped) {
++                participant=ped->mCurrentCar; mode0=true;
++            } else if(ped->mCurrentCar || (!ped->IsStanding() && !ped->IsWalking())) continue;
++            const auto& pos=participant->mTransform.mPosition;
++            if(!std::isfinite(pos.x) || !std::isfinite(pos.z)) continue;
++            int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(pos.x)));
++            int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(pos.z)));
++            if(d.x-d.radius<=x && x<=d.x+d.radius && d.y-d.radius<=y && y<=d.y+d.radius) {
++                if(d.state==1 && mode0) AnimateDoor(d,true);
++            } else if(d.state==0) {
++                bool obstructed=false,unknown=false;
++                for(int other=0;other<4;++other) {
++                    auto* h=player(other); auto* p=h?h->mCharacter:nullptr;
++                    if(!p || p->IsMarkedForDeletion()) continue;
++                    if(p->IsEnteringOrExitingCar() || (p->mCurrentCar && !p->IsCarDriver())) {unknown=true;break;}
++                    GameObject* o=p->mCurrentCar?static_cast<GameObject*>(p->mCurrentCar):p;
++                    auto at=o->mTransform.mPosition;
++                    if(!std::isfinite(at.x) || !std::isfinite(at.z)) {unknown=true;break;}
++                    if(d.obstructs(static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x))),
++                                   static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z))))) obstructed=true;
++                }
++                if(!unknown && !obstructed) AnimateDoor(d,false);
++            }
++        }
++    }
++}
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..1558589
+index 0000000..1b80a69
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,55 @@
+@@ -0,0 +1,70 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
 +#include "PickupRules.h"
++#include "DoorRules.h"
++#include "../GameDefs.h"
 +#include <array>
 +#include <set>
 +#include <glm/vec3.hpp>
@@ -5085,6 +5890,10 @@ index 0000000..1558589
 +    std::optional<glm::vec3> Arrow(int owner) const;
 +    struct Pickup {unsigned int object=0; int help=0; pickup::Box shape{}; int depth=0;};
 +    const std::array<Pickup,256>& Pickups() const {return pickups_;}
++    const std::map<int,DoorState>& Doors() const {return doors_;}
++    // Only a recovered original-camera record can establish this rectangle.
++    // Engine perspective camera bounds are not an equivalent source.
++    bool SetOriginalView(int owner,const OriginalView& view);
 +    // Explicit engine creation primitives. Callers must prove declaration/type/AI policy.
 +    Pedestrian* SpawnPedestrian(const glm::vec3& position,int remap);
 +    Vehicle* SpawnVehicle(const glm::vec3& position,int model,int heading);
@@ -5094,6 +5903,15 @@ index 0000000..1558589
 +private:
 +    std::array<Pickup,256> pickups_{};
 +    void UpdatePickups();
++    void PrepareDoors(const Section&);
++    void UpdateDoors();
++    void CopyDoorFrame(const DoorState&);
++    void AnimateDoor(DoorState&,bool open);
++    std::map<int,DoorState> doors_;
++    std::vector<int> doorOrder_;
++    std::vector<DoorState*> enabledDoors_,animatingDoors_;
++    std::map<std::tuple<int,int,int>,MapBlockInfo> savedDoorBlocks_;
++    std::array<std::optional<ScreenRectangle>,4> rectangles_{};
 +    gta::GameEconomy& economy_;
 +    std::set<std::string> logged_;
 +    std::map<int,Phone> phones_;
@@ -5266,6 +6084,72 @@ index 0000000..b00395b
 +{"IS_A_TRAIN_WRECKED", "004450f0", false}, // 147
 +{"INC_HEADS", "00445290", false}, // 148
 +{"IS_PED_STUNNED", "004453c0", false}, // 149
+diff --git a/src/mission/DoorRules.h b/src/mission/DoorRules.h
+new file mode 100755
+index 0000000..4f0892f
+--- /dev/null
++++ b/src/mission/DoorRules.h
+@@ -0,0 +1,60 @@
++#pragma once
++#include <algorithm>
++#include <cstdint>
++#include <optional>
++namespace mission {
++// 004740f0, 00474800/40, 00402390/440, 00402580 and callbacks.
++// One tick is the original 25Hz update, not a render or physics frame.
++struct DoorState {
++    int x=0,y=0,z=0,direction=0,frames=0,base=0,roof=0,radius=2;
++    int state=1,frame=0,counter=0;
++    bool disabled=true,solid=true;
++    bool enable(bool on) {
++        if(state==2 || state==3) return false;
++        disabled=!on; return true;
++    }
++    void animate(bool open) {
++        state=open?2:3; frame=counter=0; solid=!open;
++    }
++    int texture() const {return base+(state==1?0:state==0?frames-1:state==3?frames-1-frame:frame);}
++    bool tick() {
++        if(state!=2 && state!=3) return false;
++        if(++counter!=15) return false;
++        counter=0; ++frame;
++        if(frame==frames-1) {
++            // Callback runs before the final texture copy.
++            state=state==2?0:1;
++        }
++        return true;
++    }
++    bool obstructs(int px,int py) const {
++        switch(direction) {
++        case 0:return py==y && x<=px && px<=x+3;
++        case 1:return py==y && x-3<=px && px<=x;
++        case 2:return px==x && y<=py && py<=y+3;
++        case 3:return px==x && y-3<=py && py<=y;
++        default:return false;
++        }
++    }
++};
++// 0043ca30 writes the participant rectangle from the ORIGINAL camera record.
++// Inputs are signed script units (1/64 cell), not engine camera metres/FOV.
++struct OriginalView {int height=0,x=0,y=0,zoom=0;};
++struct ScreenRectangle {
++    std::int64_t xmin,xmax,ymin,ymax;
++    bool contains(int x,int y) const {return xmin<=x && x<=xmax && ymin<=y && y<=ymax;}
++};
++inline std::optional<ScreenRectangle> originalRectangle(const OriginalView& c) {
++    // Outside recovered normal camera range, preserve Unresolved instead of
++    // pretending int64 arithmetic reproduces overflowing x86 operations.
++    auto product=(std::int64_t(c.height)+384)*160;
++    if(c.zoom<=0 || product<0 || product>INT32_MAX) return {};
++    auto w=product/c.zoom;
++    if(w>INT32_MAX/3) return {};
++    auto h=w*3/4;
++    if(std::int64_t(c.x)+w>INT32_MAX || std::int64_t(c.x)-w<INT32_MIN ||
++       std::int64_t(c.y)+h>INT32_MAX || std::int64_t(c.y)-h<INT32_MIN) return {};
++    auto clamp=[](std::int64_t n){return std::max<std::int64_t>(0,n);};
++    return ScreenRectangle{clamp(c.x-w),clamp(c.x+w),clamp(c.y-h),clamp(c.y+h)};
++}
++}
 diff --git a/src/mission/GameEconomy.cpp b/src/mission/GameEconomy.cpp
 new file mode 100755
 index 0000000..cff4b2c
@@ -6369,6 +7253,34 @@ index 0000000..e455b34
 +    bool predicate(int slot,Instruction&,bool&);
 +    WorldResult execute(int slot,Instruction&);
 +};
++}
+diff --git a/src/mission/ParkRules.h b/src/mission/ParkRules.h
+new file mode 100755
+index 0000000..f7c987c
+--- /dev/null
++++ b/src/mission/ParkRules.h
+@@ -0,0 +1,22 @@
++#pragma once
++#include <cstdint>
++namespace mission {
++// Recovered original-record arithmetic only. No Carnage3D unit conversion is
++// established for these fields; passing this gate does NOT complete PARK.
++struct Park135Phase2 {
++    int targetX=0,targetY=0;
++    std::int16_t field36=0,field252=0,field256=0; // car byte offsets
++    std::int32_t predictedX=0; // car+0x250, signed 10.22 fixed point
++};
++inline bool park135Phase2Gate(const Park135Phase2& r) {
++    // 004407c0 phase2 direction3. Widen target arithmetic; unsupported
++    // overflow must never turn into a successful engine command.
++    const std::int64_t width=(r.field36!=-64 && -int(r.field36)>63)?128:64;
++    const std::int64_t x=r.targetX,y=r.targetY;
++    if(x-width/2+64<=r.field252) return false;
++    // Explicit arithmetic shift for negative x86 fixed-point values.
++    auto floorDiv=[](std::int64_t n,std::int64_t d) {return n/d-(n<0 && n%d!=0);};
++    if(floorDiv(r.predictedX,4194304)<=floorDiv(x,64)-3) return false;
++    return y-64<=r.field256 && r.field256<=y+64;
++}
 +}
 diff --git a/src/mission/PhoneRules.h b/src/mission/PhoneRules.h
 new file mode 100755

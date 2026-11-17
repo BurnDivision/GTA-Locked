@@ -26,7 +26,8 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
 ## Not yet working
 - The first mission chain runs (headless) phone -> RESET -> brief -> PARKED_ON (original car) -> POWERUP_ON (original
   pickup object, help text, sound; ped and stationary-driver contact) -> ARROW -> DOOR -> PLAYER/IS_PED_IN_CAR -> ENABLE
-  area trigger, and stops at DOOR_ON130, which is not recovered yet.
+  area trigger -> DOOR_ON130 (doors are runtime map faces with the original 8-frame animation, 15-tick cadence and
+  collision; only changed mesh chunks/fixtures are rebuilt) -> 132, and stops at PARK135, which is not recovered yet.
 - Police (`src/police/`): wanted thresholds per section, response levels, arrest-vs-death penalties, lives (game over on
   the next death at 0 lives) and ranked respawn points, from the original executable. Not live yet: automatic crime
   detection, pursuit/roadblock control, arrest trigger and radius, and wanted-level decay are not recovered.
