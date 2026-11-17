@@ -1278,7 +1278,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HUD.cpp b/src/HUD.cpp
-index da5e832..8d64a00 100644
+index da5e832..0605030 100644
 --- a/src/HUD.cpp
 +++ b/src/HUD.cpp
 @@ -1,4 +1,6 @@
@@ -1288,7 +1288,20 @@ index da5e832..8d64a00 100644
  #include "HUD.h"
  #include "SpriteBatch.h"
  #include "GuiContext.h"
-@@ -550,23 +552,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
+@@ -14,8 +16,10 @@
+ //////////////////////////////////////////////////////////////////////////
+ 
+ HUDPanel::HUDPanel()
+-    : mLocalPosition()
+-    , mSize()
++    : mSize(0)
++    , mMinSize(0)
++    , mMaxSize(0)
++    , mLocalPosition(0)
+ {
+ }
+ 
+@@ -550,23 +554,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
  
  void HUDScoresPanel::SetScores(int score, int lives, int multiplier)
  {
@@ -1318,7 +1331,7 @@ index da5e832..8d64a00 100644
  }
  
  void HUDScoresPanel::Self_SetupHUD()
-@@ -824,6 +815,12 @@ void HUD::PushHelpMessage()
+@@ -824,6 +817,12 @@ void HUD::PushHelpMessage()
      // todo
  }
  
@@ -1331,7 +1344,7 @@ index da5e832..8d64a00 100644
  void HUD::PushMissionMessage()
  {
      // todo
-@@ -901,7 +898,10 @@ void HUD::UpdateScreen()
+@@ -901,7 +900,10 @@ void HUD::UpdateScreen()
      }
  
      // update wanted level
@@ -1343,7 +1356,7 @@ index da5e832..8d64a00 100644
      mWantedLevelPanel.SetWantedLevel(currentWantedLevel);
      if (currentWantedLevel == 0)
      {
-@@ -913,7 +913,7 @@ void HUD::UpdateScreen()
+@@ -913,7 +915,7 @@ void HUD::UpdateScreen()
      }
  
      // update scores
@@ -1352,7 +1365,7 @@ index da5e832..8d64a00 100644
  
                                         // todo: implement bonus
      if (true)
-@@ -936,6 +936,19 @@ void HUD::DrawScreen(GuiContext& context)
+@@ -936,6 +938,19 @@ void HUD::DrawScreen(GuiContext& context)
      mPanelsContainer.ComputeSize();
      mPanelsContainer.ComputePosition();
      mPanelsContainer.DrawFrame(context);
@@ -2158,7 +2171,7 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..aa236dd
+index 0000000..84cd078
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
 @@ -0,0 +1,869 @@
@@ -2325,8 +2338,8 @@ index 0000000..aa236dd
 +        gButtons[Control_Jump]   = { W - 0.15f * u, H - 0.40f * u, br, K_JUMP, "JUMP", 0.20f, 0.75f, 0.30f };
 +        gButtons[Control_Weapon] = { W - 0.36f * u, H - 0.34f * u, br * 0.85f, K_WPN, "WPN", 0.90f, 0.75f, 0.15f };
 +        gButtons[Control_Horn]   = { W - 0.58f * u, H - 0.10f * u, br * 0.75f, K_HORN, "HORN", 0.60f, 0.60f, 0.60f };
-+        gButtons[Control_Lock]   = { W - 0.09f * u, 0.09f * u, br * 0.65f, K_LOCK, gLockLabel, 0.75f, 0.40f, 0.90f };
-+        gButtons[Control_Aspect] = { W - 0.09f * u, 0.25f * u, br * 0.65f, K_ASPECT, gAspectLabel, 0.25f, 0.65f, 0.80f };
++        gButtons[Control_Lock]   = { W - 0.09f * u, 0.17f * u, br * 0.65f, K_LOCK, gLockLabel, 0.75f, 0.40f, 0.90f };
++        gButtons[Control_Aspect] = { W - 0.09f * u, 0.33f * u, br * 0.65f, K_ASPECT, gAspectLabel, 0.25f, 0.65f, 0.80f };
 +
 +        // letterboxed view (bars above/below, little room at the sides): put the small
 +        // LOCK / aspect buttons in the top bar so they don't cover the HUD
@@ -3282,10 +3295,10 @@ index dfc0703..a985b77 100644
      gConsole.RegisterVariable(&gCvarMemEnableFrameHeapAllocator);
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..cdd056c
+index 0000000..464438f
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,284 @@
+@@ -0,0 +1,341 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -3366,7 +3379,7 @@ index 0000000..cdd056c
 +}
 +void CarnageMissionWorld::Reset() {
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    ownedObjects_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
++    ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
@@ -3400,7 +3413,7 @@ index 0000000..cdd056c
 +        Once("ped-spawn","Ped spawn requires loaded style and NO_REMAP; unverified palettes rejected"); return nullptr;
 +    }
 +    auto* ped=gGameObjectsManager.CreatePedestrian(position,cxx::angle_t::from_degrees(0),ePedestrianType_Civilian,remap);
-+    if(ped) ownedObjects_.insert(ped->mObjectID);
++    if(ped) {ownedObjects_.insert(ped->mObjectID); missionEntities_.insert(ped->mObjectID);}
 +    return ped;
 +}
 +Vehicle* CarnageMissionWorld::SpawnVehicle(const glm::vec3& position,int model,int heading) {
@@ -3408,7 +3421,7 @@ index 0000000..cdd056c
 +    // Descriptor overload avoids the enum overload's assert on absent models.
 +    for(auto& desc:gGameMap.mStyleData.mVehicles) if(static_cast<int>(desc.mModelID)==model) {
 +        auto* car=gGameObjectsManager.CreateVehicle(position,-Convert::Fix16ToAngle(static_cast<unsigned short>(heading)),&desc);
-+        if(car) ownedObjects_.insert(car->mObjectID);
++        if(car) {ownedObjects_.insert(car->mObjectID); missionEntities_.insert(car->mObjectID);}
 +        return car;
 +    }
 +    Once("vehicle-model:"+std::to_string(model),"Vehicle model absent from current style"); return nullptr;
@@ -3452,8 +3465,14 @@ index 0000000..cdd056c
 +            }
 +        }
 +        soundPhones_.fill(-1); arrows_={};
-+        Once("reset-nested","RESET known phone/UI effects applied; original tracked-entity nested cleanup unresolved");
-+        return WorldResult::Unresolved;
++        // The adapter creates no tracked peds/objects during declaration loading.
++        // Empty original cleanup lists are exact no-ops. Never guess the
++        // visibility/occupancy retention rules for objects created later.
++        if(!missionEntities_.empty()) {
++            Once("reset-nested","RESET with tracked entities: original retention/AI cleanup unresolved");
++            return WorldResult::Unresolved;
++        }
++        return WorldResult::Done;
 +    }
 +    if(token=="PARKED_ON") {
 +        if(!entity) return WorldResult::Failure;
@@ -3461,11 +3480,55 @@ index 0000000..cdd056c
 +        int model=0,heading=0;
 +        if(!position || entity->declaration.operands.size()<2 ||
 +           !integer(entity->declaration.operands[0],model) || !integer(entity->declaration.operands[1],heading)) return WorldResult::Unresolved;
-+        Once("parked-constructor","PARKED_ON wrapper decoded; original constructor/collision rejection and cell cleanup unresolved; no fake spawn success");
-+        return WorldResult::Unresolved;
++        // Bounded constructor projection: 00475840 -> 00407ab0, driver
++        // argument0. D's nonzero variants and other models are not recovered.
++        if(model!=18 || static_cast<std::int16_t>(i.D)!=0 ||
++           !gGameMap.IsLoaded()) return WorldResult::Unresolved;
++        const int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(position->x)));
++        const int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(position->z)));
++        const int z=static_cast<int>(std::floor(Convert::MetersToMapUnits(position->y)));
++        // Original z starts at cellZ-1/32; map layers run downwards.
++        int layer=z-1;
++        if(layer<0 || layer>4) return WorldResult::Unresolved;
++        while(layer<4 && gGameMap.GetBlockInfo(x,y,INVERT_MAP_LAYER(layer))->mGroundType==eGroundType_Air) ++layer;
++        auto* block=gGameMap.GetBlockInfo(x,y,INVERT_MAP_LAYER(layer));
++        if(block->mIsFlat || block->mSlopeType) {
++            Once("parked-terrain","PARKED_ON sloped/flat-bit terrain branch unresolved");
++            return WorldResult::Unresolved;
++        }
++        // The original overlap query uses original vehicle geometry. Until
++        // that query is mapped, an existing car anywhere could require its
++        // retention/removal rules. Only the empty-vehicle-list case is proved.
++        for(auto* existing:gGameObjectsManager.mVehiclesList)
++            if(!existing->IsMarkedForDeletion()) {
++                Once("parked-vehicles","PARKED_ON existing-vehicle spatial cleanup unresolved");
++                return WorldResult::Unresolved;
++            }
++        // 004770a0/00476f40/00476cd0 have no effect when their spatial
++        // searches are empty. Conservatively reject a whole surrounding3x3
++        // area at every height instead of guessing deletion/retention policy.
++        for(auto* object:gGameObjectsManager.mAllObjects) {
++            if(object->IsMarkedForDeletion()) continue;
++            const auto& at=object->mTransform.mPosition;
++            int ox=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x)));
++            int oy=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z)));
++            if(std::abs(ox-x)<=1 && std::abs(oy-y)<=1) {
++                Once("parked-occupied","PARKED_ON occupied-cell cleanup unresolved");
++                return WorldResult::Unresolved;
++            }
++        }
++        // 004544e0 ordinary flat block returns layer*2^22+0x3f0000.
++        // Engine Y reverses original Z, as its startup objects do.
++        const float height=MAP_LAYERS_COUNT-1-(layer+63.0f/64);
++        auto spawn=Convert::MapUnitsToMeters(glm::vec3(x+0.5f,height,y+0.5f));
++        auto* car=SpawnVehicle(spawn,model,static_cast<std::int16_t>(heading));
++        if(!car) return WorldResult::Failure;
++        entity->value=static_cast<std::int32_t>(car->mObjectID); entity->type=0;
++        return WorldResult::Success;
 +    }
 +    if(token=="PHONE_MISSION_CLEANUP") {
-+        Once("phone-cleanup","MPHONE nested cleanup helpers unresolved");
++        if(missionEntities_.empty()) return WorldResult::Done;
++        Once("phone-cleanup","MPHONE nonempty tracked-entity cleanup unresolved");
 +        return WorldResult::Unresolved;
 +    }
 +    if(token=="MESSAGE_BRIEF" || token=="BRIEF" || token=="P_BRIEF" || token=="P_BRIEF_TIMED" ||
@@ -3519,8 +3582,15 @@ index 0000000..cdd056c
 +        if(!human || !human->mCharacter) return false;
 +        auto* ped=human->mCharacter;
 +        if(r.token=="PHONE_ON_FOOT") {
-+            // MPHONE tests original numeric states6/7, NOT a sentinel/on-foot test.
-+            Once("phone-state","Original ped state6/7 mapping unavailable; MPHONE answer remains Unresolved");
++            // 0044fa70 cases0x22/0x87 attach the ped to a car and set
++            // states7/6; IS_PED_IN_CAR also explicitly tests both. The
++            // stable engine seated state therefore fails the answer gate.
++            // Entry/exit timing and other original states remain unresolved.
++            if(!ped->IsEnteringOrExitingCar()) {
++                if(ped->IsCarPassenger() || ped->IsCarDriver()) return false;
++                if(!ped->mCurrentCar && (ped->IsStanding() || ped->IsWalking())) return true;
++            }
++            Once("phone-state","Original ped state6/7 projection unresolved outside stable walking/seated states");
 +            return {};
 +        }
 +        if(r.token=="PHONE_ELIGIBLE") {
@@ -3572,10 +3642,10 @@ index 0000000..cdd056c
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..5b2b3bb
+index 0000000..38d356d
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,47 @@
+@@ -0,0 +1,48 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -3615,6 +3685,7 @@ index 0000000..5b2b3bb
 +    std::set<std::string> logged_;
 +    std::map<int,Phone> phones_;
 +    std::set<unsigned int> ownedObjects_;
++    std::set<unsigned int> missionEntities_;
 +    std::array<std::optional<glm::vec3>,4> arrows_{};
 +    std::array<int,4> soundPhones_{{-1,-1,-1,-1}};
 +    bool OwnerValid(int) const;
@@ -4261,10 +4332,10 @@ index 0000000..d203285
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..625b987
+index 0000000..a218904
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
-@@ -0,0 +1,473 @@
+@@ -0,0 +1,480 @@
 +#include "MissionVM.h"
 +#include <algorithm>
 +#include <limits>
@@ -4316,6 +4387,13 @@ index 0000000..625b987
 +            if(r.token=="MPHONES" && r.operands.size()>=2) {
 +                triggers_[id]={1,number(r.operands[0]),number(r.operands[1]),r.prefix=="1"};
 +                e.value=id; e.type=34;
++            }
++            // 00445800 case0x27: PHONE_TOGG allocates a type13 trigger.
++            // Keep ENABLE/DISABLE/rearm state, without pretending its update
++            // behavior is the recovered type12 MPHONES dispatch.
++            if(r.token=="PHONE_TOGG" && r.operands.size()>=2) {
++                triggers_[id]={1,number(r.operands[0]),number(r.operands[1]),r.prefix=="1",13};
++                e.value=id; e.type=39;
 +            }
 +            if(!entities_.emplace(id,std::move(e)).second) error(r,"duplicate entity ID");
 +        } catch(const std::exception& e) {error(r,e.what());}
@@ -4443,7 +4521,7 @@ index 0000000..625b987
 +    // Type12 triggers precede the live scheduler, allowing same-update dispatch.
 +    for(auto& item:triggers_) for(int root=0;root<4;++root) {
 +        auto& t=item.second;
-+        if(t.state==4 || processes_[root].player<0) continue;
++        if(t.type!=12 || t.state==4 || processes_[root].player<0) continue;
 +        Instruction query; query.A=item.first; query.D=t.radius;
 +        WorldRequest request{"MPHONES_TRIGGER","0047a3a0",root,root,query,processes_[root],entities_,instructions_,labels_};
 +        auto inside=world_.predicate(request);
@@ -4740,7 +4818,7 @@ index 0000000..625b987
 +}
 diff --git a/src/mission/MissionVM.h b/src/mission/MissionVM.h
 new file mode 100755
-index 0000000..8d9f626
+index 0000000..e455b34
 --- /dev/null
 +++ b/src/mission/MissionVM.h
 @@ -0,0 +1,107 @@
@@ -4836,7 +4914,7 @@ index 0000000..8d9f626
 +    int epilogueSlot_=-1;
 +    bool phoneRing_=false;
 +    std::array<bool,4> phoneMission_{};
-+    struct Trigger { int state=1,target=0,radius=0; bool preserve=false; };
++    struct Trigger { int state=1,target=0,radius=0; bool preserve=false; int type=12; };
 +    std::map<int,Trigger> triggers_;
 +    bool valid_=true;
 +    void step(int slot);
