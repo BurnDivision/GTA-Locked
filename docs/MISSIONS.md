@@ -18,6 +18,11 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
 - Payphones (M1-9b): placed as the original phone object; answer box +-16/64 cell, range +-15 cells, ring trigger +-3 cells
   (recovered from gta.exe, no height/speed test). The mission interpreter runs at the original 25 updates/s.
 
+- Original front-end (M1-6): animated F_LOGO/F_LOWER screens, original F_* fonts and FXT text, Play/Options,
+  Liberty City / San Andreas / Vice City with both chapters each (MISSION.INI sections 1/2, 102/103, 202/203),
+  options with cancel rollback, original exit credits. Touch, gamepad and keyboard. The automated test harness
+  (config/test_input.txt present) skips the menu and starts the default scenario.
+
 ## Not yet working
 - The first mission chain runs (headless) phone -> RESET -> brief -> PARKED_ON (original car) -> POWERUP_ON (original
   pickup object, help text, sound; ped and stationary-driver contact) -> ARROW -> DOOR -> PLAYER/IS_PED_IN_CAR -> ENABLE

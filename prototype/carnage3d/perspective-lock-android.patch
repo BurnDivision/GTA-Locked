@@ -344,6 +344,20 @@ index d2483f9..b3bb998 100644
 +    float mDriveReverseTime = 0.0f; // > 0: backing away from an obstacle
  };
 \ No newline at end of file
+diff --git a/src/AudioManager.h b/src/AudioManager.h
+index 8e23a4c..730067e 100644
+--- a/src/AudioManager.h
++++ b/src/AudioManager.h
+@@ -8,7 +8,8 @@
+ // This class manages in game music and sounds
+ class AudioManager final: public cxx::noncopyable
+ {
+-    friend class SfxEmitter;
++    friend class SfxEmitter;
++    friend class MainMenuGamestate; // Apply saved front-end volume settings.
+ 
+ public:
+     bool Initialize();
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 1bfac4c..0fb73e0 100644
 --- a/src/CMakeLists.txt
@@ -361,7 +375,7 @@ index 1bfac4c..0fb73e0 100644
  	${CMAKE_CURRENT_LIST_DIR}/AiManager.cpp
  	${CMAKE_CURRENT_LIST_DIR}/AiPedestrianBehavior.cpp
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
-index bb509f8..4f2fcf9 100644
+index bb509f8..16212ae 100644
 --- a/src/CarnageGame.cpp
 +++ b/src/CarnageGame.cpp
 @@ -63,14 +63,21 @@ bool CarnageGame::Initialize()
@@ -387,7 +401,35 @@ index bb509f8..4f2fcf9 100644
          }
      }
      gCvarMapname.ClearModified();
-@@ -122,6 +129,30 @@ bool CarnageGame::IsInGameState() const
+@@ -91,13 +98,20 @@ bool CarnageGame::Initialize()
+         gGameTexts.Deinit();
+     }
+ 
+-    // init scenario
+-    if (!StartScenario(gCvarMapname.mValue))
+-    {
+-        ShutdownCurrentScenario();
+-        gConsole.LogMessage(eLogMessage_Warning, "Fail to start game"); 
+-        return false;
+-    }
++    // Original front-end owns chapter selection before any world is loaded.
++    gGameCheatsWindow.mWindowShown = false;
++    // test harness only: with config/test_input.txt present, start the default scenario directly (no menu)
++    if (gFiles.IsFileExists("config/test_input.txt"))
++    {
++        if (!StartScenario(gCvarMapname.mValue))
++        {
++            ShutdownCurrentScenario();
++            gConsole.LogMessage(eLogMessage_Warning, "Fail to start game");
++            return false;
++        }
++        return true;
++    }
++    SetCurrentGamestate(&mMainMenuGamestate);
+     return true;
+ }
+ 
+@@ -122,6 +136,30 @@ bool CarnageGame::IsInGameState() const
  
  void CarnageGame::UpdateFrame()
  {
@@ -418,10 +460,23 @@ index bb509f8..4f2fcf9 100644
      if (mCurrentGamestate)
      {
          mCurrentGamestate->OnGamestateFrame();
-@@ -150,6 +181,18 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
+@@ -144,9 +182,27 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
          return;
      }
  
++    if (IsMenuGameState())
++    {
++        mMainMenuGamestate.OnGamestateInputEvent(inputEvent);
++        return;
++    }
+     if (inputEvent.HasPressed(eKeycode_ESCAPE))
+     {
+-        gSystem.QuitRequest();
++        ShutdownCurrentScenario();
++        SetCurrentGamestate(&mMainMenuGamestate);
++        return;
++    }
++
 +    if (inputEvent.HasPressed(eKeycode_F7)) // cycle game view aspect ratio: auto -> 16:9 -> 4:3 -> fill
 +    {
 +        const std::string curr = gCvarGraphicsAspect.mValue;
@@ -431,13 +486,10 @@ index bb509f8..4f2fcf9 100644
 +            SetupScreenLayout();
 +        }
 +        gSystem.SaveConfiguration();
-+        return;
-+    }
-+
-     if (inputEvent.HasPressed(eKeycode_C))
-     {
-         gGameCheatsWindow.mWindowShown = !gGameCheatsWindow.mWindowShown;
-@@ -277,6 +320,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
+         return;
+     }
+ 
+@@ -277,6 +333,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
      }
  }
  
@@ -483,7 +535,7 @@ index bb509f8..4f2fcf9 100644
  void CarnageGame::SetupScreenLayout()
  {   
      const int MaxCols = 2;
-@@ -284,7 +366,8 @@ void CarnageGame::SetupScreenLayout()
+@@ -284,7 +379,8 @@ void CarnageGame::SetupScreenLayout()
  
      debug_assert(playersCount > 0);
  
@@ -493,7 +545,7 @@ index bb509f8..4f2fcf9 100644
  
      int numRows = (playersCount + MaxCols - 1) / MaxCols;
      debug_assert(numRows > 0);
-@@ -303,10 +386,16 @@ void CarnageGame::SetupScreenLayout()
+@@ -303,10 +399,16 @@ void CarnageGame::SetupScreenLayout()
          debug_assert(colsOnCurrentRow > 0);
          int frameSizePerW = screenResolution.x / colsOnCurrentRow;
  
@@ -511,6 +563,14 @@ index bb509f8..4f2fcf9 100644
  }
  
  int CarnageGame::GetHumanPlayerIndex(Pedestrian* pedestrian) const
+@@ -586,3 +688,7 @@ void CarnageGame::SetCurrentGamestate(GenericGamestate* gamestate)
+         mCurrentGamestate->OnGamestateEnter();
+     }
+ }
++
++#ifdef __ANDROID__
++extern "C" bool gtaFrontendActive() { return gCarnageGame.IsMenuGameState(); }
++#endif
 diff --git a/src/Console.cpp b/src/Console.cpp
 index c6b1c2e..28adce0 100644
 --- a/src/Console.cpp
@@ -1023,6 +1083,321 @@ index 8640d19..36e7307 100644
 +    float GetTargetHeading() const;
 +    void ApplyHeading(float headingRadians);
 +};
+diff --git a/src/Frontend.h b/src/Frontend.h
+new file mode 100755
+index 0000000..53b6eeb
+--- /dev/null
++++ b/src/Frontend.h
+@@ -0,0 +1,118 @@
++#pragma once
++#include <algorithm>
++#include <array>
++#include <vector>
++#include <string>
++#include <istream>
++#include <cmath>
++
++// Original executable evidence: FUN_00428ee0, FUN_004277c0, FUN_00429180.
++// Rendering and selection deliberately have no engine/platform dependencies.
++namespace frontend {
++inline std::string mapFromMetadata(const std::string& line) {
++    const auto a=line.find(','); if(a==std::string::npos)return {};
++    const auto b=line.find(',',a+1);if(b==std::string::npos)return {};
++    const auto c=line.find(',',b+1);if(c==std::string::npos)return {};
++    const auto name=line.substr(b+1,c-b-1);
++    const auto first=name.find_first_not_of(" \t\r\n"),last=name.find_last_not_of(" \t\r\n");
++    return first==std::string::npos?std::string{}:name.substr(first,last-first+1);
++}
++enum class Page {Main,Cities,Options,Quit};
++enum class Action {Up,Down,Left,Right,Accept,Back};
++struct Menu {
++    bool exitRequested=false;
++    Page page=Page::Main; int row=0,city=0,chapter=0;
++    std::array<int,5> options{{3,3,2,0,1}}, saved=options;
++    void act(Action a) {
++        const int d=a==Action::Up || a==Action::Left ? -1 : 1;
++        if(page==Page::Main) {
++            if(a==Action::Up || a==Action::Down) row=(row+2+d)%2;
++            if(a==Action::Back) page=Page::Quit;
++            if(a==Action::Accept) {page=row?Page::Options:Page::Cities; saved=options;row=0;}
++        } else if(page==Page::Cities) {
++            if(a==Action::Left || a==Action::Right) {city=(city+3+d)%3;chapter=0;}
++            if(a==Action::Up || a==Action::Down) chapter=(chapter+2+d)%2;
++            if(a==Action::Back) {page=Page::Main;row=0;}
++        } else if(page==Page::Options) {
++            if(a==Action::Up || a==Action::Down) row=(row+5+d)%5;
++            if(a==Action::Left || a==Action::Right) {
++                if(row<2) options[row]=std::max(0,std::min(7,options[row]+d));
++                else if(row==2) options[row]=1+(options[row]-1+3+d)%3;
++                else options[row]=!options[row];
++            }
++            if(a==Action::Back || a==Action::Accept) {
++                if(a==Action::Back) options=saved;
++                page=Page::Main;row=1;
++            }
++        } else if(a==Action::Back || a==Action::Accept) exitRequested=true;
++    }
++    int section() const {const int ids[3][2]={{1,2},{102,103},{202,203}};return ids[city][chapter];}
++};
++struct Image {
++    int width=0,height=0;
++    std::vector<unsigned char> pixels;
++    bool load(std::istream& in,int w,int h) {
++        pixels.clear(); width=height=0;
++        if(w<=0 || h<=0 || w>2048 || h>2048) return false;
++        std::vector<unsigned char> bgr(w*h*3);
++        if(!in.read(reinterpret_cast<char*>(bgr.data()),bgr.size())) return false;
++        pixels.resize(w*h*4);
++        for(int i=0;i<w*h;++i) {
++            pixels[i*4]=bgr[i*3+2];pixels[i*4+1]=bgr[i*3+1];pixels[i*4+2]=bgr[i*3];pixels[i*4+3]=255;
++        }
++        width=w;height=h;return true;
++    }
++};
++struct Font {
++    int height=0,base=33;
++    std::vector<int> widths;
++    std::vector<std::vector<unsigned char>> glyphs;
++    std::array<unsigned char,768> palette{};
++    bool load(std::istream& in,int first) {
++        height=0;glyphs.clear();widths.clear();
++        unsigned char n,h;
++        if(!in.read(reinterpret_cast<char*>(&n),1) || !in.read(reinterpret_cast<char*>(&h),1) || !n || !h) return false;
++        std::vector<std::vector<unsigned char>> data(n);std::vector<int> ws(n);
++        for(int i=0;i<n;++i) {
++            unsigned char w;
++            if(!in.read(reinterpret_cast<char*>(&w),1)) return false;
++            ws[i]=w;data[i].resize(int(w)*h);
++            if(!in.read(reinterpret_cast<char*>(data[i].data()),data[i].size())) return false;
++        }
++        if(!in.read(reinterpret_cast<char*>(palette.data()),palette.size())) return false;
++        glyphs=std::move(data);widths=std::move(ws);height=h;base=first;return true;
++    }
++    int index(unsigned char c) const {
++        // Original uses the width of 'n' for a space (FUN_00430850).
++        int i=(c==' ' && base==33?'n':c)-base;
++        return i<0 || i>=int(glyphs.size()) ? 0:i;
++    }
++    int measure(const std::string& s) const {
++        int w=0; if(glyphs.empty())return 0;
++        for(unsigned char c:s) w+=widths[index(c)];
++        return w;
++    }
++    void draw(Image& dst,const std::string& s,int x,int y,int minY=0) const {
++        if(glyphs.empty())return;
++        for(unsigned char c:s) {
++            int i=index(c),w=widths[i];
++            if(c!=' ' || base!=33) for(int yy=0;yy<height;++yy)for(int xx=0;xx<w;++xx) {
++                int px=x+xx,py=y+yy;unsigned char k=glyphs[i][yy*w+xx];
++                if(!k || px<0 || py<minY || px>=dst.width || py>=dst.height)continue;
++                auto* p=&dst.pixels[(py*dst.width+px)*4];
++                p[0]=palette[k*3];p[1]=palette[k*3+1];p[2]=palette[k*3+2];p[3]=255;
++            }
++            x+=w;
++        }
++    }
++};
++struct View {
++    float scale,x,y;
++    View(int w,int h):scale(std::min(w/640.0f,h/480.0f)),x((w-640*scale)/2),y((h-480*scale)/2) {}
++    bool point(int px,int py,int& ox,int& oy) const {
++        if(scale<=0)return false;
++        ox=int(std::floor((px-x)/scale));oy=int(std::floor((py-y)/scale));
++        return ox>=0&&ox<640&&oy>=0&&oy<480;
++    }
++};
++}
+diff --git a/src/FrontendCredits.h b/src/FrontendCredits.h
+new file mode 100755
+index 0000000..8e10ec9
+--- /dev/null
++++ b/src/FrontendCredits.h
+@@ -0,0 +1,185 @@
++// Original gta.exe table 004af130..004af3fc; 00501d80 is an empty BSS string.
++#pragma once
++namespace frontend {
++inline const char* const credits[]={
++    "",
++    "",
++    "",
++    "",
++    "",
++    "",
++    "",
++    "",
++    "",
++    "",
++    "",
++    "Grand Theft Auto",
++    "",
++    "Copyright *2002 Take-Two Interactive, Inc.",
++    "Rockstar, the Rockstar logo, Rockstar North",
++    "and the Rockstar North logo are trademarks",
++    "of Take-Two Interactive, Inc.",
++    "All other trademarks and trade names",
++    "are properties of their respective owners.",
++    "All rights reserved.",
++    "",
++    "Portions copyright *1993-1997, SciTech Software",
++    "Uses Miles Sound System from RAD Software.",
++    "Copyright *1994-1996 by Miles Design, Inc.",
++    "Uses Smacker Video Technology.",
++    "Copyright *1994-1996 by Invisible,Inc. d/b/a RAD Software",
++    "",
++    "Team Leader and Lead Programmer",
++    "@Keith Hamilton",
++    "",
++    "Lead Artist",
++    "@Ian McQue",
++    "",
++    "Programming",
++    "@Alan Campbell",
++    "@Toby Atkin",
++    "@Brian Baird",
++    "@Iain Ross",
++    "@Ian Johnson",
++    "@Cameron Rattray",
++    "@James Watson",
++    "@David Kivlin",
++    "",
++    "Additional Programming",
++    "@Sandeep Singh Bisla",
++    "",
++    "Artwork",
++    "@Donald Robertson",
++    "@Craig Moore",
++    "@Stewart Waterson",
++    "",
++    "Map Design and Mission Programming:",
++    "",
++    "San Andreas",
++    "@Steve Banks",
++    "",
++    "Liberty City",
++    "@Paul Farley",
++    "",
++    "Vice City",
++    "@Billy Thomson",
++    "",
++    "Writers",
++    "@Brian Baglow",
++    "@Brian Lawson",
++    "",
++    "Music Written, Produced and Performed by",
++    "@Craig Conner",
++    "@Colin Anderson",
++    "@Grant Middleton",
++    "",
++    "Audio Programming",
++    "@Raymond Usher",
++    "@Grant Middleton",
++    "",
++    "Sound Effects",
++    "@Allan Walker",
++    "@Raymond Usher",
++    "@Colin Anderson",
++    "@Craig Conner",
++    "@Grant Middleton",
++    "",
++    "Additional Musicians",
++    "@Brian Baglow",
++    "@Robert De Negro",
++    "@John Gurney",
++    "@Eugene Henderson",
++    "@Michael James",
++    "@Drew Larg",
++    "@Paul Mackie",
++    "@Chris Marra",
++    "@Gennine Peirce",
++    "@Stephen Porter",
++    "@Melissa Ripley",
++    "@Ciaran Rooney",
++    "@Stuart Ross",
++    "@Brian Socha",
++    "@Heather Sowards",
++    "@Karen Taylor",
++    "@Allan Walker",
++    "@Julie Wemyss",
++    "",
++    "Graphics Engine",
++    "@Mike Dailly",
++    "@Aaron Puzey",
++    "",
++    "Physics Programming",
++    "@Pat Kerr",
++    "",
++    "Tools Programming",
++    "@Iain Macdonald",
++    "@Andrew Patterson",
++    "@Robert Parsons",
++    "",
++    "Additional Artwork",
++    "@Darren Baines",
++    "@Jamie Bryan",
++    "@Jeff Cairns",
++    "@Ken Fee",
++    "@Aaron Garbut",
++    "@Martin Good",
++    "@Andy Hay",
++    "@Stacey Jamieson",
++    "@Rob Jeffrey",
++    "@Lenny Lane",
++    "@Pat McGovern",
++    "@Liam O'Neill",
++    "@Paul Reeves",
++    "@Andrew Strachan",
++    "",
++    "Quality Assurance",
++    "@Craig Arbuthnott",
++    "@William Mills",
++    "@Michael Stirling",
++    "@John Ree",
++    "@Sean Taylor",
++    "@Graeme Laws",
++    "@Fiona Robertson",
++    "@Kevin Finnigan",
++    "@Alan Dobson",
++    "@Gordon Ross",
++    "@Lee Bekier",
++    "",
++    "Additional Design",
++    "@Lesley Firth",
++    "",
++    "BMG Chief Whip",
++    "@Sam Houser",
++    "",
++    "BMG Senior Technical Manager",
++    "@Gary J. Foreman",
++    "",
++    "BMG Technical Manager",
++    "@Mark Crane",
++    "",
++    "BMG Production Co-ordinator",
++    "@Claire Cuthill",
++    "",
++    "BMG QA Manager",
++    "@Steve Mann",
++    "",
++    "BMG QA Department",
++    "@Darren Lloyd",
++    "@Mike Wenn",
++    "@Adam Rabin",
++    "@Ken Jordan",
++    "@Paul Cuthill",
++    "@Ronnie Jackson",
++    "@Sean James",
++    "@Jeremy Goldstein",
++    "",
++    "",
++    "Project Blokes",
++    "@Gary Penn",
++    "@Brian Lawson",
++    "",
++    "Capo Di Tutte Cappa",
++    "@David Jones",
++    "",
++};
++}
 diff --git a/src/GameCamera.cpp b/src/GameCamera.cpp
 index 3e02e64..0fba3b4 100644
 --- a/src/GameCamera.cpp
@@ -1091,7 +1466,7 @@ index 8cfa15c..d60f533 100644
      // note that location coords should never exceed MAP_DIMENSIONS for x,y and MAP_LAYERS_COUNT for layer
      // @param coordx, coordy, layer: Block location
 diff --git a/src/GameplayGamestate.cpp b/src/GameplayGamestate.cpp
-index fc6c789..5690a30 100644
+index fc6c789..b7af869 100644
 --- a/src/GameplayGamestate.cpp
 +++ b/src/GameplayGamestate.cpp
 @@ -10,76 +10,81 @@
@@ -1104,8 +1479,8 @@ index fc6c789..5690a30 100644
  {
 -    // todo
 +    mission::MissionSession::SetCurrent(&mMissionSession);
-+    // Section 1 is NYC Easy; LoadSection verifies its map metadata.
-+    mMissionSession.LoadSection(1);
++    // LoadSection verifies the selected chapter against the loaded map.
++    mMissionSession.LoadSection(mStartSection);
  }
  
  void GameplayGamestate::OnGamestateLeave()
@@ -1280,10 +1655,10 @@ index fc6c789..5690a30 100644
      gConsole.LogMessage(eLogMessage_Info, "Player %d died (%s)", (playerIndex + 1), cxx::enum_to_string(humanPlayer->mCharacter->mDeathReason));
  
 diff --git a/src/GameplayGamestate.h b/src/GameplayGamestate.h
-index bffe911..a2b0266 100644
+index bffe911..8811154 100644
 --- a/src/GameplayGamestate.h
 +++ b/src/GameplayGamestate.h
-@@ -1,6 +1,7 @@
+@@ -1,12 +1,14 @@
  #pragma once
  
  #include "GenericGamestate.h"
@@ -1291,7 +1666,15 @@ index bffe911..a2b0266 100644
  
  // Main game
  class GameplayGamestate: public GenericGamestate
-@@ -22,6 +23,7 @@ public:
+ {
+ public:
+-    GameplayGamestate() = default;
++    GameplayGamestate() = default;
++    int mStartSection = 1; // Selected by the original front-end.
+ 
+     // override GenericGamestate
+     void OnGamestateEnter() override;
+@@ -22,6 +24,7 @@ public:
      void OnGamestateBroadcastEvent(const BroadcastEvent& broadcastEvent) override;
  
  private:
@@ -2157,6 +2540,325 @@ index 068fae5..435924d 100644
  
  int main(int argc, char *argv[])
  {
+diff --git a/src/MainMenuGamestate.cpp b/src/MainMenuGamestate.cpp
+index 9089238..de156d7 100644
+--- a/src/MainMenuGamestate.cpp
++++ b/src/MainMenuGamestate.cpp
+@@ -1,42 +1,219 @@
+-#include "stdafx.h"
+-#include "MainMenuGamestate.h"
+-
+-void MainMenuGamestate::OnGamestateEnter()
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateLeave()
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateFrame()
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateInputEvent(KeyInputEvent& inputEvent)
+-{
+-}
++#include "stdafx.h"
++#include "imgui.h"
++#include "FrontendCredits.h"
++#include "MainMenuGamestate.h"
++#include "CarnageGame.h"
++#include "GameTextsManager.h"
++#include "GpuTexture2D.h"
++#include "InputsManager.h"
++#include "TimeManager.h"
++#include "System.h"
++#include "AudioManager.h"
++#include "AudioSource.h"
++#include "cvars.h"
++#include "mission/MissionScript.h"
+ 
+-void MainMenuGamestate::OnGamestateInputEvent(MouseButtonInputEvent& inputEvent)
+-{
++namespace {
++std::string Text(const std::string& key) {return gGameTexts.GetText(key);}
++void Center(const frontend::Font& f,frontend::Image& frame,const std::string& s,int y) {
++    f.draw(frame,s,(640-f.measure(s))/2,y);
+ }
+-
+-void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
+-{
++void Blit(frontend::Image& dst,const frontend::Image& src,int y) {
++    if(src.width==640 && y>=0 && y+src.height<=480)
++        std::copy(src.pixels.begin(),src.pixels.end(),dst.pixels.begin()+y*640*4);
+ }
+-
+-void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent& inputEvent)
+-{
+ }
+ 
+-void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateInputEvent(GamepadInputEvent& inputEvent)
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateInputEventLost()
+-{
+-}
+\ No newline at end of file
++bool MainMenuGamestate::LoadAssets() {
++    auto font=[](frontend::Font& f,const std::string& name,int base) {
++        std::ifstream in; return gFiles.OpenBinaryFile(name,in) && f.load(in,base);
++    };
++    auto image=[](frontend::Image& im,const std::string& name,int h) {
++        std::ifstream in;return gFiles.OpenBinaryFile(name,in) && im.load(in,640,h);
++    };
++    bool ok=font(mHead,"F_MHEAD.FON",33) && font(mText,"F_MTEXT.FON",33) &&
++        font(mMiss,"F_MMISS.FON",33) && font(mKey,"F_KEY.FON",1);
++    for(int i=0;i<3;++i) ok=font(mCity[i],cxx::va("F_CITY%d.FON",i==0?4:i==1?1:3),1) && ok;
++    for(int i=0;i<8;++i) ok=image(mLogos[i],cxx::va("F_LOGO%d.RAW",i),168) && ok;
++    for(int i=0;i<2;++i) ok=image(mLower[i],cxx::va("F_LOWER%d.RAW",i),312) && ok;
++    // Resolve maps from MISSION.INI, never assume city names are map filenames.
++    std::ifstream ini;
++    if(!gFiles.OpenTextFile("MISSION.INI",ini)) return false;
++    const auto script=mission::MissionScript::parse(ini);
++    const int sections[]={1,2,102,103,202,203};
++    mMaps.fill({});
++    for(int i=0;i<6;++i) for(const auto& section:script.sections) if(section.name==std::to_string(sections[i])) {
++        for(const auto& line:section.metadata) {
++            const auto name=frontend::mapFromMetadata(line.raw);
++            if(!name.empty()) {
++                // Linux/Android imports retain DOS uppercase filenames.
++                for(const auto& available:gFiles.mGameMapsList)
++                    if(cxx_stricmp(name.c_str(),available.c_str())==0) {mMaps[i]=available;break;}
++            }
++        }
++        if(mMaps[i].empty())ok=false;
++    }
++    for(const auto& map:mMaps)if(map.empty())ok=false;
++    mFrame.width=640;mFrame.height=480;mFrame.pixels.assign(640*480*4,255);
++    return ok;
++}
++void MainMenuGamestate::OnGamestateEnter() {
++    mMenu=frontend::Menu{};mElapsed=0;mStartPending=mQuitPending=false;
++    mMenu.options[0]=gCvarSoundsVolume.mValue;mMenu.options[1]=gCvarMusicVolume.mValue;
++    mMenu.options[3]=gCvarGameMusicMode.mValue==eGameMusicMode_Constant;
++    mReady=LoadAssets();
++    if(mReady) mTexture=gGraphicsDevice.CreateTexture2D(eTextureFormat_RGBA8,640,480,mFrame.pixels.data());
++    mReady=mReady && mTexture;
++    if(mTexture)mTexture->SetSamplerState(eTextureFilterMode_Nearest,eTextureWrapMode_ClampToEdge);
++    if(!mReady)mQuitPending=true;
++    if(!mReady)gConsole.LogMessage(eLogMessage_Warning,"Original front-end assets or mission catalog missing; cannot start menu");
++}
++void MainMenuGamestate::OnGamestateLeave() {
++    if(mTexture)gGraphicsDevice.DestroyTexture(mTexture);
++    mTexture=nullptr;mReady=false;
++}
++void MainMenuGamestate::Act(frontend::Action a) {
++    if(!mReady)return;
++    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Cities) {mStartPending=true;return;}
++    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Quit) {mQuitPending=true;return;}
++    const bool save=mMenu.page==frontend::Page::Options && a==frontend::Action::Accept;
++    const auto previous=mMenu.page;
++    mMenu.act(a);
++    if(mMenu.page==frontend::Page::Quit && previous!=mMenu.page)mCreditsElapsed=0;
++    if(mMenu.exitRequested)mQuitPending=true;
++    if(save) {
++        gCvarSoundsVolume.mValue=mMenu.options[0];gCvarMusicVolume.mValue=mMenu.options[1];
++        gCvarGameMusicMode.mValue=mMenu.options[3]?eGameMusicMode_Constant:eGameMusicMode_Radio;
++        gAudioManager.InitSoundsAndMusicGainValue();
++        if(gAudioManager.mMusicAudioSource)
++            gAudioManager.mMusicAudioSource->SetGain(gAudioManager.mMusicGain);
++        gSystem.SaveConfiguration();
++    }
++}
++void MainMenuGamestate::OnGamestateFrame() {
++    if(mQuitPending) {mQuitPending=false;gSystem.QuitRequest();return;}
++    // State transitions happen here, outside input dispatch and drawing.
++    if(mStartPending) {
++        mStartPending=false;
++        const std::string map=mMaps[mMenu.city*2+mMenu.chapter];
++        gCvarMapname.mValue=map;gCvarMapname.ClearModified();
++        gCarnageGame.mGameplayGamestate.mStartSection=mMenu.section();
++        if(!gCarnageGame.StartScenario(map)) {
++            gCarnageGame.SetCurrentGamestate(this);
++            gConsole.LogMessage(eLogMessage_Warning,"Selected chapter failed to start");
++        }
++        return;
++    }
++    if(!mReady)return;
++    mElapsed+=gTimeManager.mGameFrameDelta;
++    Blit(mFrame,mLogos[int(mElapsed/0.083f)%8],0);
++    Blit(mFrame,mLower[mMenu.page==frontend::Page::Cities?1:0],168);
++    const int anim=int(mElapsed*25)%13+1;
++    auto cursor=[&](int x,int y){mKey.draw(mFrame,std::string(1,char(anim)),x,y);};
++    if(mMenu.page==frontend::Page::Main) {
++        mHead.draw(mFrame,Text("Play"),196,216);
++        mHead.draw(mFrame,Text("Options"),196,216+mHead.height);
++        cursor(116,200+mMenu.row*mHead.height);
++        Center(mText,mFrame,Text("esc-key")+": "+Text("Quit"),480-mText.height);
++    } else if(mMenu.page==frontend::Page::Cities) {
++        // FUN_004277c0: city order maps to icon fonts 4,1,3.
++        const int xs[]={470,80,368},ys[]={242,230,338},dx[]={20,8,0};
++        for(int i=0;i<3;++i) {
++            mCity[i].draw(mFrame,std::string(1,char(int(mElapsed*25)%int(mCity[i].glyphs.size())+1)),xs[i],ys[i]);
++            int y=ys[i]+mCity[i].height;
++            const std::string name=Text("city"+std::to_string(i));
++            mText.draw(mFrame,name,xs[i]-mText.measure(name)/2,y);
++            if(i==mMenu.city) {
++                y+=mText.height;
++                for(int j=0;j<2;++j) {
++                    const int section=(i==0?1:i==1?102:202)+j;
++                    const std::string title=std::to_string(j+1)+": "+Text("mission"+std::to_string(section));
++                    mMiss.draw(mFrame,title,xs[i]+dx[i]-mMiss.measure(title)/2,y+j*mMiss.height);
++                }
++                cursor(xs[i]+dx[i]-69,y+mMenu.chapter*mMiss.height-32);
++            }
++        }
++        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
++        const auto s=Text("rtn-key")+": "+Text("Play");
++        mText.draw(mFrame,s,640-mText.measure(s),480-mText.height);
++    } else if(mMenu.page==frontend::Page::Options) {
++        Center(mHead,mFrame,Text("Options"),176);
++        const char* keys[]={"Sound","Music","Text","music-mode","trans-effects"};
++        for(int i=0;i<5;++i) {
++            const auto value=i<2 ? (mMenu.options[i]?std::to_string(mMenu.options[i]):Text("Off")) :
++                i==2 ? Text(mMenu.options[i]==1?"Slow":mMenu.options[i]==2?"Normal":"Fast") :
++                i==3 ? Text(mMenu.options[i]?"constant":"radio") : Text(mMenu.options[i]?"On":"Off");
++            mText.draw(mFrame,Text(keys[i])+": "+value,196,224+i*mText.height);
++        }
++        cursor(116,208+mMenu.row*mText.height);
++        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
++        const auto s=Text("rtn-key")+": "+Text("save");mText.draw(mFrame,s,640-mText.measure(s),480-mText.height);
++    } else {
++        // Original state 10: credits scroll two pixels per 25 Hz update.
++        mCreditsElapsed+=gTimeManager.mGameFrameDelta;
++        const int scroll=int(mCreditsElapsed*25)*2;
++        const int first=scroll/mText.height,offset=scroll%mText.height;
++        if(first>=int(CountOf(frontend::credits)))mQuitPending=true;
++        for(int i=0;i<12 && first+i<int(CountOf(frontend::credits));++i) {
++            const char* text=frontend::credits[first+i];
++            const bool name=*text=='@';if(name)++text;
++            mText.draw(mFrame,text,name?128:64,192-offset+i*mText.height,192);
++        }
++    }
++    mTexture->Upload(mFrame.pixels.data());
++    const auto& res=gGraphicsDevice.mScreenResolution;frontend::View v(res.x,res.y);
++    ImGui::GetBackgroundDrawList()->AddImage(mTexture,ImVec2(v.x,v.y),ImVec2(v.x+640*v.scale,v.y+480*v.scale));
++}
++void MainMenuGamestate::Tap(int px,int py) {
++    const auto& r=gGraphicsDevice.mScreenResolution;frontend::View v(r.x,r.y);int x,y;
++    if(!mReady || !v.point(px,py,x,y))return;
++    if(mMenu.page==frontend::Page::Quit) {Act(frontend::Action::Accept);return;}
++    if(y>=480-mText.height) {
++        Act(mMenu.page==frontend::Page::Main || x<320?frontend::Action::Back:frontend::Action::Accept);
++        return;
++    }
++    if(mMenu.page==frontend::Page::Main && x>=110 && x<600 && y>=216 && y<216+2*mHead.height) {
++        mMenu.row=(y-216)/mHead.height;Act(frontend::Action::Accept);
++    } else if(mMenu.page==frontend::Page::Options && x>=110 && y>=224 && y<224+5*mText.height) {
++        mMenu.row=(y-224)/mText.height;Act(x<320?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Cities) {
++        const int xs[]={470,80,368},ys[]={242,230,338};
++        for(int i=0;i<3;++i)if(x>=xs[i]-80 && x<xs[i]+140 && y>=ys[i] && y<ys[i]+mCity[i].height+mText.height+2*mMiss.height) {
++            const int top=ys[i]+mCity[i].height+mText.height;
++            mMenu.city=i;
++            if(y>=top)mMenu.chapter=std::min(1,(y-top)/mMiss.height);
++            return;
++        }
++    }
++}
++void MainMenuGamestate::OnGamestateInputEvent(KeyInputEvent& e) {
++    if(!e.mPressed)return;
++    switch(e.mKeycode) {
++        case eKeycode_UP:Act(frontend::Action::Up);break;
++        case eKeycode_DOWN:Act(frontend::Action::Down);break;
++        case eKeycode_LEFT:Act(frontend::Action::Left);break;
++        case eKeycode_RIGHT:Act(frontend::Action::Right);break;
++        case eKeycode_ENTER:Act(frontend::Action::Accept);break;
++        case eKeycode_ESCAPE:Act(frontend::Action::Back);break;
++        default:return;
++    }e.SetConsumed();
++}
++void MainMenuGamestate::OnGamestateInputEvent(GamepadInputEvent& e) {
++    if(!e.mPressed)return;
++    switch(e.mButton) {
++        case eGamepadButton_DPAD_Up:Act(frontend::Action::Up);break;
++        case eGamepadButton_DPAD_Down:Act(frontend::Action::Down);break;
++        case eGamepadButton_DPAD_Left:Act(frontend::Action::Left);break;
++        case eGamepadButton_DPAD_Right:Act(frontend::Action::Right);break;
++        case eGamepadButton_A:case eGamepadButton_Start:Act(frontend::Action::Accept);break;
++        case eGamepadButton_B:Act(frontend::Action::Back);break;
++        default:return;
++    }e.SetConsumed();
++}
++void MainMenuGamestate::OnGamestateInputEvent(MouseButtonInputEvent& e) {
++    if(e.mPressed && e.mButton==eMButton_LEFT) {Tap(gInputs.mCursorPositionX,gInputs.mCursorPositionY);e.SetConsumed();}
++}
++void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent&) {}
++void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent&) {}
++void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent&) {}
++void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;}
+diff --git a/src/MainMenuGamestate.h b/src/MainMenuGamestate.h
+index 38eedcd..d590399 100644
+--- a/src/MainMenuGamestate.h
++++ b/src/MainMenuGamestate.h
+@@ -1,24 +1,28 @@
+-#pragma once
+-
+-#include "GenericGamestate.h"
+-
+-class MainMenuGamestate: public GenericGamestate
+-{
+-public:
+-    MainMenuGamestate() = default;
+-
+-    // override GenericGamestate
+-    void OnGamestateEnter() override;
+-    void OnGamestateLeave() override;
+-    void OnGamestateFrame() override;
+-    void OnGamestateInputEvent(KeyInputEvent& inputEvent) override;
+-    void OnGamestateInputEvent(MouseButtonInputEvent& inputEvent) override;
+-    void OnGamestateInputEvent(MouseMovedInputEvent& inputEvent) override;
+-    void OnGamestateInputEvent(MouseScrollInputEvent& inputEvent) override;
+-    void OnGamestateInputEvent(KeyCharEvent& inputEvent) override;
+-    void OnGamestateInputEvent(GamepadInputEvent& inputEvent) override;
+-    void OnGamestateInputEventLost() override;
+-
+-private:
+-
+-};
++#pragma once
++#include "GenericGamestate.h"
++#include "Frontend.h"
++class GpuTexture2D;
++class MainMenuGamestate: public GenericGamestate {
++public:
++    void OnGamestateEnter() override;
++    void OnGamestateLeave() override;
++    void OnGamestateFrame() override;
++    void OnGamestateInputEvent(KeyInputEvent&) override;
++    void OnGamestateInputEvent(MouseButtonInputEvent&) override;
++    void OnGamestateInputEvent(MouseMovedInputEvent&) override;
++    void OnGamestateInputEvent(MouseScrollInputEvent&) override;
++    void OnGamestateInputEvent(KeyCharEvent&) override;
++    void OnGamestateInputEvent(GamepadInputEvent&) override;
++    void OnGamestateInputEventLost() override;
++private:
++    void Act(frontend::Action);
++    void Tap(int,int);
++    bool LoadAssets();
++    frontend::Menu mMenu;
++    frontend::Image mFrame, mLower[2], mLogos[8];
++    frontend::Font mHead,mText,mMiss,mKey,mCity[3];
++    std::array<std::string,6> mMaps;
++    GpuTexture2D* mTexture=nullptr;
++    bool mReady=false,mStartPending=false,mQuitPending=false;
++    float mElapsed=0,mCreditsElapsed=0;
++};
 diff --git a/src/Pedestrian.cpp b/src/Pedestrian.cpp
 index af31f7a..03de8ea 100644
 --- a/src/Pedestrian.cpp
@@ -2371,10 +3073,10 @@ index 0000000..70113b2
 +#endif
 diff --git a/src/android/glfw_sdl_shim.cpp b/src/android/glfw_sdl_shim.cpp
 new file mode 100644
-index 0000000..84cd078
+index 0000000..9665c15
 --- /dev/null
 +++ b/src/android/glfw_sdl_shim.cpp
-@@ -0,0 +1,869 @@
+@@ -0,0 +1,884 @@
 +// GTA Classic Perspective Lock - Android platform layer (GLFW subset on SDL2 + touch controls)
 +#include <SDL.h>
 +#include "glfw_sdl_shim.h"
@@ -2383,6 +3085,8 @@ index 0000000..84cd078
 +#include <vector>
 +#include <atomic>
 +#include "touch_sticks.h"
++
++extern "C" bool gtaFrontendActive();
 +
 +struct GLFWwindow
 +{
@@ -2854,7 +3558,7 @@ index 0000000..84cd078
 +
 +    static void Draw(int w, int h)
 +    {
-+        if (!gVisible || gMode == 2) return;
++        if (gtaFrontendActive() || !gVisible || gMode == 2) return;
 +        if (w != gScreenW || h != gScreenH) Layout(w, h);
 +        if (!gProgram && !InitGL()) { gVisible = false; return; }
 +        Build();
@@ -3040,7 +3744,10 @@ index 0000000..84cd078
 +            case SDL_KEYDOWN:
 +            case SDL_KEYUP:
 +                if (e.key.repeat) break;
-+                if (e.key.keysym.sym == SDLK_AC_BACK) break; // back button: ignore (no accidental quit)
++                if (e.key.keysym.sym == SDLK_AC_BACK) {
++                    if (gtaFrontendActive()) EmitKey(GLFW_KEY_ESCAPE,e.type == SDL_KEYDOWN);
++                    break;
++                }
 +                EmitKey(SdlKeyToGlfw(e.key.keysym.sym), e.type == SDL_KEYDOWN);
 +                break;
 +            case SDL_TEXTINPUT:
@@ -3067,7 +3774,17 @@ index 0000000..84cd078
 +            case SDL_FINGERDOWN:
 +            case SDL_FINGERUP:
 +            case SDL_FINGERMOTION:
-+                touch::OnFinger(e.tfinger, e.type);
++                if (gtaFrontendActive())
++                {
++                    // Menu taps use the ordinary engine cursor/button dispatch.
++                    int w=0,h=0;
++                    SDL_GL_GetDrawableSize(gWindow.mSdlWindow,&w,&h);
++                    if (gCursorCb) gCursorCb(&gWindow,e.tfinger.x*w,e.tfinger.y*h);
++                    if (gMouseButtonCb && e.type != SDL_FINGERMOTION)
++                        gMouseButtonCb(&gWindow,GLFW_MOUSE_BUTTON_LEFT,
++                            e.type == SDL_FINGERDOWN ? GLFW_PRESS : GLFW_RELEASE,0);
++                }
++                else touch::OnFinger(e.tfinger, e.type);
 +                break;
 +            case SDL_CONTROLLERDEVICEADDED:
 +            {
