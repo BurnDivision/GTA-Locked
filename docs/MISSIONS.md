@@ -19,7 +19,11 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
   (recovered from gta.exe, no height/speed test). The mission interpreter runs at the original 25 updates/s.
 
 ## Not yet working
-- The first mission chain runs (headless) phone -> RESET -> brief -> PARKED_ON (original car model, position, heading,
-  no driver) and stops at POWERUP_ON (pickup), which is not recovered yet.
+- The first mission chain runs (headless) phone -> RESET -> brief -> PARKED_ON (original car) -> POWERUP_ON (original
+  pickup object, help text, sound; ped and stationary-driver contact) -> ARROW -> DOOR -> PLAYER/IS_PED_IN_CAR -> ENABLE
+  area trigger, and stops at DOOR_ON130, which is not recovered yet.
+- Police (`src/police/`): wanted thresholds per section, response levels, arrest-vs-death penalties, lives (game over on
+  the next death at 0 lives) and ranked respawn points, from the original executable. Not live yet: automatic crime
+  detection, pursuit/roadblock control, arrest trigger and radius, and wanted-level decay are not recovered.
 - Nonempty RESET cleanup, parked-car overlap/slope variants and some state transitions are not recovered.
 - Police pursuit, arrest, death/respawn, pickups, frenzies, front-end menu, saves and radio.

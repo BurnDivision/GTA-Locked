@@ -345,11 +345,13 @@ index d2483f9..b3bb998 100644
  };
 \ No newline at end of file
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
-index 1bfac4c..a31a65d 100644
+index 1bfac4c..0fb73e0 100644
 --- a/src/CMakeLists.txt
 +++ b/src/CMakeLists.txt
-@@ -1,4 +1,9 @@
+@@ -1,4 +1,11 @@
  set(CARNAGE3D_SRC
++    ${CMAKE_CURRENT_LIST_DIR}/police/PoliceSystem.cpp
++    ${CMAKE_CURRENT_LIST_DIR}/police/PoliceRuntime.cpp
 +    ${CMAKE_CURRENT_LIST_DIR}/mission/CarnageMissionWorld.cpp
 +    ${CMAKE_CURRENT_LIST_DIR}/mission/MissionSession.cpp
 +    ${CMAKE_CURRENT_LIST_DIR}/mission/MissionVM.cpp
@@ -1072,11 +1074,27 @@ index 85f2137..a82b020 100644
      // in car control actions
      float mAcceleration = 0.0f; // 0 means no acceleration, < 0 move reverse, > 0 full acceleration
      float mSteerDirection = 0.0f; // 0 means no steer, < 0 steer left, > 0 steer right
+diff --git a/src/GameMapManager.h b/src/GameMapManager.h
+index 8cfa15c..d60f533 100644
+--- a/src/GameMapManager.h
++++ b/src/GameMapManager.h
+@@ -27,6 +27,11 @@ public:
+     // test whether city scape data was loaded, including style data
+     bool IsLoaded() const;
+ 
++    const std::vector<glm::ivec3>& GetServiceBases(eAccidentServise service) const
++    {
++        return mAccidentServicesBases[service];
++    }
++
+     // get map block info at specific location
+     // note that location coords should never exceed MAP_DIMENSIONS for x,y and MAP_LAYERS_COUNT for layer
+     // @param coordx, coordy, layer: Block location
 diff --git a/src/GameplayGamestate.cpp b/src/GameplayGamestate.cpp
-index fc6c789..952b438 100644
+index fc6c789..5690a30 100644
 --- a/src/GameplayGamestate.cpp
 +++ b/src/GameplayGamestate.cpp
-@@ -10,15 +10,19 @@
+@@ -10,76 +10,81 @@
  #include "ParticleEffectsManager.h"
  #include "TrafficManager.h"
  #include "AiManager.h"
@@ -1098,14 +1116,169 @@ index fc6c789..952b438 100644
  }
  
  void GameplayGamestate::OnGamestateFrame()
-@@ -34,6 +38,7 @@ void GameplayGamestate::OnGamestateFrame()
-     gTrafficManager.UpdateFrame();
-     gAiManager.UpdateFrame();
+ {
+-    float deltaTime = gTimeManager.mGameFrameDelta;
+-    gCarnageGame.ProcessDebugCvars();
+-    // advance game state
+-    gSpriteManager.UpdateBlocksAnimations(deltaTime);
+-    gPhysics.UpdateFrame();
+-    gGameObjectsManager.UpdateFrame();
+-    gWeatherManager.UpdateFrame();
+-    gParticleManager.UpdateFrame();
+-    gTrafficManager.UpdateFrame();
+-    gAiManager.UpdateFrame();
++    float deltaTime = gTimeManager.mGameFrameDelta;
++    gCarnageGame.ProcessDebugCvars();
++    // advance game state
++    gSpriteManager.UpdateBlocksAnimations(deltaTime);
++    gPhysics.UpdateFrame();
++    gGameObjectsManager.UpdateFrame();
++    gWeatherManager.UpdateFrame();
++    gParticleManager.UpdateFrame();
++    gTrafficManager.UpdateFrame();
++    gAiManager.UpdateFrame();
      gBroadcastEvents.UpdateFrame();
 +    mMissionSession.Update(deltaTime);
++}
++
++void GameplayGamestate::OnGamestateInputEvent(KeyInputEvent& inputEvent)
++{
++    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
++    {
++        if (currPlayer)
++        {
++            currPlayer->InputEvent(inputEvent);
++        }
++    }
++}
++
++void GameplayGamestate::OnGamestateInputEvent(MouseButtonInputEvent& inputEvent)
++{
++    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
++    {
++        if (currPlayer)
++        {
++            currPlayer->InputEvent(inputEvent);
++        }
++    }
++}
++
++void GameplayGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
++{
++    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
++    {
++        if (currPlayer)
++        {
++            currPlayer->InputEvent(inputEvent);
++        }
++    }
++}
++
++void GameplayGamestate::OnGamestateInputEvent(MouseScrollInputEvent& inputEvent)
++{
++    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
++    {
++        if (currPlayer)
++        {
++            currPlayer->InputEvent(inputEvent);
++        }
++    }
  }
  
- void GameplayGamestate::OnGamestateInputEvent(KeyInputEvent& inputEvent)
+-void GameplayGamestate::OnGamestateInputEvent(KeyInputEvent& inputEvent)
+-{
+-    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
+-    {
+-        if (currPlayer)
+-        {
+-            currPlayer->InputEvent(inputEvent);
+-        }
+-    }
+-}
+-
+-void GameplayGamestate::OnGamestateInputEvent(MouseButtonInputEvent& inputEvent)
+-{
+-    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
+-    {
+-        if (currPlayer)
+-        {
+-            currPlayer->InputEvent(inputEvent);
+-        }
+-    }
+-}
+-
+-void GameplayGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
+-{
+-    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
+-    {
+-        if (currPlayer)
+-        {
+-            currPlayer->InputEvent(inputEvent);
+-        }
+-    }
+-}
+-
+-void GameplayGamestate::OnGamestateInputEvent(MouseScrollInputEvent& inputEvent)
+-{
+-    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
+-    {
+-        if (currPlayer)
+-        {
+-            currPlayer->InputEvent(inputEvent);
+-        }
+-    }
+-}
+-
+ void GameplayGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
+ {
+     // do nothing
+@@ -87,23 +92,23 @@ void GameplayGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
+ 
+ void GameplayGamestate::OnGamestateInputEvent(GamepadInputEvent& inputEvent)
+ {
+-    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
+-    {
+-        if (currPlayer)
+-        {
+-            currPlayer->InputEvent(inputEvent);
+-        }
++    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
++    {
++        if (currPlayer)
++        {
++            currPlayer->InputEvent(inputEvent);
++        }
+     }
+ }
+ 
+ void GameplayGamestate::OnGamestateInputEventLost()
+ {
+-    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
+-    {
+-        if (currPlayer)
+-        {
+-            currPlayer->InputEventLost();
+-        }
++    for (HumanPlayer* currPlayer: gCarnageGame.mHumanPlayers)
++    {
++        if (currPlayer)
++        {
++            currPlayer->InputEventLost();
++        }
+     }
+ }
+ 
+@@ -143,8 +148,8 @@ void GameplayGamestate::OnHumanPlayerDie(int playerIndex)
+ 
+     humanPlayer->mCharacter->StartGameObjectSound(ePedSfxChannelIndex_Voice, eSfxSampleType_Voice, SfxVoice_PlayerDies, SfxFlags_None);
+ 
+-    // todo: check lives left
+-    humanPlayer->SetRespawnTimer();
++    // Original death processor owns lives and update-count respawn.
++    mMissionSession.Police().death(playerIndex);
+ 
+     gConsole.LogMessage(eLogMessage_Info, "Player %d died (%s)", (playerIndex + 1), cxx::enum_to_string(humanPlayer->mCharacter->mDeathReason));
+ 
 diff --git a/src/GameplayGamestate.h b/src/GameplayGamestate.h
 index bffe911..a2b0266 100644
 --- a/src/GameplayGamestate.h
@@ -3295,10 +3468,10 @@ index dfc0703..a985b77 100644
      gConsole.RegisterVariable(&gCvarMemEnableFrameHeapAllocator);
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..464438f
+index 0000000..2f691ad
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,341 @@
+@@ -0,0 +1,573 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -3309,6 +3482,8 @@ index 0000000..464438f
 +#include "../Decoration.h"
 +#include "PhoneRules.h"
 +#include "../GameTextsManager.h"
++#include "../AudioManager.h"
++#include "../PhysicsBody.h"
 +#include <cmath>
 +#include <sstream>
 +#include <limits>
@@ -3354,6 +3529,15 @@ index 0000000..464438f
 +}
 +void CarnageMissionWorld::Prepare(const Section& section) {
 +    Reset();
++    // 00445800 case3 consumes 00412a70/00412a90 in declaration order.
++    // Single-player enumeration is0 then-1. Reuse the registered engine ped;
++    // original PLAYER spawn/placement is deliberately outside this projection.
++    for(const auto& r:section.declarations) if(r.token=="PLAYER") {
++        int id=0;
++        if(integer(r.label,id)) if(auto* human=player(0)) if(human->mCharacter)
++            playerBindings_.emplace(id,human->mCharacter->mObjectID);
++        break;
++    }
 +    for(const auto& r:section.declarations) if(r.token=="TELEPHONE") {
 +        int id=0; auto pos=DeclarationPosition(r);
 +        if(!integer(r.label,id) || !pos) {Once("bad-phone","Invalid telephone declaration"); continue;}
@@ -3379,12 +3563,94 @@ index 0000000..464438f
 +}
 +void CarnageMissionWorld::Reset() {
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
++    playerBindings_.clear(); pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
++    UpdatePickups();
 +    // Original combo/VM timers are update counts, not seconds.
 +    for(int i=0;i<4;++i) if(player(i)) economy_.tickCombo(i);
++}
++void CarnageMissionWorld::UpdatePickups() {
++    if(std::none_of(pickups_.begin(),pickups_.end(),[](const Pickup& p){return p.object!=0;})) return;
++    // Unknown scene objects could win the original spatial-list arbitration.
++    // The bounded adapter handles its phones/pickups and engine peds/cars only.
++    for(auto* o:gGameObjectsManager.mAllObjects) {
++        if(o->IsMarkedForDeletion() || o->mClassID==eGameObjectClass_Pedestrian || o->mClassID==eGameObjectClass_Car) continue;
++        bool known=false;
++        for(const auto& p:phones_) if(p.second.object==o->mObjectID) known=true;
++        for(const auto& p:pickups_) if(p.object==o->mObjectID) known=true;
++        if(!known) {Once("pickup-scene","Unresolved pickup collision arbitration with untracked world objects");return;}
++    }
++    // 00464440 enumerates participants by registered ped handle, not ped AI type.
++    // Stable standing/walking and seated driver are engine state projections.
++    // Entry/exit, falling and passenger modes have no proved original mapping.
++    for(int owner=0;owner<4;++owner) {
++        auto* human=player(owner); auto* ped=human?human->mCharacter:nullptr;
++        if(!ped || ped->IsMarkedForDeletion() || ped->IsDead()) continue;
++        if(ped->IsEnteringOrExitingCar()) {
++            if(std::any_of(pickups_.begin(),pickups_.end(),[](const Pickup& p){return p.object!=0;}))
++                Once("pickup-transition","Unresolved pickup participant mapping during vehicle transition");
++            continue;
++        }
++        GameObject* participant=ped; int w=4,d=4,a=0;
++        if(ped->mCurrentCar) {
++            if(!ped->IsCarDriver() || ped->mCurrentCar->GetCarDriver()!=ped) {
++                Once("pickup-passenger","Unresolved pickup participant mode for passengers"); continue;
++            }
++            auto* car=ped->mCurrentCar;
++            if(car->IsMarkedForDeletion() || car->IsWrecked()) continue;
++            if(car->mPhysicsBody && (car->mPhysicsBody->GetLinearVelocity()!=glm::vec2(0) ||
++               car->mPhysicsBody->GetAngularVelocity().to_degrees()!=0)) {
++                Once("pickup-car-motion","Unresolved original vehicle predicted contact transform while moving"); continue;
++            }
++            participant=car;
++            w=Convert::MetersToPixels(car->mCarInfo->mDimensions.x)/2;
++            d=Convert::MetersToPixels(car->mCarInfo->mDimensions.z)/2;
++            a=static_cast<int>(std::lround((90-car->mTransform.mOrientation.to_degrees())*1024/360))&1023;
++        } else if(!ped->IsStanding() && !ped->IsWalking()) continue;
++        auto pos=participant->mTransform.mPosition;
++        if(!std::isfinite(pos.x) || !std::isfinite(pos.y) || !std::isfinite(pos.z)) continue;
++        auto x=std::llround(Convert::MetersToMapUnits(pos.x)*pickup::cell);
++        auto y=std::llround(Convert::MetersToMapUnits(pos.z)*pickup::cell);
++        auto z=std::llround((5.0-Convert::MetersToMapUnits(pos.y))*pickup::cell);
++        if(x<0 || y<0 || x>=256*pickup::cell || y>=256*pickup::cell || z<0 || z>5*pickup::cell) continue;
++        const auto query=pickup::box(x,y,z,w,d,a);
++        if(participant==ped) {
++            // 0045a3b0 gives vehicle contacts priority over the object query.
++            bool carContact=false;
++            for(auto* car:gGameObjectsManager.mVehiclesList) {
++                if(car->IsMarkedForDeletion()) continue;
++                const auto& at=car->mTransform.mPosition;
++                if(!std::isfinite(at.x) || !std::isfinite(at.y) || !std::isfinite(at.z)) {carContact=true;break;}
++                auto cx=std::llround(Convert::MetersToMapUnits(at.x)*pickup::cell);
++                auto cy=std::llround(Convert::MetersToMapUnits(at.z)*pickup::cell);
++                auto cz=std::llround((5.0-Convert::MetersToMapUnits(at.y))*pickup::cell);
++                int cw=Convert::MetersToPixels(car->mCarInfo->mDimensions.x)/2;
++                int cd=Convert::MetersToPixels(car->mCarInfo->mDimensions.z)/2;
++                int ca=static_cast<int>(std::lround((90-car->mTransform.mOrientation.to_degrees())*1024/360))&1023;
++                if(pickup::contact(query,pickup::box(cx,cy,cz,cw,cd,ca),cd)) {carContact=true;break;}
++            }
++            if(carContact) continue;
++            int count=0;
++            for(const auto& candidate:pickups_) if(candidate.object)
++                if(auto* o=gGameObjectsManager.GetGameObjectByID(candidate.object))
++                    if(!o->IsMarkedForDeletion() && pickup::contact(query,candidate.shape,candidate.depth)) ++count;
++            if(count>1) {Once("pickup-order","Unresolved original object ordering for overlapping ped pickups");continue;}
++        }
++        for(auto& entry:pickups_) {
++            auto* object=gGameObjectsManager.GetGameObjectByID(entry.object);
++            if(!entry.object || !object || object->IsMarkedForDeletion()) continue;
++            if(!pickup::contact(query,entry.shape,entry.depth)) continue;
++            // 0046a560 type14: remove object, help<aux>, sound4, clear table.
++            human->mHUD.ShowMissionText(gGameTexts.GetText("help"+std::to_string(entry.help)));
++            gAudioManager.StartSound(eSfxSampleType_Level,4,SfxFlags_None,object->mTransform.mPosition);
++            object->MarkForDeletion();
++            missionEntities_.erase(entry.object); ownedObjects_.erase(entry.object);
++            entry=Pickup{};
++            if(participant==ped) break; // car contact list can collect multiple objects
++        }
++    }
 +}
 +void CarnageMissionWorld::postDispatch(int,Process&) {
 +    // No fabricated death/arrest/global END or original 004749c0 transition.
@@ -3403,6 +3669,8 @@ index 0000000..464438f
 +    return o && !o->IsMarkedForDeletion()?o:nullptr;
 +}
 +std::optional<glm::vec3> CarnageMissionWorld::ResolvePosition(const Entity& e) const {
++    // 0043e680 case9 reads the loader XYZ <<6, independent of runtime handle.
++    if(e.declaration.token=="DOOR") return DeclarationPosition(e.declaration);
 +    if(auto* object=ResolveObject(e)) return object->mTransform.mPosition;
 +    if(e.declaration.token=="POINT" || e.declaration.token=="TELEPHONE" || e.declaration.token=="LOCATION")
 +        return DeclarationPosition(e.declaration);
@@ -3566,6 +3834,51 @@ index 0000000..464438f
 +        if(i.A>=0) Once("crime9-gate","BANK_ROBBERY crime9 witness/ownership gate unresolved; direct +1000/level4 applied");
 +        return WorldResult::Done;
 +    }
++    if(token=="POWERUP_ON") {
++        if(!entity || entity->declaration.token!="POWERUP") return WorldResult::Unresolved;
++        int type=0,help=0;
++        auto pos=DeclarationPosition(entity->declaration);
++        const auto& operands=entity->declaration.operands;
++        if(!pos || operands.size()!=2 || !integer(operands[0],type) ||
++           !integer(operands[1],help) || type!=14) return WorldResult::Unresolved;
++        if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return WorldResult::Unresolved;
++        auto slot=std::find_if(pickups_.begin(),pickups_.end(),[](const Pickup& p){return !p.object;});
++        // Original dispatcher ignores constructor failure (including a full table).
++        if(slot==pickups_.end()) return WorldResult::Done;
++        auto x=std::llround(Convert::MetersToMapUnits(pos->x)*pickup::cell);
++        auto y=std::llround(Convert::MetersToMapUnits(pos->z)*pickup::cell);
++        auto z=std::llround(Convert::MetersToMapUnits(pos->y)*pickup::cell)-1;
++        if(x<pickup::cell || y<pickup::cell || z<=0x3bffff || z>5*pickup::cell)
++            return WorldResult::Done;
++        for(auto& desc:gGameMap.mStyleData.mObjects) if(desc.mObjectType==95) {
++            if(desc.mAnimationData.mFrames.empty()) return WorldResult::Unresolved;
++            // 0044cef0 stores supplied XYZ without snapping or adding half a cell.
++            // Engine vertical axis is inverted; exact fixed-point values stay in shape.
++            pos->y=Convert::MapUnitsToMeters(5.0f-static_cast<float>(z/double(pickup::cell)));
++            // Decoration copies animation/draw data; its factory requires that class.
++            // Keep the original powerup descriptor intact for other engine systems.
++            GameObjectInfo visual=desc; visual.mClassID=eGameObjectClass_Decoration;
++            auto* object=gGameObjectsManager.CreateDecoration(*pos,-Convert::Fix16ToAngle(0),&visual);
++            if(!object) return WorldResult::Done;
++            object->SetLifeDuration(0);
++            // Constructor frame1 is proved. Original animation cadence is unresolved.
++            object->SetStaticSprite(desc.mAnimationData.mFrames.front().mSprite);
++            int w=Convert::MetersToPixels(desc.mWidth)/2;
++            int d=Convert::MetersToPixels(desc.mHeight)/2;
++            *slot={object->mObjectID,help,pickup::box(x,y,z,w,d,0),d};
++            ownedObjects_.insert(object->mObjectID); missionEntities_.insert(object->mObjectID);
++            Once("pickup-presentation","Type14 pickup active: original animation cadence and category14 HUD presentation/timing unresolved");
++            return WorldResult::Done;
++        }
++        return WorldResult::Unresolved;
++    }
++    if(token=="STEAL") {
++        if(auto* human=player(r.owner)) if(human->mCharacter) {
++            gAudioManager.StartSound(eSfxSampleType_Voice,17,SfxFlags_None,human->mCharacter->mTransform.mPosition);
++            return WorldResult::Done;
++        }
++        return WorldResult::Unresolved;
++    }
 +    // Guarded effects with known VM failure contracts; do not guess engine health.
 +    if((token=="KILL_DROP" || token=="REMAP_PED" || token=="CLOSE_DOOR") &&
 +       (!entity || !entity->value || *entity->value<0)) return WorldResult::Failure;
@@ -3576,6 +3889,65 @@ index 0000000..464438f
 +    return WorldResult::Unresolved;
 +}
 +std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
++    if(r.token=="AREA_TRIGGER") {
++        auto at=r.entities.find(r.instruction.A); auto* human=player(r.owner);
++        if(at==r.entities.end() || at->second.declaration.token!="TRIGGER" || !human || !human->mCharacter)
++            return {};
++        auto* ped=human->mCharacter;
++        if(ped->IsMarkedForDeletion() || ped->IsEnteringOrExitingCar()) return {};
++        // 0047a3a0 type4 accepts modes0/2 and ignores Z. Mode1 skips.
++        // Stable foot and driver are the proved engine projections only.
++        GameObject* participant=ped;
++        if(ped->IsCarDriver() && ped->mCurrentCar && ped->mCurrentCar->GetCarDriver()==ped)
++            participant=ped->mCurrentCar;
++        else if(ped->mCurrentCar || (!ped->IsStanding() && !ped->IsWalking())) return {};
++        auto target=DeclarationPosition(at->second.declaration); if(!target) return {};
++        const auto& pos=participant->mTransform.mPosition;
++        if(!std::isfinite(pos.x) || !std::isfinite(pos.z)) return {};
++        const double x=std::floor(Convert::MetersToMapUnits(pos.x));
++        const double y=std::floor(Convert::MetersToMapUnits(pos.z));
++        const double tx=Convert::MetersToMapUnits(target->x), ty=Convert::MetersToMapUnits(target->z);
++        const double d=r.instruction.D;
++        return tx-d<=x && x<=tx+d && ty-d<=y && y<=ty+d;
++    }
++    if(r.token=="IS_PED_IN_CAR") {
++        auto at=r.entities.find(r.instruction.A);
++        auto binding=playerBindings_.find(r.instruction.A);
++        auto* human=player(0);
++        if(at==r.entities.end() || at->second.declaration.token!="PLAYER" ||
++           binding==playerBindings_.end() || !human || !human->mCharacter ||
++           human->mCharacter->mObjectID!=binding->second) return {};
++        auto* ped=human->mCharacter;
++        if(ped->IsMarkedForDeletion() || ped->IsEnteringOrExitingCar()) return {};
++        // 00449884 accepts ped state6 OR7; no health check. D<0 means any
++        // model, otherwise compare full D to the signed-short car model.
++        if(ped->IsCarDriver() || ped->IsCarPassenger()) {
++            auto* car=ped->mCurrentCar;
++            if(!car || car->IsMarkedForDeletion()) return {};
++            return r.instruction.D<0 || r.instruction.D==int(car->mCarInfo->mModelID);
++        }
++        if(!ped->mCurrentCar && (ped->IsStanding() || ped->IsWalking())) return false;
++        return {};
++    }
++    if(r.token=="CHECK_CAR") {
++        auto at=r.entities.find(r.instruction.A);
++        auto* human=player(r.owner); auto* ped=human?human->mCharacter:nullptr;
++        if(at==r.entities.end() || at->second.type!=0 || !ped) return {};
++        auto* object=ResolveObject(at->second);
++        if(!object || object->mClassID!=eGameObjectClass_Car || ped->IsEnteringOrExitingCar()) return {};
++        if(ped->IsCarDriver()) {
++            auto* car=ped->mCurrentCar;
++            if(!car || car->GetCarDriver()!=ped) return {};
++            // 00448a10 mode0 and exact associated handle. Nonnegative D
++            // compares car byte+0x24c (NOT model+0x22); mapping is unresolved.
++            if(car!=object) return false;
++            if(r.instruction.D>=0) return {};
++            return true;
++        }
++        if(ped->IsCarPassenger()) return {}; // original participant mode not proved
++        if(!ped->mCurrentCar && (ped->IsStanding() || ped->IsWalking())) return false;
++        return {};
++    }
 +    if(r.token=="PHONE_NEAR" || r.token=="PHONE_RANGE" || r.token=="PHONE_ON_FOOT" ||
 +       r.token=="PHONE_ELIGIBLE" || r.token=="MPHONES_TRIGGER") {
 +        auto* human=player(r.owner);
@@ -3622,6 +3994,39 @@ index 0000000..464438f
 +        }
 +        return phoneArea(px,py,x/64,y/64,r.token=="PHONE_RANGE"?15:r.instruction.D);
 +    }
++    if(r.token=="STEAL") {
++        auto at=r.entities.find(r.instruction.A);
++        auto* human=player(r.owner); auto* ped=human?human->mCharacter:nullptr;
++        if(at==r.entities.end() || at->second.type!=0 || !ped) return {};
++        auto* object=ResolveObject(at->second);
++        if(!object || object->mClassID!=eGameObjectClass_Car) return {};
++        if(ped->IsEnteringOrExitingCar()) return {};
++        // 00476020: associated driver handle, state6/7, health>0,
++        // and original animation0 or >126. Stable seated engine driver only.
++        if(ped->IsDead()) return false;
++        // IsCarPassenger includes the driver in Carnage3D; test driver first.
++        if(ped->IsCarDriver()) return ped->mCurrentCar==object &&
++            static_cast<Vehicle*>(object)->GetCarDriver()==ped;
++        if(ped->IsStanding() || ped->IsWalking() || ped->IsCarPassenger()) return false;
++        return {};
++    }
++    if(r.token=="IS_GOAL_DEAD") {
++        // 00449c6d -> 0043e870: car model==-1 or clamped health==0.
++        // The positive-D killer filter is exclusively for original type99.
++        // Engine damage units differ; only stable pristine/wrecked states are
++        // projected here. Missing/deleted handles are not proof of death.
++        auto at=r.entities.find(r.instruction.A);
++        if(at!=r.entities.end() && at->second.type==0) {
++            auto* object=ResolveObject(at->second);
++            if(object && object->mClassID==eGameObjectClass_Car) {
++                auto* car=static_cast<Vehicle*>(object);
++                if(car->IsWrecked()) return true;
++                if(car->GetCurrentDamage()==0) return false;
++            }
++        }
++        Once("goal-health", "IS_GOAL_DEAD requires a trusted pristine/wrecked mission car; other health/killer mappings unresolved");
++        return {};
++    }
 +    if(r.token=="PHONE_VALID") {
 +        auto phone=phones_.find(r.instruction.A);
 +        if(phone==phones_.end() || !phone->second.object) return false;
@@ -3642,13 +4047,14 @@ index 0000000..464438f
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..38d356d
+index 0000000..1558589
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,48 @@
+@@ -0,0 +1,55 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
++#include "PickupRules.h"
 +#include <array>
 +#include <set>
 +#include <glm/vec3.hpp>
@@ -3674,6 +4080,8 @@ index 0000000..38d356d
 +    struct Phone { glm::vec3 position; int facing=0; unsigned int object=0; int mode=1,baseSprite=0; };
 +    const std::map<int,Phone>& Phones() const {return phones_;}
 +    std::optional<glm::vec3> Arrow(int owner) const;
++    struct Pickup {unsigned int object=0; int help=0; pickup::Box shape{}; int depth=0;};
++    const std::array<Pickup,256>& Pickups() const {return pickups_;}
 +    // Explicit engine creation primitives. Callers must prove declaration/type/AI policy.
 +    Pedestrian* SpawnPedestrian(const glm::vec3& position,int remap);
 +    Vehicle* SpawnVehicle(const glm::vec3& position,int model,int heading);
@@ -3681,9 +4089,13 @@ index 0000000..38d356d
 +    static std::optional<glm::vec3> DeclarationPosition(const Record&);
 +    static std::optional<glm::vec3> ScriptPosition(int x,int y,int z);
 +private:
++    std::array<Pickup,256> pickups_{};
++    void UpdatePickups();
 +    gta::GameEconomy& economy_;
 +    std::set<std::string> logged_;
 +    std::map<int,Phone> phones_;
++    // PLAYER loader order -> existing single-player participant ped (non-owning).
++    std::map<int,unsigned int> playerBindings_;
 +    std::set<unsigned int> ownedObjects_;
 +    std::set<unsigned int> missionEntities_;
 +    std::array<std::optional<glm::vec3>,4> arrows_{};
@@ -3853,10 +4265,10 @@ index 0000000..b00395b
 +{"IS_PED_STUNNED", "004453c0", false}, // 149
 diff --git a/src/mission/GameEconomy.cpp b/src/mission/GameEconomy.cpp
 new file mode 100755
-index 0000000..4db4a54
+index 0000000..cff4b2c
 --- /dev/null
 +++ b/src/mission/GameEconomy.cpp
-@@ -0,0 +1,166 @@
+@@ -0,0 +1,176 @@
 +#include "GameEconomy.h"
 +#include <stdexcept>
 +
@@ -4007,6 +4419,16 @@ index 0000000..4db4a54
 +void GameEconomy::classifyWantedNow(int owner,bool forceZero) {
 +    auto& p=state(owner); p.wantedLevel=classifyWanted(p.wantedPoints,forceZero);
 +}
++void GameEconomy::classifyWantedInSection(int owner,int section,bool forceZero) {
++    auto& p=state(owner);
++    const int points=p.wantedPoints;
++    if(section==1 || section==2) {classifyWantedNow(owner,forceZero); return;}
++    // 004134d0/004135e0, SPEC_POLICE_2; no real-time cadence inferred.
++    if(forceZero || points<101) {p.wantedLevel=0; return;}
++    if(section==102 || section==103)
++        p.wantedLevel=points<201?1:points<251?2:points<376?3:4;
++    else p.wantedLevel=points<176?1:points<251?2:points<351?3:4;
++}
 +bool GameEconomy::acceptedCrime(int owner,int crime) {
 +    // 004136c0; SPEC_POLICE_LIVES.md:41-48. Record minimum3/6
 +    // is deliberately NOT assigned to player wantedLevel.
@@ -4025,10 +4447,10 @@ index 0000000..4db4a54
 +}
 diff --git a/src/mission/GameEconomy.h b/src/mission/GameEconomy.h
 new file mode 100755
-index 0000000..124323a
+index 0000000..0f786bb
 --- /dev/null
 +++ b/src/mission/GameEconomy.h
-@@ -0,0 +1,59 @@
+@@ -0,0 +1,60 @@
 +#pragma once
 +#include <cstddef>
 +#include <cstdint>
@@ -4075,6 +4497,7 @@ index 0000000..124323a
 +    void setWantedLevel(int owner,std::int32_t level);
 +    static int classifyWanted(std::int16_t points,bool forceZero=false);
 +    void classifyWantedNow(int owner,bool forceZero=false);
++    void classifyWantedInSection(int owner,int section,bool forceZero=false);
 +    // Caller MUST first apply original ownership/witness/duplicate gates.
 +    // Only points, not score or police-record mutations. Unknown ID -> false.
 +    bool acceptedCrime(int owner,int crimeID);
@@ -4229,10 +4652,10 @@ index 0000000..6c8003b
 +}
 diff --git a/src/mission/MissionSession.cpp b/src/mission/MissionSession.cpp
 new file mode 100755
-index 0000000..48530e4
+index 0000000..741fb81
 --- /dev/null
 +++ b/src/mission/MissionSession.cpp
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,70 @@
 +#include "../stdafx.h"
 +#include "MissionSession.h"
 +#include "../FileSystem.h"
@@ -4258,7 +4681,7 @@ index 0000000..48530e4
 +void MissionSession::SetCurrent(MissionSession* p) {current=p;}
 +void MissionSession::Stop() {loaded_=false; clock_=MissionClock{}; world_.Reset();}
 +bool MissionSession::LoadSection(int section) {
-+    Stop(); economy_=gta::GameEconomy(4); script_={};
++    Stop(); economy_=gta::GameEconomy(4); police_.reset(section); script_={};
 +    std::ifstream input;
 +    // FileSystem searches g_data first; Android sets it to the imported GTADATA.
 +    if(!gFiles.OpenTextFile("MISSION.INI",input)) {
@@ -4286,9 +4709,15 @@ index 0000000..48530e4
 +    return loaded_;
 +}
 +void MissionSession::Update(float dt) {
-+    if(!loaded_ || !std::isfinite(dt) || dt<0) return;
++    if(!std::isfinite(dt) || dt<0) return;
 +    for(int steps=clock_.advance(dt); steps>0; --steps) {
-+        world_.Update(1.0f/25); vm_.tick();
++        police_.update();
++        bool any=false,allTerminal=true;
++        for(int owner=0;owner<4;++owner) if(gCarnageGame.mHumanPlayers[owner]) {
++            any=true; allTerminal=allTerminal && police_.system().gameOver(owner);
++        }
++        if(any && allTerminal) loaded_=false;
++        if(loaded_) {world_.Update(1.0f/25); vm_.tick();}
 +    }
 +}
 +MissionSession::HUDNumbers MissionSession::Numbers(int owner) const {
@@ -4299,17 +4728,19 @@ index 0000000..48530e4
 +}
 diff --git a/src/mission/MissionSession.h b/src/mission/MissionSession.h
 new file mode 100755
-index 0000000..d203285
+index 0000000..a134cf6
 --- /dev/null
 +++ b/src/mission/MissionSession.h
-@@ -0,0 +1,27 @@
+@@ -0,0 +1,30 @@
 +#pragma once
 +#include "CarnageMissionWorld.h"
 +#include "PhoneRules.h"
++#include "../police/PoliceRuntime.h"
 +namespace mission {
 +class MissionSession final {
 +public:
-+    MissionSession():economy_(4),world_(economy_),vm_(world_) {}
++    MissionSession():economy_(4),police_(economy_),world_(economy_),vm_(world_) {}
++    gta::police::PoliceRuntime& Police() {return police_;}
 +    bool LoadSection(int section);
 +    void Stop();
 +    void Update(float dt);
@@ -4323,6 +4754,7 @@ index 0000000..d203285
 +    static void SetCurrent(MissionSession*);
 +private:
 +    gta::GameEconomy economy_;
++    gta::police::PoliceRuntime police_;
 +    CarnageMissionWorld world_;
 +    MissionVM vm_;
 +    MissionScript script_;
@@ -4332,10 +4764,10 @@ index 0000000..d203285
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..a218904
+index 0000000..09582bb
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
-@@ -0,0 +1,480 @@
+@@ -0,0 +1,486 @@
 +#include "MissionVM.h"
 +#include <algorithm>
 +#include <limits>
@@ -4384,6 +4816,11 @@ index 0000000..a218904
 +                e.value=number(r.operands[0]);
 +            }
 +            if(r.token=="TELEPHONE" && !r.operands.empty()) e.aux=number(r.operands[0]);
++            // 00445800 case8 -> 004744a0(type4, target, radius,0,prefix).
++            if(r.token=="TRIGGER" && r.operands.size()==2) {
++                triggers_[id]={1,number(r.operands[0]),number(r.operands[1]),r.prefix=="1",4};
++                e.value=id; e.type=8;
++            }
 +            if(r.token=="MPHONES" && r.operands.size()>=2) {
 +                triggers_[id]={1,number(r.operands[0]),number(r.operands[1]),r.prefix=="1"};
 +                e.value=id; e.type=34;
@@ -4518,18 +4955,19 @@ index 0000000..a218904
 +    value=*result; return true;
 +}
 +void MissionVM::tick() {
-+    // Type12 triggers precede the live scheduler, allowing same-update dispatch.
++    // 00479e00: type4/type12 triggers precede the ascending live scheduler.
 +    for(auto& item:triggers_) for(int root=0;root<4;++root) {
 +        auto& t=item.second;
-+        if(t.type!=12 || t.state==4 || processes_[root].player<0) continue;
++        if((t.type!=12 && t.type!=4) || t.state==4 || processes_[root].player<0) continue;
++        if(t.type==4 && t.state==3) continue;
 +        Instruction query; query.A=item.first; query.D=t.radius;
-+        WorldRequest request{"MPHONES_TRIGGER","0047a3a0",root,root,query,processes_[root],entities_,instructions_,labels_};
++        WorldRequest request{t.type==4?"AREA_TRIGGER":"MPHONES_TRIGGER","0047a3a0",root,root,query,processes_[root],entities_,instructions_,labels_};
 +        auto inside=world_.predicate(request);
-+        if(!inside) {issue("unresolved","Type12 player mode/model mapping unavailable",root); continue;}
-+        if(t.state==0) {t.state=1; continue;}
++        if(!inside) {issue("unresolved","Trigger player mode/position mapping unavailable",root); continue;}
++        if(t.type==12 && t.state==0) {t.state=1; continue;}
 +        if(!*inside || t.state!=1) continue;
 +        t.state=0;
-+        if(phoneRing_ || phoneMission_[root]) continue;
++        if(t.type==12 && (phoneRing_ || phoneMission_[root])) continue;
 +        int child=4; while(child<32 && processes_[child].active) ++child;
 +        if(child==32) {issue("trigger-exhausted","No free process slot; unsafe original write rejected",root); t.state=3; continue;}
 +        auto target=labels_.find(t.target);
@@ -4966,6 +5404,230 @@ index 0000000..3f64bf1
 +    }
 +};
 +}
+diff --git a/src/mission/PickupMath.inc b/src/mission/PickupMath.inc
+new file mode 100755
+index 0000000..ffb4221
+--- /dev/null
++++ b/src/mission/PickupMath.inc
+@@ -0,0 +1,137 @@
++// Generated by generate_math.cpp from recovered 00430400. Functional math only.
++#pragma once
++namespace mission { namespace pickup_math {
++inline constexpr int sine[] = {
++0, 402, 804, 1206, 1608, 2010, 2412, 2814, 3215, 3617, 4018, 4420,
++4821, 5222, 5622, 6023, 6423, 6823, 7223, 7623, 8022, 8421, 8819, 9218,
++9616, 10013, 10410, 10807, 11204, 11600, 11995, 12390, 12785, 13179, 13573, 13966,
++14359, 14751, 15142, 15533, 15923, 16313, 16702, 17091, 17479, 17866, 18253, 18638,
++19024, 19408, 19792, 20175, 20557, 20938, 21319, 21699, 22078, 22456, 22833, 23210,
++23586, 23960, 24334, 24707, 25079, 25450, 25820, 26189, 26557, 26925, 27291, 27656,
++28020, 28383, 28745, 29105, 29465, 29824, 30181, 30538, 30893, 31247, 31600, 31952,
++32302, 32651, 32999, 33346, 33692, 34036, 34379, 34721, 35061, 35400, 35738, 36074,
++36409, 36743, 37075, 37406, 37736, 38064, 38390, 38716, 39039, 39362, 39682, 40002,
++40319, 40636, 40950, 41263, 41575, 41885, 42194, 42501, 42806, 43110, 43412, 43712,
++44011, 44308, 44603, 44897, 45189, 45480, 45768, 46055, 46340, 46624, 46906, 47186,
++47464, 47740, 48015, 48288, 48558, 48828, 49095, 49360, 49624, 49886, 50146, 50403,
++50660, 50914, 51166, 51416, 51665, 51911, 52155, 52398, 52639, 52877, 53114, 53348,
++53581, 53811, 54040, 54266, 54491, 54713, 54933, 55152, 55368, 55582, 55794, 56004,
++56212, 56417, 56621, 56822, 57022, 57219, 57414, 57606, 57797, 57986, 58172, 58356,
++58538, 58718, 58895, 59070, 59243, 59414, 59583, 59749, 59913, 60075, 60235, 60392,
++60547, 60700, 60850, 60998, 61144, 61288, 61429, 61568, 61705, 61839, 61971, 62100,
++62228, 62353, 62475, 62596, 62714, 62829, 62942, 63053, 63162, 63268, 63371, 63473,
++63571, 63668, 63762, 63854, 63943, 64030, 64115, 64197, 64276, 64353, 64428, 64501,
++64571, 64638, 64703, 64766, 64826, 64884, 64939, 64992, 65043, 65091, 65136, 65179,
++65220, 65258, 65294, 65327, 65358, 65386, 65412, 65436, 65457, 65475, 65491, 65505,
++65516, 65524, 65531, 65534, 65536, 65534, 65531, 65524, 65516, 65505, 65491, 65475,
++65457, 65436, 65412, 65386, 65358, 65327, 65294, 65258, 65220, 65179, 65136, 65091,
++65043, 64992, 64939, 64884, 64826, 64766, 64703, 64638, 64571, 64501, 64428, 64353,
++64276, 64197, 64115, 64030, 63943, 63854, 63762, 63668, 63571, 63473, 63371, 63268,
++63162, 63053, 62942, 62829, 62714, 62596, 62475, 62353, 62228, 62100, 61971, 61839,
++61705, 61568, 61429, 61288, 61144, 60998, 60850, 60700, 60547, 60392, 60235, 60075,
++59913, 59749, 59583, 59414, 59243, 59070, 58895, 58718, 58538, 58356, 58172, 57986,
++57797, 57606, 57414, 57219, 57022, 56822, 56621, 56417, 56212, 56004, 55794, 55582,
++55368, 55152, 54933, 54713, 54491, 54266, 54040, 53811, 53581, 53348, 53114, 52877,
++52639, 52398, 52155, 51911, 51665, 51416, 51166, 50914, 50660, 50403, 50146, 49886,
++49624, 49360, 49095, 48828, 48558, 48288, 48015, 47740, 47464, 47186, 46906, 46624,
++46340, 46055, 45768, 45480, 45189, 44897, 44603, 44308, 44011, 43712, 43412, 43110,
++42806, 42501, 42194, 41885, 41575, 41263, 40950, 40636, 40319, 40002, 39682, 39362,
++39039, 38716, 38390, 38064, 37736, 37406, 37075, 36743, 36409, 36074, 35738, 35400,
++35061, 34721, 34379, 34036, 33692, 33346, 32999, 32651, 32302, 31952, 31600, 31247,
++30893, 30538, 30181, 29824, 29465, 29105, 28745, 28383, 28020, 27656, 27291, 26925,
++26557, 26189, 25820, 25450, 25079, 24707, 24334, 23960, 23586, 23210, 22833, 22456,
++22078, 21699, 21319, 20938, 20557, 20175, 19792, 19408, 19024, 18638, 18253, 17866,
++17479, 17091, 16702, 16313, 15923, 15533, 15142, 14751, 14359, 13966, 13573, 13179,
++12785, 12390, 11995, 11600, 11204, 10807, 10410, 10013, 9616, 9218, 8819, 8421,
++8022, 7623, 7223, 6823, 6423, 6023, 5622, 5222, 4821, 4420, 4018, 3617,
++3215, 2814, 2412, 2010, 1608, 1206, 804, 402, 0, -402, -804, -1206,
++-1608, -2010, -2412, -2814, -3215, -3617, -4018, -4420, -4821, -5222, -5622, -6023,
++-6423, -6823, -7223, -7623, -8022, -8421, -8819, -9218, -9616, -10013, -10410, -10807,
++-11204, -11600, -11995, -12390, -12785, -13179, -13573, -13966, -14359, -14751, -15142, -15533,
++-15923, -16313, -16702, -17091, -17479, -17866, -18253, -18638, -19024, -19408, -19792, -20175,
++-20557, -20938, -21319, -21699, -22078, -22456, -22833, -23210, -23586, -23960, -24334, -24707,
++-25079, -25450, -25820, -26189, -26557, -26925, -27291, -27656, -28020, -28383, -28745, -29105,
++-29465, -29824, -30181, -30538, -30893, -31247, -31600, -31952, -32302, -32651, -32999, -33346,
++-33692, -34036, -34379, -34721, -35061, -35400, -35738, -36074, -36409, -36743, -37075, -37406,
++-37736, -38064, -38390, -38716, -39039, -39362, -39682, -40002, -40319, -40636, -40950, -41263,
++-41575, -41885, -42194, -42501, -42806, -43110, -43412, -43712, -44011, -44308, -44603, -44897,
++-45189, -45480, -45768, -46055, -46340, -46624, -46906, -47186, -47464, -47740, -48015, -48288,
++-48558, -48828, -49095, -49360, -49624, -49886, -50146, -50403, -50660, -50914, -51166, -51416,
++-51665, -51911, -52155, -52398, -52639, -52877, -53114, -53348, -53581, -53811, -54040, -54266,
++-54491, -54713, -54933, -55152, -55368, -55582, -55794, -56004, -56212, -56417, -56621, -56822,
++-57022, -57219, -57414, -57606, -57797, -57986, -58172, -58356, -58538, -58718, -58895, -59070,
++-59243, -59414, -59583, -59749, -59913, -60075, -60235, -60392, -60547, -60700, -60850, -60998,
++-61144, -61288, -61429, -61568, -61705, -61839, -61971, -62100, -62228, -62353, -62475, -62596,
++-62714, -62829, -62942, -63053, -63162, -63268, -63371, -63473, -63571, -63668, -63762, -63854,
++-63943, -64030, -64115, -64197, -64276, -64353, -64428, -64501, -64571, -64638, -64703, -64766,
++-64826, -64884, -64939, -64992, -65043, -65091, -65136, -65179, -65220, -65258, -65294, -65327,
++-65358, -65386, -65412, -65436, -65457, -65475, -65491, -65505, -65516, -65524, -65531, -65534,
++-65535, -65534, -65531, -65524, -65516, -65505, -65491, -65475, -65457, -65436, -65412, -65386,
++-65358, -65327, -65294, -65258, -65220, -65179, -65136, -65091, -65043, -64992, -64939, -64884,
++-64826, -64766, -64703, -64638, -64571, -64501, -64428, -64353, -64276, -64197, -64115, -64030,
++-63943, -63854, -63762, -63668, -63571, -63473, -63371, -63268, -63162, -63053, -62942, -62829,
++-62714, -62596, -62475, -62353, -62228, -62100, -61971, -61839, -61705, -61568, -61429, -61288,
++-61144, -60998, -60850, -60700, -60547, -60392, -60235, -60075, -59913, -59749, -59583, -59414,
++-59243, -59070, -58895, -58718, -58538, -58356, -58172, -57986, -57797, -57606, -57414, -57219,
++-57022, -56822, -56621, -56417, -56212, -56004, -55794, -55582, -55368, -55152, -54933, -54713,
++-54491, -54266, -54040, -53811, -53581, -53348, -53114, -52877, -52639, -52398, -52155, -51911,
++-51665, -51416, -51166, -50914, -50660, -50403, -50146, -49886, -49624, -49360, -49095, -48828,
++-48558, -48288, -48015, -47740, -47464, -47186, -46906, -46624, -46340, -46055, -45768, -45480,
++-45189, -44897, -44603, -44308, -44011, -43712, -43412, -43110, -42806, -42501, -42194, -41885,
++-41575, -41263, -40950, -40636, -40319, -40002, -39682, -39362, -39039, -38716, -38390, -38064,
++-37736, -37406, -37075, -36743, -36409, -36074, -35738, -35400, -35061, -34721, -34379, -34036,
++-33692, -33346, -32999, -32651, -32302, -31952, -31600, -31247, -30893, -30538, -30181, -29824,
++-29465, -29105, -28745, -28383, -28020, -27656, -27291, -26925, -26557, -26189, -25820, -25450,
++-25079, -24707, -24334, -23960, -23586, -23210, -22833, -22456, -22078, -21699, -21319, -20938,
++-20557, -20175, -19792, -19408, -19024, -18638, -18253, -17866, -17479, -17091, -16702, -16313,
++-15923, -15533, -15142, -14751, -14359, -13966, -13573, -13179, -12785, -12390, -11995, -11600,
++-11204, -10807, -10410, -10013, -9616, -9218, -8819, -8421, -8022, -7623, -7223, -6823,
++-6423, -6023, -5622, -5222, -4821, -4420, -4018, -3617, -3215, -2814, -2412, -2010,
++-1608, -1206, -804, -402, 0, 402, 804, 1206, 1608, 2010, 2412, 2814,
++3215, 3617, 4018, 4420, 4821, 5222, 5622, 6023, 6423, 6823, 7223, 7623,
++8022, 8421, 8819, 9218, 9616, 10013, 10410, 10807, 11204, 11600, 11995, 12390,
++12785, 13179, 13573, 13966, 14359, 14751, 15142, 15533, 15923, 16313, 16702, 17091,
++17479, 17866, 18253, 18638, 19024, 19408, 19792, 20175, 20557, 20938, 21319, 21699,
++22078, 22456, 22833, 23210, 23586, 23960, 24334, 24707, 25079, 25450, 25820, 26189,
++26557, 26925, 27291, 27656, 28020, 28383, 28745, 29105, 29465, 29824, 30181, 30538,
++30893, 31247, 31600, 31952, 32302, 32651, 32999, 33346, 33692, 34036, 34379, 34721,
++35061, 35400, 35738, 36074, 36409, 36743, 37075, 37406, 37736, 38064, 38390, 38716,
++39039, 39362, 39682, 40002, 40319, 40636, 40950, 41263, 41575, 41885, 42194, 42501,
++42806, 43110, 43412, 43712, 44011, 44308, 44603, 44897, 45189, 45480, 45768, 46055,
++46340, 46624, 46906, 47186, 47464, 47740, 48015, 48288, 48558, 48828, 49095, 49360,
++49624, 49886, 50146, 50403, 50660, 50914, 51166, 51416, 51665, 51911, 52155, 52398,
++52639, 52877, 53114, 53348, 53581, 53811, 54040, 54266, 54491, 54713, 54933, 55152,
++55368, 55582, 55794, 56004, 56212, 56417, 56621, 56822, 57022, 57219, 57414, 57606,
++57797, 57986, 58172, 58356, 58538, 58718, 58895, 59070, 59243, 59414, 59583, 59749,
++59913, 60075, 60235, 60392, 60547, 60700, 60850, 60998, 61144, 61288, 61429, 61568,
++61705, 61839, 61971, 62100, 62228, 62353, 62475, 62596, 62714, 62829, 62942, 63053,
++63162, 63268, 63371, 63473, 63571, 63668, 63762, 63854, 63943, 64030, 64115, 64197,
++64276, 64353, 64428, 64501, 64571, 64638, 64703, 64766, 64826, 64884, 64939, 64992,
++65043, 65091, 65136, 65179, 65220, 65258, 65294, 65327, 65358, 65386, 65412, 65436,
++65457, 65475, 65491, 65505, 65516, 65524, 65531, 65534, 
++};
++inline constexpr int tangent[] = {
++0, 402, 804, 1206, 1608, 2011, 2413, 2816, 3219, 3622, 4026, 4430,
++4834, 5238, 5643, 6048, 6454, 6861, 7267, 7675, 8083, 8491, 8900, 9310,
++9721, 10132, 10544, 10957, 11371, 11786, 12201, 12618, 13035, 13454, 13874, 14294,
++14716, 15139, 15563, 15989, 16415, 16843, 17273, 17704, 18136, 18569, 19005, 19441,
++19880, 20320, 20761, 21205, 21650, 22097, 22545, 22996, 23449, 23903, 24360, 24819,
++25280, 25743, 26208, 26675, 27145, 27618, 28092, 28570, 29050, 29532, 30017, 30505,
++30996, 31489, 31986, 32485, 32988, 33493, 34002, 34514, 35029, 35548, 36070, 36596,
++37125, 37658, 38195, 38736, 39280, 39829, 40382, 40939, 41500, 42065, 42635, 43210,
++43789, 44373, 44962, 45556, 46155, 46759, 47369, 47984, 48604, 49230, 49862, 50500,
++51144, 51794, 52451, 53114, 53784, 54460, 55143, 55834, 56531, 57236, 57949, 58669,
++59398, 60134, 60879, 61633, 62395, 63166, 63946, 64736, 65536, 66345, 67164, 67994,
++68834, 69685, 70548, 71422, 72307, 73205, 74115, 75038, 75974, 76923, 77886, 78864,
++79855, 80862, 81884, 82922, 83976, 85047, 86135, 87241, 88365, 89507, 90669, 91851,
++93053, 94277, 95522, 96790, 98081, 99396, 100736, 102101, 103492, 104911, 106358, 107834,
++109340, 110877, 112446, 114049, 115687, 117360, 119071, 120820, 122609, 124439, 126313, 128232,
++130197, 132211, 134275, 136392, 138564, 140792, 143081, 145431, 147846, 150329, 152883, 155512,
++158217, 161005, 163877, 166839, 169895, 173050, 176309, 179677, 183160, 186765, 190499, 194367,
++198380, 202544, 206869, 211365, 216043, 220913, 225990, 231286, 236816, 242597, 248647, 254986,
++261634, 268616, 275959, 283691, 291845, 300457, 309567, 319222, 329471, 340373, 351993, 364404,
++377693, 391956, 407305, 423871, 441807, 461291, 482534, 505787, 531351, 559593, 590957, 625996,
++665398, 710035, 761030, 819849, 888449, 969498, 1066729, 1185538, 1334015, 1524876, 1779313, 2135471,
++2669640, 3559833, 5340085, 10680573, 
++};
++}}
+diff --git a/src/mission/PickupRules.h b/src/mission/PickupRules.h
+new file mode 100755
+index 0000000..c317fdd
+--- /dev/null
++++ b/src/mission/PickupRules.h
+@@ -0,0 +1,75 @@
++#pragma once
++#include "PickupMath.inc"
++#include <array>
++#include <algorithm>
++#include <cstdint>
++#include <cstdlib>
++namespace mission {
++namespace pickup {
++using I=std::int64_t; // bounded map coordinates; widen intermediate arithmetic
++constexpr I unit=65536, cell=64*unit;
++struct Point { I x,y; };
++struct Box {std::array<Point,5> p; I z; int angle;};
++// 00434300: corners followed by center; special cardinal cases are intentional.
++inline Box box(I x,I y,I z,int w,int d,int angle) {
++    Box b{{},z,angle&1023}; auto& p=b.p;
++    const int a=b.angle;
++    if(a==0) p={{{x+w*unit,y+d*unit},{x-w*unit,y+d*unit},{x+w*unit,y-d*unit},{x-w*unit,y-d*unit},{x,y}}};
++    else if(a==256) p={{{x+d*unit,y-w*unit},{x+d*unit,y+w*unit},{x-d*unit,y-w*unit},{x-d*unit,y+w*unit},{x,y}}};
++    else if(a==512) p={{{x-w*unit,y-d*unit},{x+w*unit,y-d*unit},{x-w*unit,y+d*unit},{x+w*unit,y+d*unit},{x,y}}};
++    else if(a==768) p={{{x-d*unit,y+w*unit},{x-d*unit,y-w*unit},{x+d*unit,y+w*unit},{x+d*unit,y-w*unit},{x,y}}};
++    else {
++        I sx=pickup_math::sine[a]*I(d), sy=pickup_math::sine[a+256]*I(d);
++        I wx=pickup_math::sine[(a+256)&1023]*I(w), wy=pickup_math::sine[((a+256)&1023)+256]*I(w);
++        p={{{x+sx+wx,y+sy+wy},{x+sx-wx,y+sy-wy},{x-sx+wx,y-sy+wy},{x-sx-wx,y-sy-wy},{x,y}}};
++    }
++    return b;
++}
++// x86 SAR16, also for negative fractions.
++inline I sar16(I v) {return v>=0?v/unit:-((-v+unit-1)/unit);}
++// 004899ee / 0048997c, including lower-bound search and 255 saturation.
++inline int angle(I dy,I dx) {
++    I sy=sar16(dy),sx=sar16(dx);
++    if(sx==0) return dy<0?512:0;
++    if(sy==0) return sx<0?768:256;
++    I ratio=std::abs(dy/sx);
++    int lo=0,hi=255,mid=0;
++    while(lo<=hi) {
++        mid=(lo+hi)/2;
++        if(ratio<pickup_math::tangent[mid]) hi=mid-1;
++        else if(ratio==pickup_math::tangent[mid]) {lo=mid;break;}
++        else lo=mid+1;
++    }
++    if(mid==1 && ratio<pickup_math::tangent[1]) lo=0;
++    if(mid==255 && ratio>pickup_math::tangent[255]) lo=255;
++    if(sy<0) return sx<0?768-lo:256+lo;
++    return sx>=0?256-lo:(lo==256?0:lo+768);
++}
++// 0040e5f0 broad-phase, not a replacement proximity collector.
++inline bool broad(const Box& q,const Box& object,int radius) {
++    const auto c=object.p[4];
++    for(auto p:q.p) {
++        I dx=sar16(p.x)-sar16(c.x),dy=sar16(p.y)-sar16(c.y);
++        if(dx*dx+dy*dy<I(radius)*radius) return true;
++    }
++    I left=q.p[0].x,right=left,top=q.p[0].y,bottom=top;
++    for(int n=1;n<4;++n) {left=std::min(left,q.p[n].x);right=std::max(right,q.p[n].x);top=std::min(top,q.p[n].y);bottom=std::max(bottom,q.p[n].y);}
++    for(auto p:std::array<Point,5>{{{c.x-radius*unit,c.y-radius*unit},{c.x+radius*unit,c.y-radius*unit},{c.x-radius*unit,c.y+radius*unit},{c.x+radius*unit,c.y+radius*unit},c}})
++        if(left<p.x && p.x<right && top<p.y && p.y<bottom) return true;
++    return false;
++}
++// 00434690 checks five vertices/center in BOTH directions, not generic SAT.
++inline bool inside(Point p,const Box& b) {
++    int a=(angle(p.y-b.p[1].y,p.x-b.p[1].x)-b.angle)&1023;
++    int c=(angle(p.y-b.p[2].y,p.x-b.p[2].x)-b.angle)&1023;
++    return 256<=a && a<=512 && 768<=c && c<=1024;
++}
++inline bool contact(const Box& q,const Box& object,int objectDepth) {
++    if(std::abs(sar16(object.z)-sar16(q.z))>63 || !broad(q,object,objectDepth*2)) return false;
++    if(q.z>=object.z+32*unit || q.z<=object.z-32*unit) return false;
++    for(auto p:object.p) if(inside(p,q)) return true;
++    for(auto p:q.p) if(inside(p,object)) return true;
++    return false;
++}
++}
++}
 diff --git a/src/path_utils.cpp b/src/path_utils.cpp
 index 117d3a9..50017e4 100644
 --- a/src/path_utils.cpp
@@ -5038,6 +5700,357 @@ index 117d3a9..50017e4 100644
      {
          const filesystem::path& currentFile = iter_directory->path();
          enumproc(currentFile.filename().generic_string());
+diff --git a/src/police/PoliceRuntime.cpp b/src/police/PoliceRuntime.cpp
+new file mode 100755
+index 0000000..c6d985d
+--- /dev/null
++++ b/src/police/PoliceRuntime.cpp
+@@ -0,0 +1,117 @@
++#include "../stdafx.h"
++#include "PoliceRuntime.h"
++#include "../CarnageGame.h"
++#include "../GameMapManager.h"
++#include "../GameObjectsManager.h"
++#include "../HumanPlayer.h"
++#include "../Console.h"
++#include "../Convert.h"
++#include <cmath>
++namespace gta { namespace police {
++namespace {
++Pedestrian* character(int owner) {
++    if(owner<0 || owner>=4 || !gCarnageGame.mHumanPlayers[owner]) return nullptr;
++    return gCarnageGame.mHumanPlayers[owner]->mCharacter;
++}
++Cell cell(const glm::vec3& p) {
++    return {static_cast<int>(std::floor(Convert::MetersToMapUnits(p.x))),
++        static_cast<int>(std::floor(Convert::MetersToMapUnits(p.z))),
++        static_cast<int>(std::floor(Convert::MetersToMapUnits(p.y)))};
++}
++}
++void PoliceRuntime::reset(int section) {
++    system_.reset(); section_=section; representation2_.fill(false); placement_.fill(Action::None); reported_.fill(false);
++}
++void PoliceRuntime::clear(Pedestrian* ped) {
++    ped->ClearAmmunition(); ped->ChangeWeapon(eWeapon_Fists); ped->mArmorHitPoints=0;
++    // U: remaining frenzy/powerup systems do not have faithful engine equivalents.
++}
++bool PoliceRuntime::death(int owner) {
++    auto* ped=character(owner);
++    if(!ped || !ped->IsDead() || !system_.beginDeath(owner,representation2_[owner])) return false;
++    clear(ped);
++    std::vector<Unit> units; system_.release(owner,units);
++    return true;
++}
++bool PoliceRuntime::captured(int owner) {
++    auto* ped=character(owner);
++    if(!ped || ped->IsDead() || !system_.beginArrest(owner,true)) return false;
++    std::vector<Unit> units; system_.release(owner,units);
++    gCarnageGame.mHumanPlayers[owner]->mHUD.ShowBigFontMessage(eHUDBigFontMessage_Busted);
++    return true;
++}
++bool PoliceRuntime::place(int owner,Action reason) {
++    auto* ped=character(owner); if(!ped) return false;
++    const auto service=reason==Action::DeathRespawn?eAccidentServise_Hospital:eAccidentServise_PoliceStation;
++    std::vector<Cell> bases;
++    for(const auto& p:gGameMap.GetServiceBases(service)) bases.push_back({p.x,p.z,p.y});
++    int heading=0;
++    const auto dest=rankedRespawn(cell(ped->mTransform.mPosition),bases,[&](Cell p)->std::optional<Cell>{
++        if(p.x<0 || p.x>=MAP_DIMENSIONS || p.y<0 || p.y>=MAP_DIMENSIONS || p.z<0 || p.z>=MAP_LAYERS_COUNT) return {};
++        if(p.z+1>=MAP_LAYERS_COUNT) return {};
++        const auto* start=gGameMap.GetBlockInfo(p.x,p.y,p.z+1);
++        int dx=0,dy=0;
++        if(start->mUpDirection) {dy=-1; heading=0x200;}
++        else if(start->mDownDirection) {dy=1; heading=0;}
++        else if(start->mLeftDirection) {dx=-1; heading=0x300;}
++        else if(start->mRightDirection) {dx=1; heading=0x100;}
++        else return {};
++        p.x+=dx; p.y+=dy; // 0045ffb0 advances BEFORE testing
++        for(int n=0;n<15;++n,p.x+=dx,p.y+=dy) {
++            if(p.x<0 || p.x>=MAP_DIMENSIONS || p.y<0 || p.y>=MAP_DIMENSIONS) break;
++            // category0x30 is pavement in the current decoded map representation.
++            if(gGameMap.GetBlockInfo(p.x,p.y,p.z)->mGroundType!=eGroundType_Pawement) continue;
++            bool occupied=false;
++            for(const auto* car:gGameObjectsManager.mVehiclesList) {
++                const auto c=cell(car->mTransform.mPosition);
++                if(c.x==p.x && c.y==p.y) {occupied=true; break;}
++            }
++            if(!occupied) return p;
++        }
++        return {};
++    });
++    if(!dest) {
++        if(!reported_[owner]) gConsole.LogMessage(eLogMessage_Warning,"Unresolved police respawn: no usable rank>=1 service point, player %d",owner);
++        reported_[owner]=true; return false;
++    }
++    // Engine stores inverted layers; retain the executable subcell offset at0x3f0000.
++    const glm::vec3 position(Convert::MapUnitsToMeters(dest->x+0.5f),
++        Convert::MapUnitsToMeters(dest->z+1.0f/64.0f),Convert::MapUnitsToMeters(dest->y+0.5f));
++    const bool preserve=reason==Action::ArrestRespawn && !system_.clearInventory(owner);
++    std::array<Weapon,eWeapon_COUNT> weapons;
++    std::copy(std::begin(ped->mWeapons),std::end(ped->mWeapons),weapons.begin());
++    const auto selected=ped->mCurrentWeapon;
++    const int armor=ped->mArmorHitPoints;
++    ped->PutOnFoot(); ped->HandleDespawn();
++    ped->SetTransform(position,Convert::Fix16ToAngle(heading)); ped->HandleSpawn();
++    if(preserve) {
++        std::copy(weapons.begin(),weapons.end(),std::begin(ped->mWeapons));
++        ped->ChangeWeapon(selected); ped->mArmorHitPoints=armor;
++    }
++    representation2_[owner]=true; system_.respawned(owner); reported_[owner]=false;
++    return true;
++}
++void PoliceRuntime::update() {
++    for(int owner=0;owner<4;++owner) {
++        auto* ped=character(owner); if(!ped) continue;
++        // Call only for an allocated, non-arrested response group (0040d800).
++        for(int index=0;index<4;++index) {
++            auto& group=system_.group(index);
++            if(group.status>0 && group.record==owner && !system_.waiting(owner)) {
++                if(system_.classify(owner,section_).level==0) {
++                    std::vector<Unit> units; system_.release(owner,units);
++                }
++                break;
++            }
++        }
++        const auto action=system_.updatePlayer(owner);
++        if(action==Action::ArrestRespawn && system_.clearInventory(owner)) clear(ped);
++        if(action==Action::ArrestRespawn || action==Action::DeathRespawn) placement_[owner]=action;
++        if(placement_[owner]!=Action::None && place(owner,placement_[owner])) placement_[owner]=Action::None;
++        if(action==Action::GameOver && !reported_[owner]) {
++            gConsole.LogMessage(eLogMessage_Info,"Game over: player %d has exhausted lives",owner);
++            reported_[owner]=true;
++        }
++    }
++}
++}}
+diff --git a/src/police/PoliceRuntime.h b/src/police/PoliceRuntime.h
+new file mode 100755
+index 0000000..1b0e1e7
+--- /dev/null
++++ b/src/police/PoliceRuntime.h
+@@ -0,0 +1,23 @@
++#pragma once
++#include "PoliceSystem.h"
++class Pedestrian;
++namespace gta { namespace police {
++// Desktop bridge; all policy not proved by the binary remains explicit intake.
++class PoliceRuntime {
++public:
++    explicit PoliceRuntime(GameEconomy& economy):system_(economy,4) {}
++    PoliceSystem& system() {return system_;}
++    void reset(int section);
++    void update(); // caller supplies one engine mission update
++    bool death(int owner);
++    bool captured(int owner); // confirmed original capture, never proximity guessed
++private:
++    PoliceSystem system_;
++    int section_=1;
++    std::array<bool,4> representation2_{};
++    std::array<Action,4> placement_{};
++    std::array<bool,4> reported_{};
++    bool place(int owner,Action reason);
++    void clear(Pedestrian*);
++};
++}}
+diff --git a/src/police/PoliceSystem.cpp b/src/police/PoliceSystem.cpp
+new file mode 100755
+index 0000000..93ec4c9
+--- /dev/null
++++ b/src/police/PoliceSystem.cpp
+@@ -0,0 +1,129 @@
++#include "PoliceSystem.h"
++#include <cstdlib>
++#include <limits>
++#include <stdexcept>
++namespace gta { namespace police {
++namespace {
++long long distance(Cell a,Cell b) {
++    return std::max(std::llabs(static_cast<long long>(a.x)-b.x),std::llabs(static_cast<long long>(a.y)-b.y));
++}
++}
++std::optional<Cell> rankedRespawn(Cell from,std::vector<Cell> bases,
++    const std::function<std::optional<Cell>(Cell)>& scan) {
++    std::stable_sort(bases.begin(),bases.end(),[&](Cell a,Cell b){return distance(from,a)<distance(from,b);});
++    for(std::size_t rank=1;rank<bases.size();++rank) if(auto p=scan(bases[rank])) return p;
++    return {};
++}
++std::vector<int> roadblockOffsets(int width) {
++    std::vector<int> offsets;
++    for(int i=0;i<std::min(width,6);i+=2) offsets.push_back(i);
++    return offsets;
++}
++bool Roadblock::activate(int level,bool vehicle,bool enabled,int count) {
++    if(level<3 || !vehicle || !enabled) return false;
++    if(active) {timer=400; return false;}
++    if(count>=20) return false;
++    active=true; timer=400; return true;
++}
++bool Roadblock::update(bool highLevel,bool nearby) {
++    if(!active) return false;
++    if(nearby) timer=400;
++    else if(timer>std::numeric_limits<int>::min()) --timer;
++    if((timer>0 && highLevel) || nearby) return false;
++    active=false; return true; // caller must also prove original cleanup eligibility
++}
++PoliceSystem::PoliceSystem(GameEconomy& economy,std::size_t count):economy_(economy),players_(count),records_(count) {
++    if(count>4) throw std::invalid_argument("police has four response records");
++    for(std::size_t i=0;i<count;++i) (void)economy_.state(static_cast<int>(i));
++}
++void PoliceSystem::reset() {
++    std::fill(players_.begin(),players_.end(),Player{});
++    std::fill(records_.begin(),records_.end(),Record{});
++    groups_={}; pending_.clear();
++}
++Classification PoliceSystem::classify(int owner,int section,bool forceZero) {
++    economy_.classifyWantedInSection(owner,section,forceZero);
++    const int level=economy_.state(owner).wantedLevel;
++    int response=level;
++    if(section==102 || section==103) {static constexpr int table[]={0,1,2,4,6}; response=table[level];}
++    else if(section!=1 && section!=2) response=level>0?1:0;
++    records_.at(owner).response=response;
++    for(auto& g:groups_) if(g.record==owner) {g.flag5=level==4; g.flag6=level>=3;}
++    return {level,response};
++}
++bool PoliceSystem::acceptedCrime(int owner,int crime) {
++    if(!economy_.acceptedCrime(owner,crime)) return false;
++    auto& r=records_.at(owner); r.crime=crime;
++    r.response=std::max(r.response,crime<7?3:6); return true;
++}
++bool PoliceSystem::beginDeath(int owner,bool repr2) {
++    auto& p=players_.at(owner);
++    if(p.phase!=Phase::Alive) return false;
++    p.clear=true; p.updates=1; p.deadline=repr2?87:100;
++    p.phase=economy_.consumeLife(owner)?Phase::Death:Phase::Terminal;
++    return true;
++}
++bool PoliceSystem::beginArrest(int owner,bool proven) {
++    auto& p=players_.at(owner);
++    if(!proven || p.phase!=Phase::Alive) return false;
++    p.clear=!economy_.state(owner).skipPenaltyOnce;
++    p.phase=Phase::Arrest1; return true;
++}
++Action PoliceSystem::updatePlayer(int owner) {
++    auto& p=players_.at(owner);
++    switch(p.phase) {
++    case Phase::Arrest1:p.phase=Phase::Arrest2; return Action::None;
++    case Phase::Arrest2:
++        economy_.resetState2(owner); p.phase=Phase::Respawn; return Action::ArrestRespawn;
++    case Phase::Death:
++        if(++p.updates>=p.deadline) {p.phase=Phase::Respawn; return Action::DeathRespawn;}
++        return Action::None;
++    case Phase::Terminal:return Action::GameOver;
++    default:return Action::None;
++    }
++}
++void PoliceSystem::respawned(int owner) {
++    auto& p=players_.at(owner);
++    if(p.phase!=Phase::Respawn) return;
++    economy_.clearWanted(owner); p=Player{};
++}
++bool PoliceSystem::gameOver(int owner) const {return players_.at(owner).phase==Phase::Terminal;}
++bool PoliceSystem::clearInventory(int owner) const {return players_.at(owner).clear;}
++bool PoliceSystem::waiting(int owner) const {return players_.at(owner).phase!=Phase::Alive;}
++bool PoliceSystem::allocate(int owner,Cell target,std::vector<Unit>& units) {
++    auto& r=records_.at(owner);
++    if(r.crime==0 || r.phase!=0) return false;
++    if(r.delay>std::numeric_limits<int>::min()) --r.delay;
++    if(r.delay>=1) return false;
++    auto it=std::find_if(groups_.begin(),groups_.end(),[](const Group& g){return g.status<=0;});
++    if(it==groups_.end() || it->status==0) return false;
++    if(r.type==2) {r.phase=1; return false;}
++    if(r.type!=0 && r.type!=1) return false;
++    const int index=static_cast<int>(it-groups_.begin());
++    it->status=1; it->record=owner;
++    for(int n=0;n<r.response;++n) {
++        Unit* best=nullptr; long long bestDist=std::numeric_limits<long long>::max();
++        for(auto& u:units) if(u.state==1 || u.state==4 || u.state==6) {
++            const auto d=std::llabs(static_cast<long long>(u.position.x)-target.x)+std::llabs(static_cast<long long>(u.position.y)-target.y);
++            if(d<bestDist) {best=&u; bestDist=d;}
++        }
++        if(best) {best->state=199; best->group=index;}
++        pending_.push_back({index,best?best->id:-1});
++    }
++    r.phase=1; return true;
++}
++bool PoliceSystem::completeAssignment(int index,int unit) {
++    auto& g=groups_.at(index);
++    auto it=std::find_if(pending_.begin(),pending_.end(),[&](const Assignment& a){return a.group==index && a.unit==unit;});
++    if(g.status<=0 || unit<0 || it==pending_.end() || std::find(g.members.begin(),g.members.end(),unit)!=g.members.end()) return false;
++    g.members.push_back(unit); pending_.erase(it); return true;
++}
++void PoliceSystem::release(int owner,std::vector<Unit>& units) {
++    for(std::size_t index=0;index<groups_.size();++index) if(groups_[index].record==owner) {
++        for(auto& u:units) if(u.group==static_cast<int>(index)) {u.group=-1; u.state=4;}
++        pending_.erase(std::remove_if(pending_.begin(),pending_.end(),[&](const Assignment& a){return a.group==static_cast<int>(index);}),pending_.end());
++        groups_[index]=Group{};
++    }
++    records_.at(owner)=Record{};
++}
++}}
+diff --git a/src/police/PoliceSystem.h b/src/police/PoliceSystem.h
+new file mode 100755
+index 0000000..5733223
+--- /dev/null
++++ b/src/police/PoliceSystem.h
+@@ -0,0 +1,58 @@
++#pragma once
++#include "../mission/GameEconomy.h"
++#include <algorithm>
++#include <array>
++#include <functional>
++#include <optional>
++#include <vector>
++namespace gta { namespace police {
++struct Cell {int x=0,y=0,z=0;}; // executable XY/layer, not engine XYZ
++struct Classification {int level=0,response=0;};
++enum class Action {None, ArrestRespawn, DeathRespawn, GameOver};
++struct Record {
++    int crime=0,response=0,delay=0,type=1,phase=0;
++};
++struct Unit {int id=-1,state=1; Cell position; int group=-1;};
++struct Group {int status=-1,record=-1; bool flag5=false,flag6=false; std::vector<int> members;};
++struct Assignment {int group=-1,unit=-1;};
++// Spec 004601a0: Chebyshev/stable rank; rank0 is NEVER attempted.
++std::optional<Cell> rankedRespawn(Cell from,std::vector<Cell> bases,
++    const std::function<std::optional<Cell>(Cell)>& scan);
++std::vector<int> roadblockOffsets(int roadWidth);
++struct Roadblock {
++    bool active=false; int timer=0;
++    bool activate(int level,bool vehicleTarget,bool enabled,int activeCount);
++    bool update(bool anyLevelAbove2,bool nearbyVehicle);
++};
++class PoliceSystem {
++public:
++    PoliceSystem(GameEconomy& economy,std::size_t participants);
++    void reset();
++    Classification classify(int owner,int section,bool forceZero=false);
++    // Original ownership/witness/duplicate gates MUST already have accepted this event.
++    bool acceptedCrime(int owner,int crime);
++    bool beginDeath(int owner,bool representation2);
++    // Caller proves captured state9 and live officer/target, not a guessed proximity test.
++    bool beginArrest(int owner,bool provenCapture);
++    Action updatePlayer(int owner); // one original update, no seconds conversion
++    void respawned(int owner);
++    bool gameOver(int owner) const;
++    bool clearInventory(int owner) const;
++    bool waiting(int owner) const;
++    Record& record(int owner) {return records_.at(owner);}
++    Group& group(int index) {return groups_.at(index);}
++    const std::vector<Assignment>& pending() const {return pending_;}
++    bool allocate(int owner,Cell target,std::vector<Unit>& units);
++    bool completeAssignment(int group,int unit);
++    void release(int owner,std::vector<Unit>& units);
++    // Natural decay, requested-count derivation, capture entry/radius and steering U.
++private:
++    enum class Phase {Alive,Arrest1,Arrest2,Death,Respawn,Terminal};
++    struct Player {Phase phase=Phase::Alive; int updates=0,deadline=100; bool clear=true;};
++    GameEconomy& economy_;
++    std::vector<Player> players_;
++    std::vector<Record> records_;
++    std::array<Group,4> groups_;
++    std::vector<Assignment> pending_;
++};
++}}
 diff --git a/src/reperspective/CameraHeading.h b/src/reperspective/CameraHeading.h
 new file mode 100644
 index 0000000..9cfbe1e
