@@ -1,8 +1,8 @@
 diff --git a/gamedata/config/inputs.json.default b/gamedata/config/inputs.json.default
-index db6ae85..d2d900e 100644
+index db6ae85..ce04c62 100644
 --- a/gamedata/config/inputs.json.default
 +++ b/gamedata/config/inputs.json.default
-@@ -5,26 +5,26 @@
+@@ -5,26 +5,27 @@
          "actions":
          [
              // common
@@ -37,6 +37,7 @@ index db6ae85..d2d900e 100644
 -            {"action":"Horn", "keycode":"Tab", "gpbutton":"A"},
 -            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"X"}
 +            {"action":"Horn", "keycode":"Tab", "gpbutton":"B"},
++            {"action":"NextRadioStation", "keycode":"r", "gpbutton":"LeftThumb"},
 +            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"Y"}
          ]
      },
@@ -344,11 +345,211 @@ index d2483f9..b3bb998 100644
 +    float mDriveReverseTime = 0.0f; // > 0: backing away from an obstacle
  };
 \ No newline at end of file
+diff --git a/src/AudioDevice.cpp b/src/AudioDevice.cpp
+index 47fb6ee..1aa9ee7 100644
+--- a/src/AudioDevice.cpp
++++ b/src/AudioDevice.cpp
+@@ -206,7 +206,7 @@ void AudioDevice::UpdateSourcesPositions()
+ {
+     for (AudioSource* currSource: mAllSources)
+     {
+-        if (!currSource->IsPlaying())
++        if (currSource->mListenerRelative || !currSource->IsPlaying())
+             continue;
+ 
+         const glm::vec3& sourceLocation = currSource->mSourceLocation;
+diff --git a/src/AudioManager.cpp b/src/AudioManager.cpp
+index e6347bf..7a3fc71 100644
+--- a/src/AudioManager.cpp
++++ b/src/AudioManager.cpp
+@@ -4,6 +4,8 @@
+ #include "AudioDevice.h"
+ #include "CarnageGame.h"
+ #include "cvars.h"
++#include "Pedestrian.h"
++#include "Vehicle.h"
+ 
+ AudioManager gAudioManager;
+ 
+@@ -113,7 +115,7 @@ void AudioManager::ShutdownAudioResources()
+     {
+         gAudioDevice.DestroySampleBuffer(currBuffer);
+     }
+-    debug_assert(MaxMusicSampleBuffers == mMusicSampleBuffers.size()); // check for leaks
++    // Partial device initialization may allocate fewer than four buffers.
+     mMusicSampleBuffers.clear();
+ }
+ 
+@@ -146,6 +148,7 @@ bool AudioManager::PrepareAudioResources()
+     if (mMusicAudioSource)
+     {
+         mMusicAudioSource->SetGain(mMusicGain);
++        mMusicAudioSource->SetListenerRelative(true);
+     }
+ 
+     // allocate music sample buffers
+@@ -158,7 +161,8 @@ bool AudioManager::PrepareAudioResources()
+         mMusicSampleBuffers.push_back(sampleBuffer);
+     }
+ 
+-    return true;
++    mMusicBuffersCount = static_cast<int>(mMusicSampleBuffers.size());
++    return mMusicAudioSource && mMusicBuffersCount > 0;
+ }
+ 
+ void AudioManager::StopAllSounds()
+@@ -352,12 +356,44 @@ void AudioManager::RegisterActiveEmitter(SfxEmitter* emitter)
+ 
+ void AudioManager::UpdateMusic()
+ {
+-    if ((gCvarGameMusicMode.mValue == eGameMusicMode_Disabled) || (mMusicStatus == eMusicStatus_Stopped))
++    int requested = -1;
++    mRadioCategory = -1;
++    if (gCvarGameMusicMode.mValue != eGameMusicMode_Disabled)
++    {
++        if (gCarnageGame.IsMenuGameState())
++            requested = 0; // 0040cc80, default DAT_004ab2dc = 1
++        else if (gCarnageGame.IsInGameState())
++        {
++            if (gCvarGameMusicMode.mValue == eGameMusicMode_Constant)
++                requested = mConstantTrack;
++            else
++            {
++                // Original has one local listener. Split-screen policy is Unresolved.
++                HumanPlayer* player = gCarnageGame.mHumanPlayers[0];
++                Pedestrian* ped = player ? player->mCharacter : nullptr;
++                Vehicle* car = ped ? ped->mCurrentCar : nullptr;
++                if (car && ped->IsCarPassenger())
++                {
++                    mRadioCategory = car->mCarInfo->mRadio;
++                    requested = mRadio.track(mRadioCategory);
++                }
++                else if (ped)
++                    requested = 8; // 0040cde0: on-foot category 10 -> track index 8
++            }
++        }
++    }
++    if (requested != mRequestedMusicTrack)
++    {
++        StopMusic();
++        mRequestedMusicTrack = requested;
++        if (requested >= 0) mMusicStatus = eMusicStatus_NextTrackRequest;
++    }
++    if (requested < 0 || mMusicStatus == eMusicStatus_Stopped)
+         return;
+-
+     if (mMusicStatus == eMusicStatus_NextTrackRequest)
+     {
+-        StartMusic("MUSIC/Track11"); // ambient 
++        if (!StartMusic(original_audio::trackFile(requested), requested))
++            gConsole.LogMessage(eLogMessage_Warning, "Missing or unsupported original music: %s", original_audio::trackFile(requested));
+         return;
+     }
+ 
+@@ -372,14 +408,21 @@ void AudioManager::UpdateMusic()
+         }
+         if (!sampleBuffers.empty())
+         {
++            for (AudioSampleBuffer* buffer: sampleBuffers)
++                mMusicProcessedFrames += mMusicBufferFrames[buffer];
+             mMusicSampleBuffers.insert(mMusicSampleBuffers.end(), sampleBuffers.begin(), sampleBuffers.end());
+         }
+ 
+         if (!QueueMusicSampleBuffers())
+         {
+-            if (mMusicDataStream->EndOfStream())
++            if (original_audio::musicDrained(mMusicDataStream->EndOfStream(),
++                    mMusicBuffersCount - mMusicSampleBuffers.size()))
+             {
++                const int finishedTrack = mPlayingMusicTrack;
+                 StopMusic();
++                if (finishedTrack >= 0) mMusicPositions[finishedTrack] = 0;
++                if (gCvarGameMusicMode.mValue == eGameMusicMode_Constant && gCarnageGame.IsInGameState())
++                    mConstantTrack = (mConstantTrack + 1) % 9; // 0040ca00, ten catalog entries minus one
+                 mMusicStatus = eMusicStatus_NextTrackRequest;
+                 return;
+             }
+@@ -395,7 +438,7 @@ void AudioManager::UpdateMusic()
+     }
+ }
+ 
+-bool AudioManager::StartMusic(const char* music)
++bool AudioManager::StartMusic(const char* music, int track)
+ {
+     StopMusic();
+ 
+@@ -406,9 +449,18 @@ bool AudioManager::StartMusic(const char* music)
+     if (mMusicDataStream == nullptr)
+         return false;
+ 
++    mPlayingMusicTrack = track;
++    mMusicStartFrame = 0;
++    mMusicProcessedFrames = 0;
++    if (track >= 0 && track < 10)
++    {
++        int frame = mMusicPositions[track];
++        if (frame >= 0 && frame < mMusicDataStream->GetSamplesCount() && mMusicDataStream->SeekPCMFromBeg(frame))
++            mMusicStartFrame = frame;
++    }
+     if (!QueueMusicSampleBuffers())
+     {
+-        SafeDelete(mMusicDataStream);
++        StopMusic();
+         return false;
+     }
+ 
+@@ -424,6 +476,9 @@ bool AudioManager::StartMusic(const char* music)
+ 
+ void AudioManager::StopMusic()
+ {
++    if (mMusicStatus == eMusicStatus_Playing && mPlayingMusicTrack >= 0 && mPlayingMusicTrack < 10 && mMusicAudioSource)
++        mMusicPositions[mPlayingMusicTrack] = mMusicStartFrame + mMusicProcessedFrames + mMusicAudioSource->GetPlaybackPositionSamples();
++    mPlayingMusicTrack = -1;
+     mMusicStatus = eMusicStatus_Stopped;
+ 
+     if (mMusicAudioSource)
+@@ -475,6 +530,7 @@ bool AudioManager::QueueMusicSampleBuffers()
+             break;
+         }
+ 
++        mMusicBufferFrames[sampleBuffer] = numSamplesRead;
+         mMusicSampleBuffers.pop_front();
+     }
+ 
+@@ -499,6 +555,21 @@ void AudioManager::InitSoundsAndMusicGainValue()
+         gCvarSoundsVolume.ClearModified();
+     }
+ 
+-    mMusicGain = (1.0f * musicVolume) / (1.0f * AudioMaxVolume);
+-    mSoundsGain = (1.0f * soundsVolume) / (1.0f * AudioMaxVolume);
++    mMusicGain = original_audio::volumeGain(musicVolume);
++    mSoundsGain = original_audio::volumeGain(soundsVolume);
++}
++
++unsigned int AudioManager::GetLevelSampleRate(SfxSampleIndex index) const
++{
++    AudioSampleArchive::SampleEntry entry;
++    return index < static_cast<unsigned int>(mLevelSounds.GetEntriesCount()) &&
++        mLevelSounds.GetEntryInfo(static_cast<int>(index), entry) ? entry.mSampleRate : 0;
++}
++
++void AudioManager::NextRadioStation()
++{
++    if (gCvarGameMusicMode.mValue == eGameMusicMode_Constant)
++        mConstantTrack = (mConstantTrack + 1) % 9;
++    else if (mRadioCategory >= 0 && mRadioCategory < 6)
++        mRadio.next(mRadioCategory);
+ }
 diff --git a/src/AudioManager.h b/src/AudioManager.h
-index 8e23a4c..730067e 100644
+index 8e23a4c..5ef3814 100644
 --- a/src/AudioManager.h
 +++ b/src/AudioManager.h
-@@ -8,7 +8,8 @@
+@@ -4,17 +4,21 @@
+ #include "SfxDefs.h"
+ #include "SfxEmitter.h"
+ #include "AudioDataStream.h"
++#include "OriginalAudio.h"
+ 
  // This class manages in game music and sounds
  class AudioManager final: public cxx::noncopyable
  {
@@ -358,6 +559,86 @@ index 8e23a4c..730067e 100644
  
  public:
      bool Initialize();
+     void Deinit();
+ 
+     void UpdateFrame();
++    void NextRadioStation();
++    unsigned int GetLevelSampleRate(SfxSampleIndex index) const;
+ 
+     // Preload sound archives for current level
+     bool PreloadLevelSounds();
+@@ -56,7 +60,7 @@ private:
+     float NextRandomPitch();
+ 
+     // music
+-    bool StartMusic(const char* music);
++    bool StartMusic(const char* music, int track = -1);
+     void StopMusic();
+     void UpdateMusic();
+     bool QueueMusicSampleBuffers();
+@@ -85,6 +89,17 @@ private:
+     AudioSampleArchive mLevelSounds;
+     AudioSampleArchive mVoiceSounds;
+ 
++    original_audio::Radio mRadio;
++    int mRequestedMusicTrack = -1;
++    int mPlayingMusicTrack = -1;
++    int mConstantTrack = 0;
++    int mRadioCategory = -1;
++    int mMusicPositions[10] = {};
++    int mMusicStartFrame = 0;
++    int mMusicProcessedFrames = 0;
++    int mMusicBuffersCount = 0;
++    std::map<AudioSampleBuffer*, int> mMusicBufferFrames;
++
+     // music data
+     eMusicStatus mMusicStatus = eMusicStatus_NextTrackRequest;
+     AudioDataStream* mMusicDataStream = nullptr; // active music stream
+diff --git a/src/AudioSource.cpp b/src/AudioSource.cpp
+index 6eda1dd..0407adc 100644
+--- a/src/AudioSource.cpp
++++ b/src/AudioSource.cpp
+@@ -355,3 +355,20 @@ eAudioSourceType AudioSource::GetSourceType() const
+ 
+     return eAudioSourceType_Static;
+ }
++
++bool AudioSource::SetListenerRelative(bool relative)
++{
++    mListenerRelative = relative;
++    ::alSourcei(mSourceID, AL_SOURCE_RELATIVE, relative ? AL_TRUE : AL_FALSE);
++    ::alSource3f(mSourceID, AL_POSITION, 0.0f, 0.0f, 0.0f);
++    ::alSourcef(mSourceID, AL_ROLLOFF_FACTOR, relative ? 0.0f : 1.0f);
++    alCheckError();
++    return !IsSourceError();
++}
++int AudioSource::GetPlaybackPositionSamples() const
++{
++    ALint offset = 0;
++    ::alGetSourcei(mSourceID, AL_SAMPLE_OFFSET, &offset);
++    alCheckError();
++    return offset;
++}
+diff --git a/src/AudioSource.h b/src/AudioSource.h
+index d4fde3e..e99f577 100644
+--- a/src/AudioSource.h
++++ b/src/AudioSource.h
+@@ -54,12 +54,15 @@ class AudioSource final: public cxx::noncopyable
+     friend class AudioDevice;
+ 
+ public:
++    bool mListenerRelative = false;
+     AudioSource();
+     ~AudioSource();
+ 
+     // Attach sample buffer, will stop playing current sound, set source to static type
+     // @param audioBuffer: New audio buffer or nullptr 
+     bool SetSampleBuffer(AudioSampleBuffer* audioBuffer);
++    bool SetListenerRelative(bool relative);
++    int GetPlaybackPositionSamples() const;
+ 
+     // Queue sample buffer, set source to streaming type
+     bool QueueSampleBuffer(AudioSampleBuffer* audioBuffer);
 diff --git a/src/CMakeLists.txt b/src/CMakeLists.txt
 index 1bfac4c..0fb73e0 100644
 --- a/src/CMakeLists.txt
@@ -2347,12 +2628,13 @@ index 7eb198f..f8b7f94 100644
  
      void ShowBigFontMessage(eHUDBigFontMessage messageType);
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..7698e3c 100644
+index a13af22..2103152 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
-@@ -1,5 +1,23 @@
+@@ -1,5 +1,24 @@
  #include "stdafx.h"
  #include "HumanPlayer.h"
++#include "AudioManager.h"
 +#include "imgui.h"
 +#include "GameObjectsManager.h"
 +#include "FileSystem.h"
@@ -2374,7 +2656,7 @@ index a13af22..7698e3c 100644
  #include "Pedestrian.h"
  #include "PhysicsManager.h"
  #include "PhysicsBody.h"
-@@ -134,6 +152,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -134,6 +153,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
  void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
  {
      debug_assert(mCharacter);
@@ -2382,7 +2664,7 @@ index a13af22..7698e3c 100644
  
      if (mCameraController)
      {
-@@ -151,7 +170,8 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
+@@ -151,7 +171,8 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
      if (action != eInputAction_null)
      {
          ProcessInputAction(action, inputEvent.mPressed);
@@ -2392,7 +2674,7 @@ index a13af22..7698e3c 100644
      }
  
      // handle special keys
-@@ -168,6 +188,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+@@ -168,6 +189,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
  
      if (inputEvent.mGamepad != mActionsMapping.mGamepadID)
          return;
@@ -2400,7 +2682,7 @@ index a13af22..7698e3c 100644
  
      eInputActionsGroup actionGroup = mCharacter->IsCarPassenger() ? eInputActionsGroup_InCar : eInputActionsGroup_OnFoot;
      eInputAction action = mActionsMapping.GetAction(actionGroup, inputEvent.mButton);
-@@ -181,6 +202,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+@@ -181,6 +203,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
      {
          ProcessInputAction(action, inputEvent.mPressed);
          inputEvent.SetConsumed();
@@ -2408,7 +2690,7 @@ index a13af22..7698e3c 100644
      }
  }
  
-@@ -194,6 +216,7 @@ void HumanPlayer::InputEventLost()
+@@ -194,6 +217,7 @@ void HumanPlayer::InputEventLost()
      // reset actions
      mCtlState.Clear();
      mUpdateInputs = false;
@@ -2416,7 +2698,18 @@ index a13af22..7698e3c 100644
  }
  
  void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
-@@ -274,6 +297,10 @@ void HumanPlayer::SetWantedLevel(int wantedLevel)
+@@ -215,6 +239,10 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+             // those are updating in ProcessRepetitiveActions
+         break;
+ 
++        case eInputAction_NextRadioStation:
++            if (isActivated && mCharacter->IsCarPassenger()) gAudioManager.NextRadioStation();
++        break;
++
+         case eInputAction_Horn:
+             if (mCharacter->IsCarPassenger())
+             {
+@@ -274,6 +302,10 @@ void HumanPlayer::SetWantedLevel(int wantedLevel)
  
  void HumanPlayer::SwitchNextWeapon()
  {
@@ -2427,7 +2720,7 @@ index a13af22..7698e3c 100644
      int nextWeaponIndex = (mCharacter->mCurrentWeapon + 1) % eWeapon_COUNT;
      for (; nextWeaponIndex != mCharacter->mCurrentWeapon; )
      {
-@@ -289,6 +316,10 @@ void HumanPlayer::SwitchNextWeapon()
+@@ -289,6 +321,10 @@ void HumanPlayer::SwitchNextWeapon()
  
  void HumanPlayer::SwitchPrevWeapon()
  {
@@ -2438,7 +2731,7 @@ index a13af22..7698e3c 100644
      int nextWeaponIndex = mCharacter->mCurrentWeapon == 0 ? (eWeapon_COUNT - 1) : (mCharacter->mCurrentWeapon - 1);
      for (; nextWeaponIndex != mCharacter->mCurrentWeapon; )
      {
-@@ -354,12 +385,37 @@ void HumanPlayer::Respawn()
+@@ -354,12 +390,37 @@ void HumanPlayer::Respawn()
  
  void HumanPlayer::ProcessRepetitiveActions()
  {
@@ -2476,7 +2769,7 @@ index a13af22..7698e3c 100644
      // update in car
      if (mCharacter->IsCarPassenger())
      {
-@@ -384,10 +440,14 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -384,10 +445,14 @@ void HumanPlayer::ProcessRepetitiveActions()
          }
  
          mCtlState.mHandBrake = GetActionState(eInputAction_HandBrake);
@@ -2491,7 +2784,7 @@ index a13af22..7698e3c 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +463,364 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +468,364 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -2929,11 +3222,39 @@ index c272fba..3c2d455 100644
  
      FollowCameraController mFollowCameraController;
      FreeLookCameraController mFreeLookCameraController;
+diff --git a/src/InputActionsMapping.cpp b/src/InputActionsMapping.cpp
+index 25e57de..0482818 100644
+--- a/src/InputActionsMapping.cpp
++++ b/src/InputActionsMapping.cpp
+@@ -32,6 +32,7 @@ static const DefaultActionMapping gDefaultActionsMapping[] =
+     {eInputActionsGroup_InCar,  eInputAction_SteerLeft,             eKeycode_LEFT},
+     {eInputActionsGroup_InCar,  eInputAction_SteerRight,            eKeycode_RIGHT},
+     {eInputActionsGroup_InCar,  eInputAction_Horn,                  eKeycode_TAB},
++    {eInputActionsGroup_InCar,  eInputAction_NextRadioStation,      eKeycode_R},
+ 
+     // on foot
+     {eInputActionsGroup_OnFoot, eInputAction_TurnLeft,              eKeycode_LEFT},
+@@ -177,6 +178,7 @@ eInputActionsGroup InputActionsMapping::GetInputActionsGroup(eInputAction action
+         case eInputAction_Reverse:
+         case eInputAction_SteerLeft:
+         case eInputAction_SteerRight:
++        case eInputAction_NextRadioStation:
+         case eInputAction_Horn:
+         case eInputAction_LeaveCar:
+             return eInputActionsGroup_InCar;
 diff --git a/src/InputsDefs.h b/src/InputsDefs.h
-index 138173a..c86ad73 100644
+index 138173a..36ad51d 100644
 --- a/src/InputsDefs.h
 +++ b/src/InputsDefs.h
-@@ -197,6 +197,8 @@ public:
+@@ -173,6 +173,7 @@ enum eInputAction
+     eInputAction_Horn,
+     eInputAction_LeaveCar,
+ 
++    eInputAction_NextRadioStation,
+     eInputAction_COUNT
+ };
+ 
+@@ -197,6 +198,8 @@ public:
  public:
      bool mButtons[eGamepadButton_COUNT];
      bool mPresent;
@@ -3651,6 +3972,50 @@ index f58d79d..4b8924b 100644
      GpuBuffer* mCityMeshBufferV;
      GpuBuffer* mCityMeshBufferI;
  
+diff --git a/src/OriginalAudio.h b/src/OriginalAudio.h
+new file mode 100755
+index 0000000..8d98198
+--- /dev/null
++++ b/src/OriginalAudio.h
+@@ -0,0 +1,38 @@
++#pragma once
++
++// Rules read from gta.exe, SHA256 recorded in evidence/input-sha256.txt.
++// Track numbers here are zero based; file names are one based.
++namespace original_audio {
++inline const char* trackFile(int track) {
++    static const char* const files[] = {
++        "MUSIC/Track1.wav", "MUSIC/Track2.wav", "MUSIC/Track3.wav",
++        "MUSIC/Track4.wav", "MUSIC/Track5.wav", "MUSIC/Track6.wav",
++        "MUSIC/Track7.wav", "MUSIC/Track8.wav", "MUSIC/Track9.wav", "MUSIC/Track10.wav"
++    }; // 004ab2e8, stride 0x108; 0040c700 clamps invalid indices to 0.
++    return track >= 0 && track < 10 ? files[track] : nullptr;
++}
++struct Radio {
++    unsigned char choice[9] = {};
++    int track(int category) const {
++        static const int tracks[9][3] = {
++            {6,3,2}, {4,0,1}, {1,3,2}, {0,1,4}, {3,6,4},
++            {2,0,6}, {5,5,5}, {7,7,7}, {8,8,8}
++        }; // 004ab270..004ab2db. No speculative category 9 table read.
++        return category >= 0 && category < 9 ? tracks[category][choice[category]] : -1;
++    }
++    int next(int category) {
++        // 0040d140: categories 6,7,8 and on-foot category 10 cannot switch.
++        if (category >= 0 && category < 6) choice[category] = (choice[category]+1)%3;
++        return track(category);
++    }
++};
++inline float volumeGain(int volume) {
++    static const int values[] = {0,18,36,54,73,91,109,127}; // 004ab048/004ab050
++    return values[volume < 0 ? 0 : volume > 7 ? 7 : volume] / 127.0f;
++}
++inline unsigned int hornSample(unsigned char horn) { return 58 + horn/10; }
++inline unsigned int hornRate(unsigned char horn, unsigned int baseRate) {
++    return baseRate + (horn%10)*512; // 00402690 at 004029xx: SDT rate + remainder*0x200
++}
++inline bool musicDrained(bool eof, unsigned int queued) { return eof && queued == 0; }
++}
 diff --git a/src/Pedestrian.cpp b/src/Pedestrian.cpp
 index af31f7a..4db55be 100644
 --- a/src/Pedestrian.cpp
@@ -4092,10 +4457,31 @@ index 0000000..5374a82
 +}
 +}
 diff --git a/src/Vehicle.cpp b/src/Vehicle.cpp
-index 3847938..6260526 100644
+index 3847938..e42e457 100644
 --- a/src/Vehicle.cpp
 +++ b/src/Vehicle.cpp
-@@ -674,6 +674,19 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
+@@ -91,6 +91,20 @@ void Vehicle::UpdateFrame()
+     UpdateBurnEffect();
+     UpdateDamageFromRailways();
+     UpdateEngineSound();
++    Pedestrian* driver = GetCarDriver();
++    const bool horn = !IsWrecked() && driver && driver->GetCtlState().mHorn && mCarInfo->mHorn >= 0 && mCarInfo->mHorn < 60;
++    if (horn)
++    {
++        const unsigned char code = static_cast<unsigned char>(mCarInfo->mHorn);
++        const auto sample = original_audio::hornSample(code);
++        const unsigned int rate = gAudioManager.GetLevelSampleRate(sample);
++        if (rate && (!mSfxEmitter || !mSfxEmitter->IsPlaying(eCarSfxChannelIndex_Misc)))
++            StartGameObjectSound(eCarSfxChannelIndex_Misc, eSfxSampleType_Level, sample, SfxFlags_Loop);
++        if (rate && mSfxEmitter)
++            mSfxEmitter->SetPitch(eCarSfxChannelIndex_Misc, static_cast<float>(original_audio::hornRate(code, rate))/rate);
++    }
++    else if (mSfxEmitter)
++        mSfxEmitter->StopSound(eCarSfxChannelIndex_Misc);
+     if (IsWrecked())
+         return;
+ 
+@@ -674,6 +688,19 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
          }
          if (damageInfo.mContactImpulse < 100.0f) // todo: magic numbers
              return false;
@@ -5361,6 +5747,18 @@ index dfc0703..03fea57 100644
      // commands
      gConsole.RegisterVariable(&gCvarSysQuit);
      gConsole.RegisterVariable(&gCvarSysListCvars);
+diff --git a/src/enums_impl.cpp b/src/enums_impl.cpp
+index ed6bad2..8c822c2 100644
+--- a/src/enums_impl.cpp
++++ b/src/enums_impl.cpp
+@@ -426,6 +426,7 @@ impl_enum_strings(eInputAction)
+     {eInputAction_SteerLeft, "SteerLeft"},
+     {eInputAction_SteerRight, "SteerRight"},
+     {eInputAction_Horn, "Horn"},
++    {eInputAction_NextRadioStation, "NextRadioStation"},
+ };
+ 
+ impl_enum_strings(ePedestrianState)
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
 index 0000000..913c5cf
