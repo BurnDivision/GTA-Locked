@@ -1,3 +1,46 @@
+diff --git a/cmake/Carnage3D.cmake b/cmake/Carnage3D.cmake
+index 37ad0d1..73b1a1a 100644
+--- a/cmake/Carnage3D.cmake
++++ b/cmake/Carnage3D.cmake
+@@ -9,7 +9,23 @@ target_precompile_headers(carnage3d PUBLIC src/stdafx.h)
+ if(APPLE)
+     add_definitions(-D"GL_SILENCE_DEPRECATION")
+ endif()
+-find_package(OpenAL REQUIRED)
++if(MINGW)
++    set_target_properties(carnage3d PROPERTIES WIN32_EXECUTABLE TRUE)
++    enable_language(RC)
++    if(NOT WINDOWS_APP_VERSION MATCHES "^([0-9]+)[.]([0-9]+)[.]([0-9]+)$")
++        message(FATAL_ERROR "WINDOWS_APP_VERSION must be a numeric major.minor.patch version")
++    endif()
++    set(WINDOWS_FILE_VERSION "${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0")
++    configure_file(src/windows.rc.in "${CMAKE_CURRENT_BINARY_DIR}/windows.rc" @ONLY)
++    target_sources(carnage3d PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/windows.rc")
++    add_library(glew_static STATIC "${WINDOWS_DEPS}/glew/src/glew.c")
++    target_compile_definitions(glew_static PUBLIC GLEW_STATIC)
++    target_include_directories(glew_static PUBLIC "${WINDOWS_DEPS}/glew/include")
++    target_include_directories(carnage3d PRIVATE "${WINDOWS_DEPS}/glfw/include" "${WINDOWS_DEPS}/openal/include" "${GLM_HEADERS}")
++    target_link_libraries(carnage3d glew_static "${WINDOWS_DEPS}/glfw/lib-mingw-w64/libglfw3.a" "${WINDOWS_DEPS}/openal/libs/Win64/libOpenAL32.dll.a" opengl32 gdi32 winmm)
++else()
++    find_package(OpenAL REQUIRED)
++endif()
+ 
+ if(WITH_BOX2D)
+     set(BOX2D_BUILD_UNIT_TESTS OFF CACHE BOOL "Skip tests")
+@@ -27,6 +43,7 @@ else()
+     target_link_libraries(carnage3d ${BOX2D_LIBRARY})
+ endif()
+ 
++if(NOT MINGW)
+ find_package(OpenGL REQUIRED)
+ find_package(GLEW REQUIRED)
+ find_package(glfw3 REQUIRED)
+@@ -38,3 +55,5 @@ endif()
+ 
+ target_include_directories(carnage3d PUBLIC ${OPENAL_INCLUDE_DIR} ${OPENGL_INCLUDE_DIR} ${GLEW_INCLUDE_DIR})
+ target_link_libraries(carnage3d glfw ${GLEW_LIBRARY} ${OPENAL_LIBRARY} ${OPENGL_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
++
++endif()
 diff --git a/gamedata/config/inputs.json.default b/gamedata/config/inputs.json.default
 index db6ae85..ce04c62 100644
 --- a/gamedata/config/inputs.json.default
