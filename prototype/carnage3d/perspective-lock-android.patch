@@ -656,7 +656,7 @@ index 1bfac4c..0fb73e0 100644
  	${CMAKE_CURRENT_LIST_DIR}/AiManager.cpp
  	${CMAKE_CURRENT_LIST_DIR}/AiPedestrianBehavior.cpp
 diff --git a/src/CarnageGame.cpp b/src/CarnageGame.cpp
-index bb509f8..16212ae 100644
+index bb509f8..bf2d59e 100644
 --- a/src/CarnageGame.cpp
 +++ b/src/CarnageGame.cpp
 @@ -63,14 +63,21 @@ bool CarnageGame::Initialize()
@@ -682,8 +682,14 @@ index bb509f8..16212ae 100644
          }
      }
      gCvarMapname.ClearModified();
-@@ -91,13 +98,20 @@ bool CarnageGame::Initialize()
+@@ -89,15 +96,28 @@ bool CarnageGame::Initialize()
+     {
+         gConsole.LogMessage(eLogMessage_Warning, "Fail to load game texts for current language");
          gGameTexts.Deinit();
++#ifdef _WIN32
++        gConsole.LogMessage(eLogMessage_Error,"Required GTA text file missing: %s in %s", textsFilename.c_str(),gCvarCurrentBaseDir.mValue.c_str());
++        return false;
++#endif
      }
  
 -    // init scenario
@@ -696,6 +702,7 @@ index bb509f8..16212ae 100644
 +    // Original front-end owns chapter selection before any world is loaded.
 +    gGameCheatsWindow.mWindowShown = false;
 +    // test harness only: with config/test_input.txt present, start the default scenario directly (no menu)
++#ifndef _WIN32
 +    if (gFiles.IsFileExists("config/test_input.txt"))
 +    {
 +        if (!StartScenario(gCvarMapname.mValue))
@@ -706,11 +713,12 @@ index bb509f8..16212ae 100644
 +        }
 +        return true;
 +    }
++#endif
 +    SetCurrentGamestate(&mMainMenuGamestate);
      return true;
  }
  
-@@ -122,6 +136,30 @@ bool CarnageGame::IsInGameState() const
+@@ -122,6 +142,30 @@ bool CarnageGame::IsInGameState() const
  
  void CarnageGame::UpdateFrame()
  {
@@ -741,7 +749,7 @@ index bb509f8..16212ae 100644
      if (mCurrentGamestate)
      {
          mCurrentGamestate->OnGamestateFrame();
-@@ -144,9 +182,27 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
+@@ -144,9 +188,27 @@ void CarnageGame::InputEvent(KeyInputEvent& inputEvent)
          return;
      }
  
@@ -770,7 +778,7 @@ index bb509f8..16212ae 100644
          return;
      }
  
-@@ -277,6 +333,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
+@@ -277,6 +339,45 @@ void CarnageGame::DeleteHumanPlayer(int playerIndex)
      }
  }
  
@@ -816,7 +824,7 @@ index bb509f8..16212ae 100644
  void CarnageGame::SetupScreenLayout()
  {   
      const int MaxCols = 2;
-@@ -284,7 +379,8 @@ void CarnageGame::SetupScreenLayout()
+@@ -284,7 +385,8 @@ void CarnageGame::SetupScreenLayout()
  
      debug_assert(playersCount > 0);
  
@@ -826,7 +834,7 @@ index bb509f8..16212ae 100644
  
      int numRows = (playersCount + MaxCols - 1) / MaxCols;
      debug_assert(numRows > 0);
-@@ -303,10 +399,16 @@ void CarnageGame::SetupScreenLayout()
+@@ -303,10 +405,16 @@ void CarnageGame::SetupScreenLayout()
          debug_assert(colsOnCurrentRow > 0);
          int frameSizePerW = screenResolution.x / colsOnCurrentRow;
  
@@ -844,7 +852,7 @@ index bb509f8..16212ae 100644
  }
  
  int CarnageGame::GetHumanPlayerIndex(Pedestrian* pedestrian) const
-@@ -586,3 +688,7 @@ void CarnageGame::SetCurrentGamestate(GenericGamestate* gamestate)
+@@ -586,3 +694,7 @@ void CarnageGame::SetCurrentGamestate(GenericGamestate* gamestate)
          mCurrentGamestate->OnGamestateEnter();
      }
  }
@@ -853,7 +861,7 @@ index bb509f8..16212ae 100644
 +extern "C" bool gtaFrontendActive() { return gCarnageGame.IsMenuGameState(); }
 +#endif
 diff --git a/src/Console.cpp b/src/Console.cpp
-index c6b1c2e..28adce0 100644
+index c6b1c2e..25d8217 100644
 --- a/src/Console.cpp
 +++ b/src/Console.cpp
 @@ -1,4 +1,7 @@
@@ -865,17 +873,220 @@ index c6b1c2e..28adce0 100644
  #include "Console.h"
  #include "ConsoleVar.h"
  #include "cvars.h"
-@@ -31,6 +34,10 @@ void Console::LogMessage(eLogMessage messageCat, const char* format, ...)
+@@ -15,14 +18,32 @@ static char ConsoleMessageBuffer[2048];
+     }
+ 
+ Console gConsole;
++#ifdef _WIN32
++static FILE* WindowsLogFile = nullptr;
++#endif
+ 
+ bool Console::Initialize()
+ {
++#ifdef _WIN32
++    const std::string logPath = cxx::get_parent_directory(cxx::get_executable_path()) + "/GTA-Perspective-Lock.log";
++    WindowsLogFile = fopen(logPath.c_str(), "w");
++    if (!WindowsLogFile)
++    {
++        const std::string message = "Cannot create the startup log:\n" + logPath +
++            "\n\nExtract the entire zip into a writable folder such as C:/Games/GTA-Perspective-Lock.";
++        MessageBoxA(nullptr, message.c_str(), "GTA Perspective Lock", MB_OK | MB_ICONERROR);
++        return false;
++    }
++#endif
+     return true;
+ }
+ 
+ void Console::Deinit()
+ {
++#ifdef _WIN32
++    if (WindowsLogFile) fclose(WindowsLogFile);
++    WindowsLogFile = nullptr;
++#endif
+ }
+ 
+ void Console::LogMessage(eLogMessage messageCat, const char* format, ...)
+@@ -31,10 +52,22 @@ void Console::LogMessage(eLogMessage messageCat, const char* format, ...)
      vsnprintf(ConsoleMessageBuffer, sizeof(ConsoleMessageBuffer), format, vaList);
      VA_SCOPE_CLOSE(vaList)
  
+-    if (messageCat > eLogMessage_Debug)
 +#ifdef __ANDROID__
 +    __android_log_print(messageCat >= eLogMessage_Error ? ANDROID_LOG_ERROR :
 +        (messageCat == eLogMessage_Warning ? ANDROID_LOG_WARN : ANDROID_LOG_INFO), "Carnage3D", "%s", ConsoleMessageBuffer);
 +#endif
-     if (messageCat > eLogMessage_Debug)
++    // Scripted-input telemetry must be available to desktop smoke-test runners.
++    if (messageCat > eLogMessage_Debug || strncmp(ConsoleMessageBuffer, "RPT ", 4) == 0)
      {
          printf("%s\n", ConsoleMessageBuffer);
+     }
++#ifdef _WIN32
++    if (WindowsLogFile)
++    {
++        fprintf(WindowsLogFile, "[%d] %s\n", int(messageCat), ConsoleMessageBuffer);
++        fflush(WindowsLogFile); // keep diagnostics even after a crash/forced exit
++    }
++#endif
+     ConsoleLine consoleLine;
+     consoleLine.mLineType = eConsoleLineType_Message;
+     consoleLine.mMessageCategory = messageCat;
+diff --git a/src/Console.cpp.orig b/src/Console.cpp.orig
+new file mode 100755
+index 0000000..65d5302
+--- /dev/null
++++ b/src/Console.cpp.orig
+@@ -0,0 +1,151 @@
++#include "stdafx.h"
++#ifdef __ANDROID__
++#include <android/log.h>
++#endif
++#include "Console.h"
++#include "ConsoleVar.h"
++#include "cvars.h"
++
++static char ConsoleMessageBuffer[2048];
++
++#define VA_SCOPE_OPEN(firstArg, vaName) \
++    { \
++        va_list vaName {}; \
++        va_start(vaName, firstArg); \
++
++#define VA_SCOPE_CLOSE(vaName) \
++        va_end(vaName); \
++    }
++
++Console gConsole;
++#ifdef _WIN32
++static FILE* WindowsLogFile = nullptr;
++#endif
++
++bool Console::Initialize()
++{
++#ifdef _WIN32
++    const std::string logPath = cxx::get_parent_directory(cxx::get_executable_path()) + "/GTA-Perspective-Lock.log";
++    WindowsLogFile = fopen(logPath.c_str(), "w");
++    if (!WindowsLogFile)
++    {
++        const std::string message = "Cannot create the startup log:\n" + logPath +
++            "\n\nExtract the entire zip into a writable folder such as C:/Games/GTA-Perspective-Lock.";
++        MessageBoxA(nullptr, message.c_str(), "GTA Perspective Lock", MB_OK | MB_ICONERROR);
++        return false;
++    }
++#endif
++    return true;
++}
++
++void Console::Deinit()
++{
++#ifdef _WIN32
++    if (WindowsLogFile) fclose(WindowsLogFile);
++    WindowsLogFile = nullptr;
++#endif
++}
++
++void Console::LogMessage(eLogMessage messageCat, const char* format, ...)
++{
++    VA_SCOPE_OPEN(format, vaList)
++    vsnprintf(ConsoleMessageBuffer, sizeof(ConsoleMessageBuffer), format, vaList);
++    VA_SCOPE_CLOSE(vaList)
++
++#ifdef __ANDROID__
++    __android_log_print(messageCat >= eLogMessage_Error ? ANDROID_LOG_ERROR :
++        (messageCat == eLogMessage_Warning ? ANDROID_LOG_WARN : ANDROID_LOG_INFO), "Carnage3D", "%s", ConsoleMessageBuffer);
++#endif
++    if (messageCat > eLogMessage_Debug)
++    {
++        printf("%s\n", ConsoleMessageBuffer);
++    }
++#ifdef _WIN32
++    if (WindowsLogFile)
++    {
++        fprintf(WindowsLogFile, "[%d] %s\n", int(messageCat), ConsoleMessageBuffer);
++        fflush(WindowsLogFile); // keep diagnostics even after a crash/forced exit
++    }
++#endif
++    ConsoleLine consoleLine;
++    consoleLine.mLineType = eConsoleLineType_Message;
++    consoleLine.mMessageCategory = messageCat;
++    consoleLine.mString = ConsoleMessageBuffer;
++    mLines.push_back(std::move(consoleLine));
++}
++
++void Console::Flush()
++{
++    mLines.clear();
++}
++
++void Console::ExecuteCommands(const char* commands)
++{
++    LogMessage(eLogMessage_Debug, "%s", commands); // echo
++
++    cxx::string_tokenizer tokenizer(commands);
++    for (;;)
++    {
++        std::string commandName;
++        if (!tokenizer.get_next(commandName, ' '))
++            break;
++
++        // find variable by name
++        Cvar* consoleVariable = nullptr;
++        for (Cvar* currCvar: mCvarsList)
++        {
++            if (currCvar->mName == commandName)
++            {
++                consoleVariable = currCvar;
++                break;
++            }
++        }
++
++        if (consoleVariable)
++        {   
++            std::string commandParams;
++            if (tokenizer.get_next(commandParams, ';'))
++            {
++                cxx::trim(commandParams);
++            }
++            consoleVariable->CallWithParams(commandParams);
++            break;
++        }
++        LogMessage(eLogMessage_Warning, "Unknown command %s", commandName.c_str());
++    }
++}
++
++bool Console::RegisterVariable(Cvar* consoleVariable)
++{
++    if (consoleVariable == nullptr)
++    {
++        debug_assert(false);
++        return false;
++    }
++    if (cxx::contains_if(mCvarsList, [consoleVariable](const Cvar* currCvar)
++        {
++            return (currCvar == consoleVariable) || (currCvar->mName == consoleVariable->mName);
++        }))
++    {
++        debug_assert(false);
++        return false;
++    }
++    mCvarsList.push_back(consoleVariable);
++    return true;
++}
++
++bool Console::UnregisterVariable(Cvar* consoleVariable)
++{
++    if (consoleVariable == nullptr)
++    {
++        debug_assert(false);
++        return false;
++    }
++    cxx::erase_elements(mCvarsList, consoleVariable);
++    return true;
++}
++
++void Console::RegisterGlobalVariables()
++{
++    CvarsRegisterGlobal();
++}
 diff --git a/src/Decoration.cpp b/src/Decoration.cpp
 index c4c8ad1..c87247a 100644
 --- a/src/Decoration.cpp
@@ -935,10 +1146,27 @@ index 0000000..f7a26fe
 +}
 +}
 diff --git a/src/FileSystem.cpp b/src/FileSystem.cpp
-index feb69e3..4610835 100644
+index feb69e3..c671b9d 100644
 --- a/src/FileSystem.cpp
 +++ b/src/FileSystem.cpp
-@@ -25,7 +25,12 @@ bool FileSystem::Initialize()
+@@ -1,6 +1,9 @@
+ #include "stdafx.h"
+ #include "FileSystem.h"
+ #include "cvars.h"
++#ifdef _WIN32
++#include <filesystem>
++#endif
+ 
+ //////////////////////////////////////////////////////////////////////////
+ 
+@@ -20,12 +23,26 @@ bool FileSystem::Initialize()
+     mExecutablePath = cxx::get_executable_path();
+     mExecutableDirectory = cxx::get_parent_directory(mExecutablePath);
+     mWorkingDirectoryPath = mExecutableDirectory;
++#ifndef _WIN32
+     mWorkingDirectoryPath = cxx::get_parent_directory(mWorkingDirectoryPath); // root
++#endif
+     if (!mWorkingDirectoryPath.empty())
      {
          mWorkingDirectoryPath.append("/");
      }
@@ -949,15 +1177,25 @@ index feb69e3..4610835 100644
 +    mWorkingDirectoryPath = ::glfwShimInternalStoragePath();
 +    mWorkingDirectoryPath.append("/gamedata");
 +#endif
++#ifdef _WIN32
++    if (!cxx::is_directory_exists(mWorkingDirectoryPath))
++    {
++        gConsole.LogMessage(eLogMessage_Error, "Engine gamedata folder missing: %s. Extract the entire zip.", mWorkingDirectoryPath.c_str());
++        return false;
++    }
++#endif
      AddSearchPlace(mWorkingDirectoryPath);
  
      gConsole.LogMessage(eLogMessage_Info, "Working directory: '%s'", mWorkingDirectoryPath.c_str());
-@@ -244,7 +249,15 @@ bool FileSystem::GetFullPathToDirectory(const std::string& objectName, std::stri
- }
+@@ -245,12 +262,31 @@ bool FileSystem::GetFullPathToDirectory(const std::string& objectName, std::stri
  
  bool FileSystem::SetupGtaDataLocation()
--{
-+{
+ {
++#ifdef _WIN32
++    // Resolve the portable package data independently of the process working directory.
++    if (gCvarCurrentBaseDir.mValue.empty() && gCvarGtaDataPath.mValue.empty())
++        gCvarGtaDataPath.mValue = mExecutableDirectory + "/GTADATA";
++#endif
 +#ifdef __ANDROID__
 +    // default location: <external app files>/GTADATA (filled by the in-app importer)
 +    if (gCvarCurrentBaseDir.mValue.empty() && gCvarGtaDataPath.mValue.empty())
@@ -969,6 +1207,73 @@ index feb69e3..4610835 100644
      // override data location with startup param
      if (gCvarCurrentBaseDir.mValue.empty())
      {
+         gCvarCurrentBaseDir.mValue = gCvarGtaDataPath.mValue;
+     }
+ 
++#ifdef _WIN32
++    // Main sets the current directory to the exe directory, so relative overrides
++    // and MUSIC paths are portable even when launched through a shortcut.
++    if (!gCvarCurrentBaseDir.mValue.empty())
++        gCvarCurrentBaseDir.mValue = std::filesystem::absolute(gCvarCurrentBaseDir.mValue).generic_string();
++#endif
+     if (gCvarCurrentBaseDir.mValue.length())
+     {
+         if (!IsDirectoryExists(gCvarCurrentBaseDir.mValue))
+@@ -292,7 +328,11 @@ bool FileSystem::ScanGtaMaps()
+     {
+         cxx::enum_files(currSearchPlace, [this](const std::string& curr)
+         {
++#ifdef _WIN32
++            if (cxx_stricmp(cxx::get_file_extension(curr).c_str(), GTA1MapFileExtension) == 0)
++#else
+             if (cxx::get_file_extension(curr) == GTA1MapFileExtension)
++#endif
+             {
+                 mGameMapsList.push_back(curr);
+             }
+@@ -305,7 +345,11 @@ bool FileSystem::ScanGtaMaps()
+ bool FileSystem::ReadConfig(const std::string& filePath, cxx::json_document& configDocument)
+ {
+     std::string configContent;
++#ifdef _WIN32
++    if (!ReadTextFile(mWorkingDirectoryPath + "/" + filePath, configContent))
++#else
+     if (!ReadTextFile(filePath, configContent))
++#endif
+     {
+         gConsole.LogMessage(eLogMessage_Warning, "Cannot open config file '%s'", filePath.c_str());
+         return false;
+@@ -322,7 +366,11 @@ bool FileSystem::ReadConfig(const std::string& filePath, cxx::json_document& con
+ bool FileSystem::SaveConfig(const std::string& filePath, const cxx::json_document& configDocument)
+ {
+     std::ofstream outputFile;
++#ifdef _WIN32
++    if (!CreateTextFile(filePath + ".tmp", outputFile))
++#else
+     if (!CreateTextFile(filePath, outputFile))
++#endif
+     {
+         gConsole.LogMessage(eLogMessage_Warning, "Cannot write config file '%s'", filePath.c_str());
+         return false;
+@@ -332,5 +380,18 @@ bool FileSystem::SaveConfig(const std::string& filePath, const cxx::json_documen
+     configDocument.dump_document(documentContent);
+ 
+     outputFile << documentContent;
++#ifdef _WIN32
++    outputFile.flush();
++    const bool good = bool(outputFile);
++    outputFile.close();
++    const std::string path = mWorkingDirectoryPath + "/" + filePath;
++    if (!good || !outputFile || !MoveFileExA((path + ".tmp").c_str(), path.c_str(),
++            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH))
++    {
++        std::remove((path + ".tmp").c_str());
++        gConsole.LogMessage(eLogMessage_Warning, "Cannot replace config '%s'; previous file preserved", path.c_str());
++        return false;
++    }
++#endif
+     return true;
+ }
 diff --git a/src/FollowCameraController.cpp b/src/FollowCameraController.cpp
 index 4a53905..29b4261 100644
 --- a/src/FollowCameraController.cpp
@@ -2394,10 +2699,35 @@ index cae3819..1ac82a5 100644
      "#version 300 es\n"
      "precision highp float;\n"
 diff --git a/src/GraphicsDevice.cpp b/src/GraphicsDevice.cpp
-index 2329731..38f9304 100644
+index 2329731..832cf2f 100644
 --- a/src/GraphicsDevice.cpp
 +++ b/src/GraphicsDevice.cpp
-@@ -213,6 +213,15 @@ bool GraphicsDevice::Initialize()
+@@ -6,6 +6,9 @@
+ #include "GpuTexture2D.h"
+ #include "GpuTextureArray2D.h"
+ #include "cvars.h"
++#ifdef _WIN32
++#include "CarnageGame.h"
++#endif
+ 
+ GraphicsDevice gGraphicsDevice;
+ 
+@@ -178,6 +181,14 @@ bool GraphicsDevice::Initialize()
+ #endif   
+     );
+ 
++#ifdef _WIN32
++    // Clamp bad config and fit smaller desktops without changing the desktop mode.
++    const GLFWvidmode* desktop = ::glfwGetVideoMode(::glfwGetPrimaryMonitor());
++    if (!desktop) {gConsole.LogMessage(eLogMessage_Error,"Cannot query desktop video mode");::glfwTerminate();return false;}
++    mScreenResolution.x = glm::clamp(mScreenResolution.x, 640, glm::max(640, desktop->width - 80));
++    mScreenResolution.y = glm::clamp(mScreenResolution.y, 480, glm::max(480, desktop->height - 100));
++    if (enableFullscreen) mScreenResolution = Point(desktop->width, desktop->height);
++#endif
+     GLFWmonitor* graphicsMonitor = nullptr;
+     if (enableFullscreen)
+     {
+@@ -213,6 +224,15 @@ bool GraphicsDevice::Initialize()
      }
      // setup current opengl context and register callback handlers
      ::glfwMakeContextCurrent(graphicsWindow);
@@ -2413,16 +2743,94 @@ index 2329731..38f9304 100644
      ::glfwSetMouseButtonCallback(graphicsWindow, [](GLFWwindow*, int button, int action, int mods)
          {
              if (action == GLFW_REPEAT)
-@@ -375,7 +384,7 @@ void GraphicsDevice::EnableVSync(bool vsyncEnabled)
+@@ -227,6 +247,14 @@ bool GraphicsDevice::Initialize()
+         });
+     ::glfwSetKeyCallback(graphicsWindow, [](GLFWwindow*, int keycode, int scancode, int action, int mods)
+         {
++#ifdef _WIN32
++            if (keycode == GLFW_KEY_ENTER && (mods & GLFW_MOD_ALT))
++            {
++                if (action == GLFW_PRESS)
++                    gCvarGraphicsFullscreen.SetFromString(gCvarGraphicsFullscreen.mValue ? "false" : "true", eCvarSetMethod_CommandLine);
++                return;
++            }
++#endif
+         if (action == GLFW_REPEAT)
+             return;
+ 
+@@ -251,8 +279,14 @@ bool GraphicsDevice::Initialize()
+             };
+             gInputs.InputEvent(ev);
+         });
+-    ::glfwSetCursorPosCallback(graphicsWindow, [](GLFWwindow*, double xposition, double yposition)
++    ::glfwSetCursorPosCallback(graphicsWindow, [](GLFWwindow* window, double xposition, double yposition)
+         {
++#ifdef _WIN32
++            int w,h,fw,fh;
++            ::glfwGetWindowSize(window,&w,&h);
++            ::glfwGetFramebufferSize(window,&fw,&fh);
++            if(w>0 && h>0) {xposition*=double(fw)/w;yposition*=double(fh)/h;}
++#endif
+             MouseMovedInputEvent ev 
+             { 
+                 static_cast<int>(xposition),
+@@ -264,7 +298,11 @@ bool GraphicsDevice::Initialize()
+         {
+             if (gamepad < eGamepadID_COUNT)
+             {
++#ifdef _WIN32
++                gInputs.SetGamepadPresent(gamepad, gamepadStatus == GLFW_CONNECTED && ::glfwJoystickIsGamepad(gamepad) == GLFW_TRUE);
++#else
+                 gInputs.SetGamepadPresent(gamepad, (gamepadStatus == GLFW_CONNECTED));
++#endif
+             }
+         });
+ 
+@@ -282,6 +320,9 @@ bool GraphicsDevice::Initialize()
+     mGraphicsWindow = graphicsWindow;
+     mGraphicsMonitor = graphicsMonitor;
+ 
++#ifdef _WIN32
++    ::glfwGetFramebufferSize(mGraphicsWindow,&mScreenResolution.x,&mScreenResolution.y);
++#endif
+     QueryGraphicsDeviceCaps();
+ 
+     // create global vertex array object
+@@ -375,7 +416,32 @@ void GraphicsDevice::EnableVSync(bool vsyncEnabled)
  
  void GraphicsDevice::EnableFullscreen(bool fullscreenEnabled)
  {
 -#ifdef __EMSCRIPTEN__
++#ifdef _WIN32
++    if (!IsDeviceInited()) return;
++    static int windowX=60, windowY=60, windowW=1280, windowH=720;
++    if (fullscreenEnabled && !mGraphicsMonitor)
++    {
++        GLFWmonitor* monitor=::glfwGetPrimaryMonitor();
++        const GLFWvidmode* mode=::glfwGetVideoMode(monitor);
++        if (!mode) return;
++        ::glfwGetWindowPos(mGraphicsWindow,&windowX,&windowY);
++        ::glfwGetWindowSize(mGraphicsWindow,&windowW,&windowH);
++        mGraphicsMonitor=monitor;
++        ::glfwSetWindowMonitor(mGraphicsWindow,monitor,0,0,mode->width,mode->height,mode->refreshRate);
++    }
++    else if (!fullscreenEnabled && mGraphicsMonitor)
++    {
++        const GLFWvidmode* desktop=::glfwGetVideoMode(::glfwGetPrimaryMonitor());
++        if (desktop) {
++            windowW=glm::min(windowW,glm::max(640,desktop->width-80));
++            windowH=glm::min(windowH,glm::max(480,desktop->height-100));
++        }
++        mGraphicsMonitor=nullptr;
++        ::glfwSetWindowMonitor(mGraphicsWindow,nullptr,windowX,windowY,windowW,windowH,0);
++    }
++    return;
++#endif
 +#ifdef C3D_GLES
      return; // fullscreen mode is not available
  #endif
  
-@@ -729,7 +738,13 @@ void GraphicsDevice::RenderIndexedPrimitives(ePrimitiveType primitive, eIndicesT
+@@ -729,7 +795,13 @@ void GraphicsDevice::RenderIndexedPrimitives(ePrimitiveType primitive, eIndicesT
  
      GLenum primitives = EnumToGL(primitive);
      GLenum indicesTypeGL = EnumToGL(indices);
@@ -2436,7 +2844,26 @@ index 2329731..38f9304 100644
      glCheckError();
  }
  
-@@ -782,6 +797,14 @@ void GraphicsDevice::ProcessGamepadsInputs()
+@@ -760,6 +832,18 @@ void GraphicsDevice::Present()
+     ::glfwSwapBuffers(mGraphicsWindow);
+     // process window messages
+     ::glfwPollEvents();
++#ifdef _WIN32
++    Point framebuffer;
++    ::glfwGetFramebufferSize(mGraphicsWindow,&framebuffer.x,&framebuffer.y);
++    if (framebuffer.x>0 && framebuffer.y>0 &&
++        (framebuffer.x!=mScreenResolution.x || framebuffer.y!=mScreenResolution.y))
++    {
++        mScreenResolution=framebuffer;
++        SetViewportRect(Rect{0,0,framebuffer.x,framebuffer.y});
++        SetScissorRect(Rect{0,0,framebuffer.x,framebuffer.y});
++        if(gCarnageGame.GetHumanPlayersCount()>0)gCarnageGame.SetupScreenLayout();
++    }
++#endif
+     if (::glfwWindowShouldClose(mGraphicsWindow) == GL_TRUE)
+     {
+         gSystem.QuitRequest();
+@@ -782,7 +866,19 @@ void GraphicsDevice::ProcessGamepadsInputs()
          if (::glfwGetGamepadState(icurr, &gamepadstate) != GLFW_TRUE)
              continue;
  
@@ -2448,10 +2875,29 @@ index 2329731..38f9304 100644
 +        currGamepad.mAxes[4] = (gamepadstate.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
 +        currGamepad.mAxes[5] = (gamepadstate.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
 +
++#ifdef _WIN32
++        for (int ibutton = 0; ibutton <= GLFW_GAMEPAD_BUTTON_LAST; ++ibutton)
++#else
          for (int ibutton = 0; ibutton < GLFW_JOYSTICK_LAST + 1; ++ibutton)
++#endif
          {
              eGamepadButton buttonNative = GlfwGamepadButtonToNative(ibutton);
-@@ -966,7 +989,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
+             if (buttonNative == eGamepadButton_null)
+@@ -889,6 +985,13 @@ bool GraphicsDevice::InitializeOGLExtensions()
+         return false;
+     }
+ 
++#ifdef _WIN32
++    if (!GLEW_VERSION_3_3)
++    {
++        gConsole.LogMessage(eLogMessage_Error, "OpenGL 3.3 core / GLSL 330 required. Install the Intel/AMD/NVIDIA graphics driver.");
++        return false;
++    }
++#endif
+     if (!GLEW_VERSION_3_2)
+     {
+         gConsole.LogMessage(eLogMessage_Warning, "OpenGL 3.2 API is not available");
+@@ -966,7 +1069,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
      if (mCurrentStates == renderStates && !forceState)
          return;
  
@@ -5277,7 +5723,7 @@ index 7eb198f..4764ca5 100644
  };
 \ No newline at end of file
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..c6b0c28 100644
+index a13af22..ff45167 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,157 +1,180 @@
@@ -5730,7 +6176,7 @@ index a13af22..c6b0c28 100644
              if (mCharacter->IsCarPassenger())
              {
                  mCtlState.mHorn = isActivated;
-@@ -223,287 +253,783 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+@@ -223,287 +253,786 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
                  {
                      mCharacter->mCurrentCar->EnableEmergencyLights(isActivated);
                  }
@@ -6435,6 +6881,9 @@ index a13af22..c6b0c28 100644
 +
 +void HumanPlayer::UpdateTestScript()
 +{
++#ifdef _WIN32
++    return; // release package never consumes Android scripted input
++#endif
 +    ReperspectiveTestScript& ts = mTestScript;
 +    if (!ts.mLoaded)
 +    {
@@ -6871,6 +7320,24 @@ index c272fba..3c2d455 100644
  
      FollowCameraController mFollowCameraController;
      FreeLookCameraController mFreeLookCameraController;
+diff --git a/src/ImGuiManager.cpp b/src/ImGuiManager.cpp
+index aaad5bb..8861b3a 100644
+--- a/src/ImGuiManager.cpp
++++ b/src/ImGuiManager.cpp
+@@ -58,6 +58,13 @@ bool ImGuiManager::Initialize()
+ 
+     GpuTexture2D* fontTexture = gGraphicsDevice.CreateTexture2D(eTextureFormat_RGBA8, iWidth, iHeight, pcPixels);
+     debug_assert(fontTexture);
++#ifdef _WIN32
++    if (!fontTexture)
++    {
++        gConsole.LogMessage(eLogMessage_Error,"Cannot allocate front-end font texture");
++        return false;
++    }
++#endif
+ 
+     io.Fonts->TexID = fontTexture;
+     return true;
 diff --git a/src/InputActionsMapping.cpp b/src/InputActionsMapping.cpp
 index 25e57de..0482818 100644
 --- a/src/InputActionsMapping.cpp
@@ -6912,11 +7379,26 @@ index 138173a..36ad51d 100644
  };
  
  // input events
+diff --git a/src/InputsManager.cpp b/src/InputsManager.cpp
+index ba15661..5a29b9e 100644
+--- a/src/InputsManager.cpp
++++ b/src/InputsManager.cpp
+@@ -120,6 +120,10 @@ void InputsManager::SetGamepadPresent(int gamepad, bool isPresent)
+ {
+     debug_assert(gamepad < eGamepadID_COUNT);
+ 
++#ifdef _WIN32
++    // A disconnected controller must not retain walking/aiming axis values.
++    for (float& axis: mGamepadsState[gamepad].mAxes) axis=0.0f;
++#endif
+     mGamepadsState[gamepad].mPresent = isPresent;
+     ::memset(mGamepadsState[gamepad].mButtons, 0, sizeof(mGamepadsState[gamepad].mButtons));
+ }
 diff --git a/src/Main.cpp b/src/Main.cpp
-index 068fae5..435924d 100644
+index 068fae5..076b482 100644
 --- a/src/Main.cpp
 +++ b/src/Main.cpp
-@@ -1,4 +1,7 @@
+@@ -1,10 +1,50 @@
 -#include "stdafx.h"
 +#include "stdafx.h"
 +#ifdef __ANDROID__
@@ -6925,11 +7407,56 @@ index 068fae5..435924d 100644
  
  int main(int argc, char *argv[])
  {
+-#if OS_NAME == OS_WINDOWS
++#if OS_NAME == OS_WINDOWS && defined(_MSC_VER) && defined(_DEBUG)
+     _CrtSetDbgFlag(_CRTDBG_ALLOC_MEM_DF | _CRTDBG_LEAK_CHECK_DF);
+ #endif
++#ifdef _WIN32
++    // Establish a stable base for relative paths before console/config startup.
++    // Legacy readers use narrow paths: enforce the documented short ASCII layout.
++    // This also avoids code-page-dependent conversion on UTF-8 configured Windows.
++    wchar_t executable[32768];
++    DWORD count = GetModuleFileNameW(nullptr, executable, 32768);
++    if (!count || count >= MAX_PATH || std::any_of(executable, executable + count,
++            [](wchar_t c) { return c > 127; }))
++    {
++        MessageBoxW(nullptr, L"Please extract the game to a short ASCII path, such as C:/Games/GTA-Perspective-Lock. The legacy game data readers cannot use this executable path.",
++            L"GTA Perspective Lock", MB_OK | MB_ICONERROR);
++        return EXIT_FAILURE;
++    }
++    std::string narrow;
++    for (DWORD i = 0; i < count; ++i) narrow.push_back(static_cast<char>(executable[i]));
++    const std::string directory = cxx::get_parent_directory(narrow);
++    if (!SetCurrentDirectoryA(directory.c_str()))
++    {
++        MessageBoxA(nullptr, "Cannot access the game folder. Extract the entire zip to a writable local folder.", "GTA Perspective Lock", MB_OK | MB_ICONERROR);
++        return EXIT_FAILURE;
++    }
++    try
++    {
++        gSystem.Run(argc - 1, argv + 1);
++    }
++    catch (const std::exception& error)
++    {
++        gConsole.LogMessage(eLogMessage_Error, "Unhandled error: %s", error.what());
++        gSystem.Terminate();
++    }
++    catch (...)
++    {
++        gConsole.LogMessage(eLogMessage_Error, "Unhandled application error");
++        gSystem.Terminate();
++    }
++#else
+     gSystem.Run(argc - 1, argv + 1);
++#endif
+     return 0;
+ }
+\ No newline at end of file
 diff --git a/src/MainMenuGamestate.cpp b/src/MainMenuGamestate.cpp
-index 9089238..e3a925f 100644
+index 9089238..18e5d97 100644
 --- a/src/MainMenuGamestate.cpp
 +++ b/src/MainMenuGamestate.cpp
-@@ -1,42 +1,318 @@
+@@ -1,42 +1,352 @@
 -#include "stdafx.h"
 -#include "MainMenuGamestate.h"
 -
@@ -7001,10 +7528,18 @@ index 9089238..e3a925f 100644
 \ No newline at end of file
 +bool MainMenuGamestate::LoadAssets() {
 +    auto font=[](frontend::Font& f,const std::string& name,int base) {
-+        std::ifstream in; return gFiles.OpenBinaryFile(name,in) && f.load(in,base);
++        std::ifstream in; const bool ok=gFiles.OpenBinaryFile(name,in) && f.load(in,base);
++#ifdef _WIN32
++        if(!ok)gConsole.LogMessage(eLogMessage_Error,"Missing or invalid GTADATA font: %s",name.c_str());
++#endif
++        return ok;
 +    };
 +    auto image=[](frontend::Image& im,const std::string& name,int h) {
-+        std::ifstream in;return gFiles.OpenBinaryFile(name,in) && im.load(in,640,h);
++        std::ifstream in;const bool ok=gFiles.OpenBinaryFile(name,in) && im.load(in,640,h);
++#ifdef _WIN32
++        if(!ok)gConsole.LogMessage(eLogMessage_Error,"Missing or invalid GTADATA image: %s",name.c_str());
++#endif
++        return ok;
 +    };
 +    bool ok=font(mHead,"F_MHEAD.FON",33) && font(mText,"F_MTEXT.FON",33) &&
 +        font(mMiss,"F_MMISS.FON",33) && font(mKey,"F_KEY.FON",1);
@@ -7012,7 +7547,11 @@ index 9089238..e3a925f 100644
 +    for(int i=0;i<8;++i) ok=image(mLogos[i],cxx::va("F_LOGO%d.RAW",i),168) && ok;
 +    for(int i=0;i<2;++i) ok=image(mLower[i],cxx::va("F_LOWER%d.RAW",i),312) && ok;
 +    auto decoration=[](frontend::Image& im,const std::string& name,int w,int h) {
-+        std::ifstream in;return gFiles.OpenBinaryFile(name,in) && im.load(in,w,h);
++        std::ifstream in;const bool ok=gFiles.OpenBinaryFile(name,in) && im.load(in,w,h);
++#ifdef _WIN32
++        if(!ok)gConsole.LogMessage(eLogMessage_Error,"Missing or invalid GTADATA image: %s",name.c_str());
++#endif
++        return ok;
 +    };
 +    for(int i=0;i<8;++i)ok=decoration(mPortraits[i],cxx::va("F_PLAY%d.RAW",i+1),102,141) && ok;
 +    ok=decoration(mNamePanel,"F_PLAYN.RAW",180,50) && ok;
@@ -7020,7 +7559,12 @@ index 9089238..e3a925f 100644
 +    ok=decoration(mBadges[1],"F_RSTARN.RAW",64,59) && ok;
 +    // Resolve maps from MISSION.INI, never assume city names are map filenames.
 +    std::ifstream ini;
-+    if(!gFiles.OpenTextFile("MISSION.INI",ini)) return false;
++    if(!gFiles.OpenTextFile("MISSION.INI",ini)) {
++#ifdef _WIN32
++        gConsole.LogMessage(eLogMessage_Error,"Missing GTADATA/MISSION.INI");
++#endif
++        return false;
++    }
 +    const auto script=mission::MissionScript::parse(ini);
 +    const int sections[]={1,2,102,103,202,203};
 +    mMaps.fill({});
@@ -7035,7 +7579,12 @@ index 9089238..e3a925f 100644
 +        }
 +        if(mMaps[i].empty())ok=false;
 +    }
-+    for(const auto& map:mMaps)if(map.empty())ok=false;
++    for(int i=0;i<6;++i)if(mMaps[i].empty()) {
++        ok=false;
++#ifdef _WIN32
++        gConsole.LogMessage(eLogMessage_Error,"MISSION.INI chapter %d has no matching .CMP map in GTADATA",sections[i]);
++#endif
++    }
 +    mFrame.width=640;mFrame.height=480;mFrame.pixels.assign(640*480*4,255);
 +    return ok;
 +}
@@ -7068,6 +7617,12 @@ index 9089238..e3a925f 100644
 +    if(mReady) mTexture=gGraphicsDevice.CreateTexture2D(eTextureFormat_RGBA8,640,480,mFrame.pixels.data());
 +    mReady=mReady && mTexture;
 +    if(mTexture)mTexture->SetSamplerState(eTextureFilterMode_Nearest,eTextureWrapMode_ClampToEdge);
++#ifdef _WIN32
++    if(!mReady) {
++        gConsole.LogMessage(eLogMessage_Error,"Front-end failed. Copy the complete original GTA1 GTADATA folder to: %s",gCvarCurrentBaseDir.mValue.c_str());
++        gSystem.Terminate();
++    }
++#endif
 +    if(!mReady)mQuitPending=true;
 +    if(!mReady)gConsole.LogMessage(eLogMessage_Warning,"Original front-end assets or mission catalog missing; cannot start menu");
 +}
@@ -7118,6 +7673,369 @@ index 9089238..e3a925f 100644
 +        if(!gCarnageGame.StartScenario(map)) {
 +            gCarnageGame.SetCurrentGamestate(this);
 +            gConsole.LogMessage(eLogMessage_Warning,"Selected chapter failed to start");
++#ifdef _WIN32
++            const std::string reason="Cannot load chapter map "+map+" or its STYLE*.G24 data from:\n"+
++                gCvarCurrentBaseDir.mValue+"\n\nSee "+gFiles.mExecutableDirectory+"/GTA-Perspective-Lock.log";
++            MessageBoxA(nullptr,reason.c_str(),"GTA Perspective Lock",MB_OK|MB_ICONERROR);
++#endif
++        }
++        return;
++    }
++    if(!mReady)return;
++    mElapsed+=gTimeManager.mGameFrameDelta;
++    Blit(mFrame,mLogos[int(mElapsed/0.083f)%8],0);
++    Blit(mFrame,mLower[mMenu.page==frontend::Page::Cities?1:0],168);
++    const int anim=int(mElapsed*25)%13+1;
++    auto cursor=[&](int x,int y){mKey.draw(mFrame,std::string(1,char(anim)),x,y);};
++    if(mMenu.page==frontend::Page::Main) {
++        mFrame.blit(mBadges[0],20,390);mFrame.blit(mBadges[1],556,390);
++        mHead.draw(mFrame,Text("Play"),196,216);
++        mHead.draw(mFrame,Text("Options"),196,216+mHead.height);
++        cursor(116,200+mMenu.row*mHead.height);
++        Center(mText,mFrame,Text("esc-key")+": "+Text("Quit"),480-mText.height);
++    } else if(mMenu.page==frontend::Page::Profiles || mMenu.page==frontend::Page::Name || mMenu.page==frontend::Page::Reset) {
++        // 00429f60: portrait and name-panel geometry, no replacement art.
++        const auto& profile=mMenu.profiles.players[mMenu.profiles.selected];
++        mFrame.blit(mPortraits[mMenu.profiles.selected],268,192);
++        mFrame.blit(mNamePanel,228,342);
++        const auto name=mMenu.page==frontend::Page::Name?mMenu.nameEntry:profile.name;
++        mText.draw(mFrame,name,319-mText.measure(name)/2,356);
++        if(mMenu.page==frontend::Page::Profiles) {
++            if(int(mElapsed*25)%8<4) {
++                mText.draw(mFrame,"<",319-90-2*mText.measure("<"),356);
++                mText.draw(mFrame,">",319+90+mText.measure(">"),356);
++            }
++            mMiss.draw(mFrame,Text("del-key")+": "+Text("rename"),440,400);
++            mMiss.draw(mFrame,Text("r-key")+": "+Text("Reset"),440,400+mMiss.height);
++        } else if(mMenu.page==frontend::Page::Reset) {
++            mHead.draw(mFrame,Text("Cancel"),80,216);
++            mHead.draw(mFrame,Text("Reset"),80,216+mHead.height);
++            cursor(0,200+mMenu.row*mHead.height);
++        }
++        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
++        const auto accept=Text("rtn-key")+": "+Text(mMenu.page==frontend::Page::Name?"save":"Play");
++        mText.draw(mFrame,accept,640-mText.measure(accept),480-mText.height);
++        // 00429df0: show only the selected profile's unlocked chapter scores.
++        int y=202;
++        mText.draw(mFrame,Text("scores"),414-mText.measure(Text("scores"))/2,y);
++        y+=mText.height+3;
++        for(int c=0;c<6;++c)if(profile.scores[c]>=0) {
++            mMiss.draw(mFrame,Text("mission"+std::to_string(c<2?1+c:c<4?102+c-2:202+c-4)),414,y);
++            const auto value=std::to_string(profile.scores[c]);
++            mMiss.draw(mFrame,value,414+128+std::max(0,72-mMiss.measure(value)),y);
++            y+=mMiss.height+3;
++        }
++    } else if(mMenu.page==frontend::Page::Cities) {
++        // 00427fc0: three public enemies for the selected chapter, low at bottom.
++        const auto title=Text("high-scores");
++        mText.draw(mFrame,title,440+(184-mText.measure(title))/2,130);
++        const auto& table=mMenu.profiles.highScores[mMenu.city*2+mMenu.chapter];
++        for(int rank=0;rank<3;++rank)if(table[rank].score) {
++            const int y=178-rank*12;
++            mMiss.draw(mFrame,table[rank].name,440,y);
++            const auto value=std::to_string(table[rank].score);
++            mMiss.draw(mFrame,value,552+std::max(0,72-mMiss.measure(value)),y);
++        }
++        // FUN_004277c0: city order maps to icon fonts 4,1,3.
++        const int xs[]={470,80,368},ys[]={242,230,338},dx[]={20,8,0};
++        for(int i=0;i<=mMenu.lastCity();++i) {
++            mCity[i].draw(mFrame,std::string(1,char(int(mElapsed*25)%int(mCity[i].glyphs.size())+1)),xs[i],ys[i]);
++            int y=ys[i]+mCity[i].height;
++            const std::string name=Text("city"+std::to_string(i));
++            mText.draw(mFrame,name,xs[i]-mText.measure(name)/2,y);
++            if(i==mMenu.city) {
++                y+=mText.height;
++                for(int j=0;j<=mMenu.lastChapter();++j) {
++                    const int section=(i==0?1:i==1?102:202)+j;
++                    const std::string title=std::to_string(j+1)+": "+Text("mission"+std::to_string(section));
++                    mMiss.draw(mFrame,title,xs[i]+dx[i]-mMiss.measure(title)/2,y+j*mMiss.height);
++                }
++                cursor(xs[i]+dx[i]-69,y+mMenu.chapter*mMiss.height-32);
++            }
++        }
++        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
++        const auto s=Text("rtn-key")+": "+Text("Play");
++        mText.draw(mFrame,s,640-mText.measure(s),480-mText.height);
++    } else if(mMenu.page==frontend::Page::Options) {
++        Center(mHead,mFrame,Text("Options"),176);
++        const char* keys[]={"Sound","Music","Text","music-mode","trans-effects"};
++        for(int i=0;i<5;++i) {
++            const auto value=i<2 ? (mMenu.options[i]?std::to_string(mMenu.options[i]):Text("Off")) :
++                i==2 ? Text(mMenu.options[i]==1?"Slow":mMenu.options[i]==2?"Normal":"Fast") :
++                i==3 ? Text(mMenu.options[i]?"constant":"radio") : Text(mMenu.options[i]?"On":"Off");
++            mText.draw(mFrame,Text(keys[i])+": "+value,196,224+i*mText.height);
++        }
++        cursor(116,208+mMenu.row*mText.height);
++        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
++        const auto s=Text("rtn-key")+": "+Text("save");mText.draw(mFrame,s,640-mText.measure(s),480-mText.height);
++    } else {
++        // Original state 10: credits scroll two pixels per 25 Hz update.
++        mCreditsElapsed+=gTimeManager.mGameFrameDelta;
++        const int scroll=int(mCreditsElapsed*25)*2;
++        const int first=scroll/mText.height,offset=scroll%mText.height;
++        if(first>=int(CountOf(frontend::credits)))mQuitPending=true;
++        for(int i=0;i<12 && first+i<int(CountOf(frontend::credits));++i) {
++            const char* text=frontend::credits[first+i];
++            const bool name=*text=='@';if(name)++text;
++            mText.draw(mFrame,text,name?128:64,192-offset+i*mText.height,192);
++        }
++    }
++    mTexture->Upload(mFrame.pixels.data());
++    const auto& res=gGraphicsDevice.mScreenResolution;frontend::View v(res.x,res.y);
++    ImGui::GetBackgroundDrawList()->AddImage(mTexture,ImVec2(v.x,v.y),ImVec2(v.x+640*v.scale,v.y+480*v.scale));
++}
++void MainMenuGamestate::Tap(int px,int py) {
++    const auto& r=gGraphicsDevice.mScreenResolution;frontend::View v(r.x,r.y);int x,y;
++    if(!mReady || !v.point(px,py,x,y))return;
++    if(mMenu.page==frontend::Page::Quit) {Act(frontend::Action::Accept);return;}
++    if(y>=480-mText.height) {
++        Act(mMenu.page==frontend::Page::Main || x<320?frontend::Action::Back:frontend::Action::Accept);
++        return;
++    }
++    if(mMenu.page==frontend::Page::Main && x>=110 && x<600 && y>=216 && y<216+2*mHead.height) {
++        mMenu.row=(y-216)/mHead.height;Act(frontend::Action::Accept);
++    } else if(mMenu.page==frontend::Page::Options && x>=110 && y>=224 && y<224+5*mText.height) {
++        mMenu.row=(y-224)/mText.height;Act(x<320?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Profiles) {
++        if(x>=440 && y>=400 && y<400+2*mMiss.height)Act(y<400+mMiss.height?frontend::Action::Rename:frontend::Action::Reset);
++        else if(y>=192 && y<392)Act(x<319?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Reset && x<320 && y>=216 && y<216+2*mHead.height) {
++        mMenu.row=(y-216)/mHead.height;Act(frontend::Action::Accept);
++    } else if(mMenu.page==frontend::Page::Cities) {
++        const int xs[]={470,80,368},ys[]={242,230,338};
++        for(int i=0;i<=mMenu.lastCity();++i)if(x>=xs[i]-80 && x<xs[i]+140 && y>=ys[i] && y<ys[i]+mCity[i].height+mText.height+2*mMiss.height) {
++            const int top=ys[i]+mCity[i].height+mText.height;
++            mMenu.city=i;
++            if(y>=top)mMenu.chapter=std::min(mMenu.lastChapter(),(y-top)/mMiss.height);
++            return;
++        }
++    }
++}
++void MainMenuGamestate::OnGamestateInputEvent(KeyInputEvent& e) {
++    if(!e.mPressed)return;
++    switch(e.mKeycode) {
++        case eKeycode_UP:Act(frontend::Action::Up);break;
++        case eKeycode_DOWN:Act(frontend::Action::Down);break;
++        case eKeycode_LEFT:Act(frontend::Action::Left);break;
++        case eKeycode_RIGHT:Act(frontend::Action::Right);break;
++        case eKeycode_DELETE:if(mMenu.page==frontend::Page::Profiles)Act(frontend::Action::Rename);else return;break;
++        case eKeycode_BACKSPACE:Act(frontend::Action::Erase);break;
++        case eKeycode_R:if(mMenu.page==frontend::Page::Profiles)Act(frontend::Action::Reset);else return;break;
++        case eKeycode_ENTER:Act(frontend::Action::Accept);break;
++        case eKeycode_ESCAPE:Act(frontend::Action::Back);break;
++        default:return;
++    }e.SetConsumed();
++}
++void MainMenuGamestate::OnGamestateInputEvent(GamepadInputEvent& e) {
++    if(!e.mPressed)return;
++    switch(e.mButton) {
++        case eGamepadButton_DPAD_Up:Act(frontend::Action::Up);break;
++        case eGamepadButton_DPAD_Down:Act(frontend::Action::Down);break;
++        case eGamepadButton_DPAD_Left:Act(frontend::Action::Left);break;
++        case eGamepadButton_DPAD_Right:Act(frontend::Action::Right);break;
++        case eGamepadButton_A:case eGamepadButton_Start:Act(frontend::Action::Accept);break;
++        case eGamepadButton_B:Act(frontend::Action::Back);break;
++        default:return;
++    }e.SetConsumed();
++}
++void MainMenuGamestate::OnGamestateInputEvent(MouseButtonInputEvent& e) {
++    if(e.mPressed && e.mButton==eMButton_LEFT) {Tap(gInputs.mCursorPositionX,gInputs.mCursorPositionY);e.SetConsumed();}
++}
++void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent&) {}
++void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent&) {}
++void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent& e) {
++    if(mMenu.page==frontend::Page::Name){mMenu.character(e.mUnicodeChar);e.SetConsumed();}
++}
++void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;}
+diff --git a/src/MainMenuGamestate.cpp.orig b/src/MainMenuGamestate.cpp.orig
+new file mode 100755
+index 0000000..db85b42
+--- /dev/null
++++ b/src/MainMenuGamestate.cpp.orig
+@@ -0,0 +1,351 @@
++#include "stdafx.h"
++#include "imgui.h"
++#include "FrontendCredits.h"
++#include "ProfileStore.h"
++#include "MainMenuGamestate.h"
++#include "CarnageGame.h"
++#include "GameTextsManager.h"
++#include "GpuTexture2D.h"
++#include "InputsManager.h"
++#include "TimeManager.h"
++#include "System.h"
++#include "AudioManager.h"
++#include "AudioSource.h"
++#include "cvars.h"
++#include "mission/MissionScript.h"
++
++CvarString gCvarFrontendProfiles("g_frontendProfiles", "", "Original front-end player profiles", CvarFlags_Archive);
++CvarInt gCvarTextSpeed("g_textSpeed", 2, 1, 3, "Original text speed", CvarFlags_Archive);
++CvarBoolean gCvarTransparencyEffects("g_transparencyEffects", true, "Original transparency preference (sprite consumer unresolved)", CvarFlags_Archive);
++
++namespace {
++std::string Text(const std::string& key) {return gGameTexts.GetText(key);}
++void Center(const frontend::Font& f,frontend::Image& frame,const std::string& s,int y) {
++    f.draw(frame,s,(640-f.measure(s))/2,y);
++}
++void Blit(frontend::Image& dst,const frontend::Image& src,int y) {
++    if(src.width==640 && y>=0 && y+src.height<=480)
++        std::copy(src.pixels.begin(),src.pixels.end(),dst.pixels.begin()+y*640*4);
++}
++}
++
++bool MainMenuGamestate::LoadAssets() {
++    auto font=[](frontend::Font& f,const std::string& name,int base) {
++        std::ifstream in; const bool ok=gFiles.OpenBinaryFile(name,in) && f.load(in,base);
++#ifdef _WIN32
++        if(!ok)gConsole.LogMessage(eLogMessage_Error,"Missing or invalid GTADATA font: %s",name.c_str());
++#endif
++        return ok;
++    };
++    auto image=[](frontend::Image& im,const std::string& name,int h) {
++        std::ifstream in;const bool ok=gFiles.OpenBinaryFile(name,in) && im.load(in,640,h);
++#ifdef _WIN32
++        if(!ok)gConsole.LogMessage(eLogMessage_Error,"Missing or invalid GTADATA image: %s",name.c_str());
++#endif
++        return ok;
++    };
++    bool ok=font(mHead,"F_MHEAD.FON",33) && font(mText,"F_MTEXT.FON",33) &&
++        font(mMiss,"F_MMISS.FON",33) && font(mKey,"F_KEY.FON",1);
++    for(int i=0;i<3;++i) ok=font(mCity[i],cxx::va("F_CITY%d.FON",i==0?4:i==1?1:3),1) && ok;
++    for(int i=0;i<8;++i) ok=image(mLogos[i],cxx::va("F_LOGO%d.RAW",i),168) && ok;
++    for(int i=0;i<2;++i) ok=image(mLower[i],cxx::va("F_LOWER%d.RAW",i),312) && ok;
++    auto decoration=[](frontend::Image& im,const std::string& name,int w,int h) {
++        std::ifstream in;const bool ok=gFiles.OpenBinaryFile(name,in) && im.load(in,w,h);
++#ifdef _WIN32
++        if(!ok)gConsole.LogMessage(eLogMessage_Error,"Missing or invalid GTADATA image: %s",name.c_str());
++#endif
++        return ok;
++    };
++    for(int i=0;i<8;++i)ok=decoration(mPortraits[i],cxx::va("F_PLAY%d.RAW",i+1),102,141) && ok;
++    ok=decoration(mNamePanel,"F_PLAYN.RAW",180,50) && ok;
++    ok=decoration(mBadges[0],"F_RSTAR.RAW",64,59) && ok;
++    ok=decoration(mBadges[1],"F_RSTARN.RAW",64,59) && ok;
++    // Resolve maps from MISSION.INI, never assume city names are map filenames.
++    std::ifstream ini;
++    if(!gFiles.OpenTextFile("MISSION.INI",ini)) {
++#ifdef _WIN32
++        gConsole.LogMessage(eLogMessage_Error,"Missing GTADATA/MISSION.INI");
++#endif
++        return false;
++    }
++    const auto script=mission::MissionScript::parse(ini);
++    const int sections[]={1,2,102,103,202,203};
++    mMaps.fill({});
++    for(int i=0;i<6;++i) for(const auto& section:script.sections) if(section.name==std::to_string(sections[i])) {
++        for(const auto& line:section.metadata) {
++            const auto name=frontend::mapFromMetadata(line.raw);
++            if(!name.empty()) {
++                // Linux/Android imports retain DOS uppercase filenames.
++                for(const auto& available:gFiles.mGameMapsList)
++                    if(cxx_stricmp(name.c_str(),available.c_str())==0) {mMaps[i]=available;break;}
++            }
++        }
++        if(mMaps[i].empty())ok=false;
++    }
++    for(int i=0;i<6;++i)if(mMaps[i].empty()) {
++        ok=false;
++#ifdef _WIN32
++        gConsole.LogMessage(eLogMessage_Error,"MISSION.INI chapter %d has no matching .CMP map in GTADATA",sections[i]);
++#endif
++    }
++    mFrame.width=640;mFrame.height=480;mFrame.pixels.assign(640*480*4,255);
++    return ok;
++}
++void MainMenuGamestate::OnGamestateEnter() {
++    mMenu=frontend::Menu{};mElapsed=0;mStartPending=mQuitPending=false;
++    mMenu.options[0]=gCvarSoundsVolume.mValue;mMenu.options[1]=gCvarMusicVolume.mValue;
++    const auto stored=frontend::loadProfiles(gFiles.mWorkingDirectoryPath+"/PLAYER_A.DAT",mMenu.profiles);
++    mProfileWritable=stored!=frontend::ProfileLoad::Invalid;
++    if(stored==frontend::ProfileLoad::Invalid)
++        gConsole.LogMessage(eLogMessage_Warning,"App player save rejected; preserving file");
++    if(stored==frontend::ProfileLoad::Missing) {
++        if(!gCvarFrontendProfiles.mValue.empty()) {
++            if(!mMenu.profiles.decode(gCvarFrontendProfiles.mValue))
++                gConsole.LogMessage(eLogMessage_Warning,"Archived player profiles rejected");
++        } else {
++            std::ifstream original;
++            if(gFiles.OpenBinaryFile("PLAYER_A.DAT",original) && !mMenu.profiles.importOriginal(original))
++                gConsole.LogMessage(eLogMessage_Warning,"Imported player save rejected");
++        }
++    }
++    if(mPendingChapter>=0) {
++        mMenu.profiles.selected=mPendingPlayer;
++        if(mMenu.profiles.recordResult(mPendingChapter,mPendingScore,mPendingSuccess))SaveProfiles();
++        mPendingChapter=-1;
++    }
++    mMenu.options[2]=gCvarTextSpeed.mValue;
++    mMenu.options[4]=gCvarTransparencyEffects.mValue;
++    mMenu.options[3]=gCvarGameMusicMode.mValue==eGameMusicMode_Constant;
++    mReady=LoadAssets();
++    if(mReady) mTexture=gGraphicsDevice.CreateTexture2D(eTextureFormat_RGBA8,640,480,mFrame.pixels.data());
++    mReady=mReady && mTexture;
++    if(mTexture)mTexture->SetSamplerState(eTextureFilterMode_Nearest,eTextureWrapMode_ClampToEdge);
++#ifdef _WIN32
++    if(!mReady) {
++        gConsole.LogMessage(eLogMessage_Error,"Front-end failed. Copy the complete original GTA1 GTADATA folder to: %s",gCvarCurrentBaseDir.mValue.c_str());
++        gSystem.Terminate();
++    }
++#endif
++    if(!mReady)mQuitPending=true;
++    if(!mReady)gConsole.LogMessage(eLogMessage_Warning,"Original front-end assets or mission catalog missing; cannot start menu");
++}
++void MainMenuGamestate::OnGamestateLeave() {
++    if(mTexture)gGraphicsDevice.DestroyTexture(mTexture);
++    mTexture=nullptr;mReady=false;
++}
++void MainMenuGamestate::QueueChapterResult(int chapter,int score,bool success) {
++    mPendingPlayer=mMenu.profiles.selected;
++    mPendingChapter=chapter;mPendingScore=score;mPendingSuccess=success;
++}
++void MainMenuGamestate::SaveProfiles() {
++    gCvarFrontendProfiles.mValue=mMenu.profiles.encode();
++    if(!mProfileWritable || !frontend::saveProfiles(gFiles.mWorkingDirectoryPath+"/PLAYER_A.DAT",mMenu.profiles))
++        gConsole.LogMessage(eLogMessage_Warning,"Could not save player profiles; prior file preserved");
++    if(!gSystem.SaveConfiguration())gConsole.LogMessage(eLogMessage_Warning,"Could not save profile preferences");
++}
++void MainMenuGamestate::Act(frontend::Action a) {
++    if(!mReady)return;
++    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Cities) {if(mMenu.profiles.unlocked(mMenu.city*2+mMenu.chapter)){SaveProfiles();mStartPending=true;}return;}
++    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Quit) {mQuitPending=true;return;}
++    const bool save=mMenu.page==frontend::Page::Options && a==frontend::Action::Accept;
++    const auto previous=mMenu.page;
++    const auto previousProfiles=mMenu.profiles.encode();
++    mMenu.act(a);
++    if(previousProfiles!=mMenu.profiles.encode())SaveProfiles();
++    if(mMenu.page==frontend::Page::Quit && previous!=mMenu.page)mCreditsElapsed=0;
++    if(mMenu.exitRequested)mQuitPending=true;
++    if(save) {
++        gCvarSoundsVolume.mValue=mMenu.options[0];gCvarMusicVolume.mValue=mMenu.options[1];
++        gCvarTextSpeed.mValue=mMenu.options[2];
++        gCvarTransparencyEffects.mValue=mMenu.options[4];
++        gCvarGameMusicMode.mValue=mMenu.options[3]?eGameMusicMode_Constant:eGameMusicMode_Radio;
++        gAudioManager.InitSoundsAndMusicGainValue();
++        if(gAudioManager.mMusicAudioSource)
++            gAudioManager.mMusicAudioSource->SetGain(gAudioManager.mMusicGain);
++        gSystem.SaveConfiguration();
++    }
++}
++void MainMenuGamestate::OnGamestateFrame() {
++    if(mQuitPending) {mQuitPending=false;gSystem.QuitRequest();return;}
++    // State transitions happen here, outside input dispatch and drawing.
++    if(mStartPending) {
++        mStartPending=false;
++        const std::string map=mMaps[mMenu.city*2+mMenu.chapter];
++        gCvarMapname.mValue=map;gCvarMapname.ClearModified();
++        gCarnageGame.mGameplayGamestate.mStartSection=mMenu.section();
++        if(!gCarnageGame.StartScenario(map)) {
++            gCarnageGame.SetCurrentGamestate(this);
++            gConsole.LogMessage(eLogMessage_Warning,"Selected chapter failed to start");
++#ifdef _WIN32
++            const std::string reason="Cannot load chapter map "+map+" or its STYLE*.G24 data from:\n"+
++                gCvarCurrentBaseDir.mValue+"\n\nSee "+gFiles.mExecutableDirectory+"/GTA-Perspective-Lock.log";
++            MessageBoxA(nullptr,reason.c_str(),"GTA Perspective Lock",MB_OK|MB_ICONERROR);
++#endif
 +        }
 +        return;
 +    }
@@ -7621,6 +8539,22 @@ index f58d79d..4b8924b 100644
      GpuBuffer* mCityMeshBufferV;
      GpuBuffer* mCityMeshBufferI;
  
+diff --git a/src/OpenGLDefs.h b/src/OpenGLDefs.h
+index 24d2264..4a8438d 100644
+--- a/src/OpenGLDefs.h
++++ b/src/OpenGLDefs.h
+@@ -6,7 +6,11 @@
+ 
+ // target opengl version code
+ #define OPENGL_CONTEXT_MAJOR_VERSION 3
++#ifdef _WIN32
++#define OPENGL_CONTEXT_MINOR_VERSION 3 // desktop shaders use GLSL 330 core
++#else
+ #define OPENGL_CONTEXT_MINOR_VERSION 2
++#endif
+ 
+ #define OPENGL_CORE_PROFILE
+ 
 diff --git a/src/OriginalAudio.h b/src/OriginalAudio.h
 new file mode 100755
 index 0000000..8d98198
@@ -7971,15 +8905,18 @@ index fde54f2..20c74a4 100644
  
 diff --git a/src/ProfileStore.h b/src/ProfileStore.h
 new file mode 100755
-index 0000000..51c8d82
+index 0000000..a7350bc
 --- /dev/null
 +++ b/src/ProfileStore.h
-@@ -0,0 +1,25 @@
+@@ -0,0 +1,34 @@
 +#pragma once
 +#include "FrontendProfile.h"
 +#include <fstream>
 +#include <cstdio>
 +#include <cerrno>
++#ifdef _WIN32
++#include <windows.h>
++#endif
 +namespace frontend {
 +enum class ProfileLoad {Missing,Invalid,Loaded};
 +inline ProfileLoad loadProfiles(const std::string& path,Profiles& profiles) {
@@ -7994,17 +8931,36 @@ index 0000000..51c8d82
 + std::ofstream out(temp,std::ios::binary|std::ios::trunc);
 + if(!out || !profiles.exportOriginal(out)) {out.close();std::remove(temp.c_str());return false;}
 + out.flush();const bool good=bool(out);out.close();
-+ if(!good || !out || std::rename(temp.c_str(),path.c_str())!=0) {
++#ifdef _WIN32
++ // Windows CRT rename refuses an existing target. Never remove the old save first.
++ const bool replaced=good && out && MoveFileExA(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
++#else
++ const bool replaced=good && out && std::rename(temp.c_str(),path.c_str())==0;
++#endif
++ if(!replaced) {
 +  std::remove(temp.c_str());return false;
 + }
 + return true;
 +}
 +}
 diff --git a/src/RenderingManager.cpp b/src/RenderingManager.cpp
-index c626ef7..62d6bc6 100644
+index c626ef7..20e02e8 100644
 --- a/src/RenderingManager.cpp
 +++ b/src/RenderingManager.cpp
-@@ -54,7 +54,22 @@ void RenderingManager::Deinit()
+@@ -24,7 +24,12 @@ RenderingManager::RenderingManager()
+ 
+ bool RenderingManager::Initialize()
+ {
++#ifdef _WIN32
++    if (!InitRenderPrograms())
++        return false;
++#else
+     InitRenderPrograms();
++#endif
+ 
+     if (!mMapRenderer.Initialize())
+     {
+@@ -54,7 +59,22 @@ void RenderingManager::Deinit()
  
  void RenderingManager::RenderFrame()
  {
@@ -8028,12 +8984,42 @@ index c626ef7..62d6bc6 100644
      gSpriteManager.RenderFrameBegin();
      mMapRenderer.RenderFrameBegin();
  
+@@ -99,6 +119,12 @@ void RenderingManager::FreeRenderPrograms()
+ 
+ bool RenderingManager::InitRenderPrograms()
+ {
++#ifdef _WIN32
++    // Propagate missing files and shader compile/link failures to System.
++    return mDefaultTexColorProgram.Initialize() && mGuiTexColorProgram.Initialize() &&
++        mCityMeshProgram.Initialize() && mSpritesProgram.Initialize() &&
++        mParticleProgram.Initialize() && mDebugProgram.Initialize();
++#else
+     mDefaultTexColorProgram.Initialize();
+     mGuiTexColorProgram.Initialize();
+     mCityMeshProgram.Initialize(); 
+@@ -107,6 +133,7 @@ bool RenderingManager::InitRenderPrograms()
+     mDebugProgram.Initialize();
+ 
+     return true;
++#endif
+ }
+ 
+ void RenderingManager::ReloadRenderPrograms()
 diff --git a/src/System.cpp b/src/System.cpp
-index 8b24701..a94c2c0 100644
+index 8b24701..2ae1e68 100644
 --- a/src/System.cpp
 +++ b/src/System.cpp
-@@ -22,6 +22,11 @@ static const char* SysConfigPath = "config/sys_config.json";
- CvarPoint gCvarGraphicsScreenDims("r_screenDims", Point(1024, 768), "Screen dimensions", CvarFlags_Archive | CvarFlags_RequiresAppRestart);
+@@ -19,9 +19,19 @@ static const char* SysConfigPath = "config/sys_config.json";
+ //////////////////////////////////////////////////////////////////////////
+ 
+ // graphics
+-CvarPoint gCvarGraphicsScreenDims("r_screenDims", Point(1024, 768), "Screen dimensions", CvarFlags_Archive | CvarFlags_RequiresAppRestart);
++#ifdef _WIN32
++CvarPoint gCvarGraphicsScreenDims("r_screenDims", Point(1280, 720),
++#else
++CvarPoint gCvarGraphicsScreenDims("r_screenDims", Point(1024, 768),
++#endif
++    "Screen dimensions", CvarFlags_Archive | CvarFlags_RequiresAppRestart);
  CvarBoolean gCvarGraphicsFullscreen("r_fullscreen", false, "Is fullscreen mode enabled", CvarFlags_Archive);
  CvarBoolean gCvarGraphicsVSync("r_vsync", true, "Is vertical synchronization enabled", CvarFlags_Archive);
 +#ifdef __ANDROID__
@@ -8044,6 +9030,98 @@ index 8b24701..a94c2c0 100644
  CvarBoolean gCvarGraphicsTexFiltering("r_texFiltering", false, "Is texture filtering enabled", CvarFlags_Archive | CvarFlags_Readonly);
  
  // physics
+@@ -47,7 +57,11 @@ void System::Initialize(int argc, char *argv[])
+ 
+     if (!gConsole.Initialize())
+     {
++#ifdef _WIN32
++        exit(EXIT_FAILURE); // Console::Initialize already displayed the log-write error
++#else
+         debug_assert(false);
++#endif
+     }
+ 
+     gConsole.LogMessage(eLogMessage_Info, GAME_TITLE);
+@@ -62,6 +76,13 @@ void System::Initialize(int argc, char *argv[])
+ 
+     LoadConfiguration();
+     ParseStartupParams(argc, argv);
++#ifdef _WIN32
++    if (!gFiles.SetupGtaDataLocation())
++    {
++        gConsole.LogMessage(eLogMessage_Error, "Copy the complete original GTA1 GTADATA folder to: %s", gCvarCurrentBaseDir.mValue.c_str());
++        Terminate();
++    }
++#endif
+ 
+     if (!gMemoryManager.Initialize())
+     {
+@@ -78,7 +99,10 @@ void System::Initialize(int argc, char *argv[])
+     if (!gImGuiManager.Initialize())
+     {
+         gConsole.LogMessage(eLogMessage_Warning, "Cannot initialize debug ui system");
+-        // ignore failure
++#ifdef _WIN32
++        Terminate(); // the front-end itself renders through ImGui
++#endif
++        // ignore failure on other platforms
+     }
+ 
+     if (!gRenderManager.Initialize())
+@@ -94,10 +118,19 @@ void System::Initialize(int argc, char *argv[])
+             gConsole.LogMessage(eLogMessage_Warning, "Cannot initialize audio device");
+         }
+ 
++#ifdef _WIN32
++        if (gAudioDevice.IsInitialized() && !gAudioManager.Initialize())
++        {
++            gConsole.LogMessage(eLogMessage_Warning, "Audio resources unavailable; continuing silently");
++            gAudioManager.Deinit();
++            gAudioDevice.Deinit();
++        }
++#else
+         if (!gAudioManager.Initialize())
+         {
+             gConsole.LogMessage(eLogMessage_Warning, "Cannot initialize audio manager");
+         }
++#endif
+     }
+     else
+     {
+@@ -112,10 +145,12 @@ void System::Initialize(int argc, char *argv[])
+ 
+     gTimeManager.Initialize();
+ 
++#ifndef _WIN32
+     if (!gFiles.SetupGtaDataLocation())
+     {
+         gConsole.LogMessage(eLogMessage_Warning, "Set valid gta gamedata location via sys config param 'g_gtadata'");
+     }
++#endif
+ 
+     if (!gCarnageGame.Initialize())
+     {
+@@ -181,6 +216,20 @@ void System::Run(int argc, char *argv[])
+ 
+ void System::Terminate()
+ {    
++#ifdef _WIN32
++    const std::string logPath = cxx::get_parent_directory(cxx::get_executable_path()) + "/GTA-Perspective-Lock.log";
++    std::string message = "The game could not continue.\n\n";
++    // Include recent loader/driver reasons, before the generic subsystem error.
++    const size_t start = gConsole.mLines.size() > 12 ? gConsole.mLines.size() - 12 : 0;
++    for (size_t i = start; i < gConsole.mLines.size(); ++i)
++        message += gConsole.mLines[i].mString + "\n";
++    message += "\nLog: " + logPath;
++    MessageBoxA(nullptr, message.c_str(), "GTA Perspective Lock - startup error", MB_OK | MB_ICONERROR | MB_SETFOREGROUND);
++    // Initialization may be partial: process teardown releases resources without
++    // calling render/audio destructors that require a working context.
++    ExitProcess(EXIT_FAILURE);
++#endif
++
+     Deinit(true); // leave gracefully
+ 
+ #ifdef __EMSCRIPTEN__
 diff --git a/src/System.h b/src/System.h
 index e0c0b12..e6ff6bb 100644
 --- a/src/System.h
@@ -12220,10 +13298,10 @@ index ed6bad2..8c822c2 100644
  impl_enum_strings(ePedestrianState)
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..9c11199
+index 0000000..218d84c
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1290 @@
+@@ -0,0 +1,1349 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -12436,7 +13514,10 @@ index 0000000..9c11199
 +        if(object->mClassID==eGameObjectClass_Pedestrian || !std::isfinite(at.x) || !std::isfinite(at.z)) {
 +            // 0043cfe0 (30-update off-screen count, conversion to an ambient
 +            // pedestrian) is not mapped; no script ped can exist yet.
-+            Once("cleanup-ped","Script pedestrian cleanup (0043cfe0) unresolved"); resolved=false; ++it; continue;
++            // 0043cfe0: unless it has been off screen for 30 checks the ped
++            // simply stops being a script ped and joins the ambient crowd.
++            object->mObjectFlags=(object->mObjectFlags | GameObjectFlags_Traffic);
++            ownedObjects_.erase(*it); it=missionEntities_.erase(it); continue;
 +        }
 +        const int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x)*64));
 +        const int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z)*64));
@@ -13053,6 +14134,55 @@ index 0000000..9c11199
 +        if(at==doors_.end() || !entity || entity->declaration.token!="DOOR") return WorldResult::Failure;
 +        AnimateDoor(at->second,false); return WorldResult::Done;
 +    }
++    if(token=="PED_ON") {
++        // 00441600 (SPEC_PEDS). Constructed here: FUTUREPED 0 and 4, the
++        // neutral objective-0x19 peds that make up most script peds. E is a
++        // target, never a reward. Only handle -1 takes the failure branch.
++        if(!entity || !gGameMap.IsLoaded()) return WorldResult::Unresolved;
++        const int kind=entity->value?*entity->value:-1;
++        if(kind!=0 && kind!=4) {
++            Once("ped-kind:"+std::to_string(kind),"PED_ON pedestrian type "+std::to_string(kind)+" (armed/following/car objectives) not constructed yet");
++            return WorldResult::Unresolved;
++        }
++        auto at=OriginalPosition(*entity,i.A); if(!at) return WorldResult::Unresolved;
++        // 00453e90: Z snaps to the bottom of the layer holding Z-2 pixels.
++        const int z=((((*at)[2]-2)>>6)<<6)+63;
++        auto position=EnginePosition((*at)[0],(*at)[1],z);
++        if(!position) return WorldResult::Failure;
++        auto* ped=SpawnPedestrian(*position,NO_REMAP);
++        if(!ped) return WorldResult::Failure;
++        ped->SetTransform(*position,-Convert::Fix16ToAngle(static_cast<unsigned short>(entity->aux)));
++        Once("ped-remap","Script pedestrians use the default look: remap table 004b20b0 and the 004770a0 spawn clearing are not applied");
++        int prefix=-1;
++        if(integer(entity->declaration.prefix,prefix) && prefix>=0) missionEntities_.erase(ped->mObjectID);
++        entity->value=static_cast<std::int32_t>(ped->mObjectID); entity->type=99;
++        return WorldResult::Success;
++    }
++    if(token=="CHANGE_PED_TYPE") {
++        // 00443690: always the success branch, never a reward. A dead ped is
++        // left alone. D 0 and 4 return the ped to the neutral standing
++        // objective, which is what a constructed ped already does here.
++        if(!entity || entity->type!=99) return WorldResult::Unresolved;
++        auto* object=ResolveObject(*entity);
++        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Success;
++        auto* ped=static_cast<Pedestrian*>(object);
++        if(ped->IsDead() || ped->IsDies()) return WorldResult::Success;
++        if(i.D==0 || i.D==4) return WorldResult::Success;
++        Once("ped-change:"+std::to_string(i.D),"CHANGE_PED_TYPE "+std::to_string(i.D)+" objective not implemented yet");
++        return WorldResult::Unresolved;
++    }
++    if(token=="KILL_PED") {
++        // 004445d0: a live type-99 record's ped is removed from the world
++        // (not killed) and from the cleanup list.
++        if(!entity || entity->type!=99 || !entity->value || *entity->value<0) return WorldResult::Failure;
++        if(auto* object=ResolveObject(*entity)) {
++            if(object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Unresolved;
++            if(static_cast<Pedestrian*>(object)->mCurrentCar) {Once("kill-ped-car","KILL_PED of a seated ped (00477320 car rules) unresolved"); return WorldResult::Unresolved;}
++            object->MarkForDeletion();
++            missionEntities_.erase(object->mObjectID);
++        }
++        return WorldResult::Done;
++    }
 +    if(token=="PARK") {
 +        // 004407c0 (SPEC_PARK): state1 takes the car over at speed 5, state2
 +        // waits for the approach position, puts the participant out at the
@@ -13329,6 +14459,13 @@ index 0000000..9c11199
 +                if(car->IsWrecked()) return true;
 +                if(car->GetCurrentDamage()==0) return false;
 +            }
++        }
++        if(at!=r.entities.end() && at->second.type==99 && r.instruction.D<=0) {
++            // Health query: a removed or dying ped reports no health.
++            auto* object=ResolveObject(at->second);
++            if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return true;
++            auto* ped=static_cast<Pedestrian*>(object);
++            return ped->IsDead() || ped->IsDies();
 +        }
 +        Once("goal-health", "IS_GOAL_DEAD requires a trusted pristine/wrecked mission car; other health/killer mappings unresolved");
 +        return {};
@@ -15695,20 +16832,23 @@ index 0000000..c317fdd
 +}
 +}
 diff --git a/src/path_utils.cpp b/src/path_utils.cpp
-index 117d3a9..50017e4 100644
+index 117d3a9..dfff4c9 100644
 --- a/src/path_utils.cpp
 +++ b/src/path_utils.cpp
-@@ -3,6 +3,9 @@
+@@ -3,6 +3,12 @@
  
  #if OS_NAME == OS_MACOS
      namespace filesystem = std::filesystem;
++#elif defined(_WIN32)
++#include <filesystem>
++    namespace filesystem = std::filesystem;
 +#elif defined(__ANDROID__)
 +#include <filesystem>
 +    namespace filesystem = std::filesystem;
  #elif defined(__EMSCRIPTEN__)
  #include <filesystem>
      namespace filesystem = std::__fs::filesystem;
-@@ -66,30 +69,34 @@ std::string get_executable_path()
+@@ -66,30 +72,34 @@ std::string get_executable_path()
  bool is_file_exists(std::string pathto)
  {
      filesystem::path sourcePath {pathto};
@@ -15749,7 +16889,7 @@ index 117d3a9..50017e4 100644
      {
          const filesystem::path& currentFile = iter_directory->path();
          enumproc(currentFile.filename().generic_string());
-@@ -99,12 +106,13 @@ void enum_files(std::string pathto, enum_files_proc enumproc)
+@@ -99,12 +109,13 @@ void enum_files(std::string pathto, enum_files_proc enumproc)
  void enum_files_recursive(std::string pathto, enum_files_proc enumproc)
  {
      filesystem::path sourcePath {pathto};
@@ -16541,10 +17681,17 @@ index 0000000..525ee21
 +    }
 +} // namespace reperspective
 diff --git a/src/stdafx.h b/src/stdafx.h
-index 7df6e72..da8f328 100644
+index 7df6e72..f28206b 100644
 --- a/src/stdafx.h
 +++ b/src/stdafx.h
-@@ -19,6 +19,10 @@
+@@ -14,11 +14,17 @@
+     #define NOMINMAX
+     #include <windows.h>
+     #include <mmsystem.h> // for multimedia timers
++    #undef near
++    #undef far
+ #elif OS_NAME == OS_LINUX || OS_NAME == OS_MACOS
+     #include <limits.h>
      #include <unistd.h>
  #endif
  
@@ -16555,7 +17702,7 @@ index 7df6e72..da8f328 100644
  #ifdef __EMSCRIPTEN__
      #include <emscripten/emscripten.h>
      #define GLFW_INCLUDE_ES3
-@@ -51,6 +55,10 @@
+@@ -51,6 +57,10 @@
  #include <functional>
  
  // opengl
@@ -16566,7 +17713,7 @@ index 7df6e72..da8f328 100644
  #include <GL/glew.h>
  #if OS_NAME == OS_MACOS
  #include <OpenGL/gl.h>
-@@ -58,6 +66,7 @@
+@@ -58,6 +68,7 @@
  #include <GL/gl.h>
  #endif
  #include "GLFW/glfw3.h"
@@ -16574,3 +17721,57 @@ index 7df6e72..da8f328 100644
  
  // glm
  #define GLM_ENABLE_EXPERIMENTAL
+diff --git a/src/windows.manifest b/src/windows.manifest
+new file mode 100755
+index 0000000..6d3ccfb
+--- /dev/null
++++ b/src/windows.manifest
+@@ -0,0 +1,15 @@
++<?xml version="1.0" encoding="UTF-8" standalone="yes"?>
++<assembly xmlns="urn:schemas-microsoft-com:asm.v1" manifestVersion="1.0">
++  <assemblyIdentity version="1.0.0.0" processorArchitecture="amd64" name="Carnage3D.GTAPerspectiveLock" type="win32"/>
++  <description>GTA Perspective Lock</description>
++  <trustInfo xmlns="urn:schemas-microsoft-com:asm.v3">
++    <security><requestedPrivileges><requestedExecutionLevel level="asInvoker" uiAccess="false"/></requestedPrivileges></security>
++  </trustInfo>
++  <compatibility xmlns="urn:schemas-microsoft-com:compatibility.v1">
++    <application><supportedOS Id="{8e0f7a12-bfb3-4fe8-b9a5-48fd50a15a9a}"/></application>
++  </compatibility>
++  <application xmlns="urn:schemas-microsoft-com:asm.v3"><windowsSettings>
++    <dpiAware xmlns="http://schemas.microsoft.com/SMI/2005/WindowsSettings">true/pm</dpiAware>
++    <dpiAwareness xmlns="http://schemas.microsoft.com/SMI/2016/WindowsSettings">PerMonitorV2,PerMonitor</dpiAwareness>
++  </windowsSettings></application>
++</assembly>
+diff --git a/src/windows.rc.in b/src/windows.rc.in
+new file mode 100755
+index 0000000..9b92d0c
+--- /dev/null
++++ b/src/windows.rc.in
+@@ -0,0 +1,27 @@
++#include <windows.h>
++1 RT_MANIFEST "@CMAKE_CURRENT_SOURCE_DIR@/src/windows.manifest"
++1 VERSIONINFO
++FILEVERSION @WINDOWS_FILE_VERSION@
++PRODUCTVERSION @WINDOWS_FILE_VERSION@
++FILEFLAGSMASK 0x3fL
++FILEFLAGS 0
++FILEOS VOS_NT_WINDOWS32
++FILETYPE VFT_APP
++FILESUBTYPE 0
++BEGIN
++  BLOCK "StringFileInfo"
++  BEGIN
++    BLOCK "040904b0"
++    BEGIN
++      VALUE "FileDescription", "GTA Perspective Lock (Carnage3D)\0"
++      VALUE "FileVersion", "@WINDOWS_APP_VERSION@\0"
++      VALUE "ProductName", "GTA Perspective Lock\0"
++      VALUE "ProductVersion", "@WINDOWS_APP_VERSION@\0"
++      VALUE "OriginalFilename", "GTA-Perspective-Lock.exe\0"
++    END
++  END
++  BLOCK "VarFileInfo"
++  BEGIN
++    VALUE "Translation", 0x0409, 1200
++  END
++END
