@@ -2149,7 +2149,7 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HUD.cpp b/src/HUD.cpp
-index da5e832..422e266 100644
+index da5e832..7b221bd 100644
 --- a/src/HUD.cpp
 +++ b/src/HUD.cpp
 @@ -1,4 +1,8 @@
@@ -2174,7 +2174,24 @@ index da5e832..422e266 100644
  {
  }
  
-@@ -550,23 +556,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
+@@ -405,10 +411,13 @@ void HUDSprite::Self_UpdateFrame()
+ 
+ void HUDWeaponPanel::SetWeapon(Weapon& weaponState)
+ {
+-    if ((mCurrAmmoAmount == 0) || (mCurrAmmoAmount != weaponState.mAmmunition))
++    // 00484190: unlimited byte100 displays the signed word counter /25.
++    const int amount=weaponState.mOriginalCountdown>=0?
++        static_cast<std::int16_t>(weaponState.mOriginalCountdown)/25:weaponState.mAmmunition;
++    if ((mCurrAmmoAmount == 0) || (mCurrAmmoAmount != amount))
+     {
+-        mCurrAmmoAmount = weaponState.mAmmunition;
+-        mCounter.SetText(cxx::va("%02d", weaponState.mAmmunition));
++        mCurrAmmoAmount = amount;
++        mCounter.SetText(cxx::va("%02d", amount));
+     }
+ 
+     WeaponInfo* weaponInfo = weaponState.GetWeaponInfo();
+@@ -550,23 +559,12 @@ void HUDWantedLevelPanel::Self_SetupHUD()
  
  void HUDScoresPanel::SetScores(int score, int lives, int multiplier)
  {
@@ -2204,7 +2221,7 @@ index da5e832..422e266 100644
  }
  
  void HUDScoresPanel::Self_SetupHUD()
-@@ -729,8 +724,8 @@ void HUDPagerMessage::Self_UpdateFrame()
+@@ -729,8 +727,8 @@ void HUDPagerMessage::Self_UpdateFrame()
  
  void HUDPagerMessage::UpdateTextScroll(float dt)
  {
@@ -2215,7 +2232,7 @@ index da5e832..422e266 100644
  
      if (IsTextScrolling())
      {
-@@ -824,6 +819,12 @@ void HUD::PushHelpMessage()
+@@ -824,6 +822,12 @@ void HUD::PushHelpMessage()
      // todo
  }
  
@@ -2228,7 +2245,7 @@ index da5e832..422e266 100644
  void HUD::PushMissionMessage()
  {
      // todo
-@@ -901,7 +902,10 @@ void HUD::UpdateScreen()
+@@ -901,7 +905,10 @@ void HUD::UpdateScreen()
      }
  
      // update wanted level
@@ -2240,7 +2257,7 @@ index da5e832..422e266 100644
      mWantedLevelPanel.SetWantedLevel(currentWantedLevel);
      if (currentWantedLevel == 0)
      {
-@@ -913,7 +917,7 @@ void HUD::UpdateScreen()
+@@ -913,7 +920,7 @@ void HUD::UpdateScreen()
      }
  
      // update scores
@@ -2249,7 +2266,7 @@ index da5e832..422e266 100644
  
                                         // todo: implement bonus
      if (true)
-@@ -936,6 +940,19 @@ void HUD::DrawScreen(GuiContext& context)
+@@ -936,6 +943,19 @@ void HUD::DrawScreen(GuiContext& context)
      mPanelsContainer.ComputeSize();
      mPanelsContainer.ComputePosition();
      mPanelsContainer.DrawFrame(context);
@@ -2282,7 +2299,7 @@ index 7eb198f..f8b7f94 100644
  
      void ShowBigFontMessage(eHUDBigFontMessage messageType);
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..a7de203 100644
+index a13af22..7698e3c 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,5 +1,23 @@
@@ -2351,7 +2368,29 @@ index a13af22..a7de203 100644
  }
  
  void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
-@@ -354,12 +377,37 @@ void HumanPlayer::Respawn()
+@@ -274,6 +297,10 @@ void HumanPlayer::SetWantedLevel(int wantedLevel)
+ 
+ void HumanPlayer::SwitchNextWeapon()
+ {
++    if(mCharacter->mOriginalWeaponsEnabled) {
++        mCharacter->mOriginalWeapons.next();
++        mCharacter->SyncOriginalWeapons(); return;
++    }
+     int nextWeaponIndex = (mCharacter->mCurrentWeapon + 1) % eWeapon_COUNT;
+     for (; nextWeaponIndex != mCharacter->mCurrentWeapon; )
+     {
+@@ -289,6 +316,10 @@ void HumanPlayer::SwitchNextWeapon()
+ 
+ void HumanPlayer::SwitchPrevWeapon()
+ {
++    if(mCharacter->mOriginalWeaponsEnabled) {
++        mCharacter->mOriginalWeapons.previous();
++        mCharacter->SyncOriginalWeapons(); return;
++    }
+     int nextWeaponIndex = mCharacter->mCurrentWeapon == 0 ? (eWeapon_COUNT - 1) : (mCharacter->mCurrentWeapon - 1);
+     for (; nextWeaponIndex != mCharacter->mCurrentWeapon; )
+     {
+@@ -354,12 +385,37 @@ void HumanPlayer::Respawn()
  
  void HumanPlayer::ProcessRepetitiveActions()
  {
@@ -2389,7 +2428,7 @@ index a13af22..a7de203 100644
      // update in car
      if (mCharacter->IsCarPassenger())
      {
-@@ -384,10 +432,14 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -384,10 +440,14 @@ void HumanPlayer::ProcessRepetitiveActions()
          }
  
          mCtlState.mHandBrake = GetActionState(eInputAction_HandBrake);
@@ -2404,7 +2443,7 @@ index a13af22..a7de203 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +455,364 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +463,364 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -3542,10 +3581,18 @@ index f58d79d..4b8924b 100644
      GpuBuffer* mCityMeshBufferI;
  
 diff --git a/src/Pedestrian.cpp b/src/Pedestrian.cpp
-index af31f7a..03de8ea 100644
+index af31f7a..4db55be 100644
 --- a/src/Pedestrian.cpp
 +++ b/src/Pedestrian.cpp
-@@ -303,6 +303,11 @@ void Pedestrian::UpdateLocomotion()
+@@ -51,6 +51,7 @@ void Pedestrian::HandleSpawn()
+     }
+ 
+     mCurrentStateTime = 0.0f;
++    mOriginalWeaponsEnabled=false; mOriginalWeapons={};
+ 
+     for (int currWeapon = 0; currWeapon < eWeapon_COUNT; ++currWeapon)
+     {
+@@ -303,6 +304,11 @@ void Pedestrian::UpdateLocomotion()
      if (walkingSpeed)
      {
          glm::vec2 moveDirection = mPhysicsBody->GetSignVector() * (inverseDirection ? -1.0f : 1.0f);
@@ -3557,6 +3604,80 @@ index af31f7a..03de8ea 100644
          desiredVelocity = moveDirection * walkingSpeed;
          
          if (!isSlideOverCar)
+@@ -395,8 +401,41 @@ Weapon& Pedestrian::GetWeapon(eWeaponID weapon)
+     return mWeapons[weapon];
+ }
+ 
++eWeaponID Pedestrian::OriginalWeaponID(int type)
++{
++    static constexpr eWeaponID ids[]={eWeapon_Fists,eWeapon_Pistol,eWeapon_Machinegun,eWeapon_RocketLauncher,eWeapon_Flamethrower};
++    return ids[type>=0 && type<=4?type:0];
++}
++void Pedestrian::EnableOriginalWeapons()
++{
++    if(mOriginalWeaponsEnabled) return;
++    mOriginalWeaponsEnabled=true;
++    mOriginalWeapons={};
++    for(int i=1;i<=4;++i) {
++        mOriginalWeapons.ammo[i]=static_cast<std::uint8_t>(glm::clamp(mWeapons[OriginalWeaponID(i)].mAmmunition,0,99));
++        if(mCurrentWeapon==OriginalWeaponID(i)) mOriginalWeapons.selected=i;
++    }
++    mOriginalWeapons.machine=5; mOriginalWeapons.flame=5;
++    SyncOriginalWeapons();
++}
++void Pedestrian::SyncOriginalWeapons()
++{
++    if(!mOriginalWeaponsEnabled) return;
++    for(int i=1;i<=4;++i) {
++        auto& weapon=mWeapons[OriginalWeaponID(i)];
++        weapon.mAmmunition=mOriginalWeapons.ammo[i];
++        weapon.mOriginalCountdown=weapon.mAmmunition==100?mOriginalWeapons.timer:-1;
++        if(weapon.mAmmunition==0) weapon.mWeaponState=eWeaponState_OutOfAmmunition;
++        else if(weapon.mWeaponState==eWeaponState_OutOfAmmunition) weapon.mWeaponState=eWeaponState_ReadyToFire;
++    }
++    mChangeWeapon=OriginalWeaponID(mOriginalWeapons.selected);
++}
+ void Pedestrian::ChangeWeapon(eWeaponID weapon)
+ {
++    if(mOriginalWeaponsEnabled) {
++        if(mOriginalWeapons.active()) return;
++        for(int i=0;i<=4;++i) if(OriginalWeaponID(i)==weapon) mOriginalWeapons.selected=i;
++    }
+     mChangeWeapon = weapon;
+ }
+ 
+@@ -728,6 +767,7 @@ void Pedestrian::DecArmor()
+ 
+ void Pedestrian::ClearAmmunition()
+ {
++    if(mOriginalWeaponsEnabled) {mOriginalWeapons={}; SyncOriginalWeapons();}
+     for (int icurrent = 0; icurrent < eWeapon_COUNT; ++icurrent)
+     {
+         mWeapons[icurrent].SetAmmunition(0);
+diff --git a/src/Pedestrian.h b/src/Pedestrian.h
+index 6880e30..7f7b92b 100644
+--- a/src/Pedestrian.h
++++ b/src/Pedestrian.h
+@@ -7,6 +7,7 @@
+ #include "Sprite2D.h"
+ #include "PedestrianStates.h"
+ #include "Weapon.h"
++#include "mission/OriginalWeapons.h"
+ #include "PedestrianInfo.h"
+ 
+ // defines generic city pedestrian
+@@ -36,6 +37,11 @@ public:
+     eWeaponID mCurrentWeapon = eWeapon_Fists;
+     eWeaponID mChangeWeapon = eWeapon_Fists;
+     Weapon mWeapons[eWeapon_COUNT];
++    bool mOriginalWeaponsEnabled = false;
++    gta::OriginalWeapons mOriginalWeapons;
++    void EnableOriginalWeapons();
++    void SyncOriginalWeapons();
++    static eWeaponID OriginalWeaponID(int type);
+ 
+     int mArmorHitPoints = 0;
+ 
 diff --git a/src/PedestrianStates.cpp b/src/PedestrianStates.cpp
 index e5fbabd..bfa9527 100644
 --- a/src/PedestrianStates.cpp
@@ -3904,6 +4025,55 @@ index 0d3a52f..e691f13 100644
      friend class PhysicsManager;
  
  public:
+diff --git a/src/Weapon.cpp b/src/Weapon.cpp
+index c985a63..d2825fa 100644
+--- a/src/Weapon.cpp
++++ b/src/Weapon.cpp
+@@ -13,6 +13,7 @@ void Weapon::Setup(eWeaponID weaponID, int ammunition)
+     mWeaponID = weaponID;
+     mLastFireTime = 0.0f;
+     mShotsCounter = 0;
++    mOriginalCountdown = -1;
+     mWeaponState = eWeaponState_ReadyToFire;
+     SetAmmunition(ammunition);
+ }
+@@ -31,6 +32,10 @@ void Weapon::UpdateFrame()
+ 
+ bool Weapon::Fire(Pedestrian* shooter)
+ {
++    // A queued engine switch must not consume the newly selected original gun's ammo
++    // through a shot from the previous gun.
++    if(shooter && shooter->mOriginalWeaponsEnabled &&
++       mWeaponID!=Pedestrian::OriginalWeaponID(shooter->mOriginalWeapons.selected)) return false;
+     if (!IsReadyToFire())
+         return false;
+ 
+@@ -99,7 +104,12 @@ bool Weapon::Fire(Pedestrian* shooter)
+ 
+     mLastFireTime = gTimeManager.mGameTime;
+     ++mShotsCounter;
+-    if (IsUsesAmmunition())
++    if (shooter->mOriginalWeaponsEnabled)
++    {
++        shooter->mOriginalWeapons.fire();
++        shooter->SyncOriginalWeapons();
++    }
++    else if (IsUsesAmmunition())
+     {
+         if (mShotsCounter >= weaponInfo->mShotsPerClip)
+         {
+diff --git a/src/Weapon.h b/src/Weapon.h
+index 1bb9416..4c30140 100644
+--- a/src/Weapon.h
++++ b/src/Weapon.h
+@@ -13,6 +13,7 @@ public:
+     float mLastFireTime = 0.0f;
+     int mAmmunition = 0;
+     int mShotsCounter = 0;
++    int mOriginalCountdown = -1; // -1: ordinary ammo, >=0: original unlimited timer
+ 
+ public:
+     Weapon() = default;
 diff --git a/src/android/gles_glew_compat.h b/src/android/gles_glew_compat.h
 new file mode 100644
 index 0000000..70113b2
@@ -5091,10 +5261,10 @@ index dfc0703..03fea57 100644
      gConsole.RegisterVariable(&gCvarSysListCvars);
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..8ccb877
+index 0000000..913c5cf
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,767 @@
+@@ -0,0 +1,835 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -5202,6 +5372,11 @@ index 0000000..8ccb877
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
 +    UpdateDoors();
++    // MissionSession dispatches this at25Hz. 00464880 decrements once/update.
++    for(int owner=0;owner<4;++owner) if(auto* h=player(owner)) if(auto* ped=h->mCharacter)
++        if(ped->mOriginalWeaponsEnabled) {
++            ped->mOriginalWeapons.tick(); ped->SyncOriginalWeapons();
++        }
 +    UpdatePickups();
 +    // Original combo/VM timers are update counts, not seconds.
 +    for(int i=0;i<4;++i) if(player(i)) economy_.tickCombo(i);
@@ -5281,6 +5456,26 @@ index 0000000..8ccb877
 +            if(entry.type==12 && economy_.state(owner).skipPenaltyOnce) continue;
 +            std::string key;
 +            switch(entry.type) {
++            case 1: case 2: case 3: case 4: {
++                ped->EnableOriginalWeapons();
++                if(!ped->mOriginalWeapons.collect(entry.type,entry.help)) continue;
++                ped->SyncOriginalWeapons();
++                static const char* keys[]={"","pistol","machine-gun","rocket","flame"};
++                key=keys[entry.type];
++                if(entry.help>=100) Once("frenzy-midi","Unresolved original MIDI cue3; not a level sample index");
++                break;
++            }
++            case 10:
++                if(ped->mArmorHitPoints==3) continue;
++                ped->mArmorHitPoints=3; key="armour"; break;
++            case 9:
++                // Associated participants share this ped, not every local owner.
++                for(int other=0;other<4;++other) if(auto* h=player(other))
++                    if(h->mCharacter==ped) {economy_.clearWanted(other); h->SetWantedLevel(0);}
++                key="bribe"; break;
++            case 15:
++                economy_.addLife(owner); key="life+";
++                Once("life-midi","Unresolved original MIDI cue11; not a level sample index"); break;
 +            case 11: economy_.incrementMultiplier(owner); key="multiplier+"; break;
 +            case 12: economy_.state(owner).skipPenaltyOnce=true; key="jail-free"; break;
 +            case 13: economy_.addLife(owner); key="life+"; break;
@@ -5290,7 +5485,7 @@ index 0000000..8ccb877
 +            }
 +            human->mHUD.ShowMissionText(gGameTexts.GetText(key));
 +            // 0046a560: odd nonweapon types use3, even types use4.
-+            gAudioManager.StartSound(eSfxSampleType_Level,(entry.type&1)?3:4,SfxFlags_None,object->mTransform.mPosition);
++            gAudioManager.StartSound(eSfxSampleType_Level,(entry.type>=1 && entry.type<=4)?2:((entry.type&1)?3:4),SfxFlags_None,object->mTransform.mPosition);
 +            object->MarkForDeletion();
 +            missionEntities_.erase(entry.object); ownedObjects_.erase(entry.object);
 +            entry=Pickup{};
@@ -5475,6 +5670,40 @@ index 0000000..8ccb877
 +        if(token=="ARROWCAR" || token=="ARROWPED") return WorldResult::Done;
 +        Once("arrow-location","Mission arrow location unresolved"); return WorldResult::Unresolved;
 +    }
++    if(token=="KF_PROCESS" || token=="RESET_KF") {
++        // 0043d150/00444d60 visit mission cars, not ambient cars.
++        // There is no proved engine equivalent of their lock bits yet.
++        for(auto id:missionEntities_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id))
++            if(object->mClassID==eGameObjectClass_Car && !object->IsMarkedForDeletion()) {
++                Once("kf-lock","Unresolved KF mission vehicle lock projection"); return WorldResult::Unresolved;
++            }
++        return WorldResult::Done;
++    }
++    if(token=="POWERUP_OFF") {
++        if(!entity || entity->declaration.token!="POWERUP") return WorldResult::Unresolved;
++        auto pos=DeclarationPosition(entity->declaration);if(!pos)return WorldResult::Unresolved;
++        const auto x=std::llround(Convert::MetersToMapUnits(pos->x)*pickup::cell);
++        const auto y=std::llround(Convert::MetersToMapUnits(pos->z)*pickup::cell);
++        for(auto& entry:pickups_) if(entry.object && entry.shape.p[4].x==x && entry.shape.p[4].y==y) {
++            if(auto* o=gGameObjectsManager.GetGameObjectByID(entry.object)) o->MarkForDeletion();
++            missionEntities_.erase(entry.object);ownedObjects_.erase(entry.object);entry=Pickup{};break;
++        }
++        return WorldResult::Done;
++    }
++    if(token=="STOP_FRENZY") {
++        if(auto* h=player(r.owner)) if(auto* ped=h->mCharacter) {
++            if(ped->mOriginalWeaponsEnabled) {ped->mOriginalWeapons.stop(); ped->SyncOriginalWeapons();}
++            return WorldResult::Done;
++        }
++        return WorldResult::Unresolved;
++    }
++    if(token=="FRENZY_CHECK") {
++        if(auto* h=player(r.owner)) if(auto* ped=h->mCharacter) {
++            gAudioManager.StartSound(eSfxSampleType_Level,4,SfxFlags_None,ped->mTransform.mPosition);
++            return WorldResult::Done;
++        }
++        return WorldResult::Unresolved;
++    }
 +    if(token=="BANK_ROBBERY") {
 +        economy_.bankRobbery(r.owner);
 +        if(i.A>=0) Once("crime9-gate","BANK_ROBBERY crime9 witness/ownership gate unresolved; direct +1000/level4 applied");
@@ -5486,7 +5715,7 @@ index 0000000..8ccb877
 +        auto pos=DeclarationPosition(entity->declaration);
 +        const auto& operands=entity->declaration.operands;
 +        if(!pos || operands.size()!=2 || !integer(operands[0],type) ||
-+           !integer(operands[1],help) || (type!=11 && type!=12 && type!=13 && type!=14)) return WorldResult::Unresolved;
++           !integer(operands[1],help) || (type<1 || type>15 || type==5 || type==6 || type==7 || type==8)) return WorldResult::Unresolved;
 +        if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return WorldResult::Unresolved;
 +        auto slot=std::find_if(pickups_.begin(),pickups_.end(),[](const Pickup& p){return !p.object;});
 +        // Original dispatcher ignores constructor failure (including a full table).
@@ -5550,6 +5779,15 @@ index 0000000..8ccb877
 +    return WorldResult::Unresolved;
 +}
 +std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
++    if(r.token=="IS_POWERUP_DONE") {
++        const auto at=r.entities.find(r.instruction.A);
++        if(at==r.entities.end() || at->second.declaration.token!="POWERUP") return {};
++        auto pos=DeclarationPosition(at->second.declaration); if(!pos)return {};
++        const auto x=std::llround(Convert::MetersToMapUnits(pos->x)*pickup::cell);
++        const auto y=std::llround(Convert::MetersToMapUnits(pos->z)*pickup::cell);
++        for(const auto& entry:pickups_) if(entry.object && entry.shape.p[4].x==x && entry.shape.p[4].y==y) return false;
++        return true;
++    }
 +    if(r.token=="DOOR_ON" || r.token=="DOOR_OFF") {
 +        auto at=doors_.find(r.instruction.A);
 +        auto entity=r.entities.find(r.instruction.A);
@@ -5940,7 +6178,7 @@ index 0000000..2f6bb17
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..b00395b
+index 0000000..a40d50d
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -6045,7 +6283,7 @@ index 0000000..b00395b
 +{"NEXT_KICK", "0044904c", false}, // 97
 +{"KILL_SIDE_PROC", "004493c1", true}, // 98
 +{"SET_KILLTRIG", "00449b32", false}, // 99
-+{"POWERUP_OFF", "0044824a", false}, // 100
++{"POWERUP_OFF", "0044824a", true}, // 100
 +{"KILL_SPEC_PROC", "004495ea", true}, // 101
 +{"SCORE_CHECK", "00449ba4", true}, // 102
 +{"FRENZY_SET", "00449bed", true}, // 103
@@ -6662,7 +6900,7 @@ index 0000000..a134cf6
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..09582bb
+index 0000000..25aae3e
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
 @@ -0,0 +1,486 @@
@@ -7146,8 +7384,8 @@ index 0000000..09582bb
 +    // Immediate commands with known outer S and explicit reward exclusions.
 +    // Guards/spawn fields/coordinate transforms remain part of execute's contract.
 +    if(oneOf(op,{12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,
-+                 64,65,68,74,76,79,80,81,91,92,93,94,110,111,116,119,124,126,129,134,144,146})) {
-+        effect(!oneOf(op,{15,37,64,68,80,110,111,116})); return;
++                 64,65,68,74,76,79,80,81,91,92,93,94,100,110,111,116,119,124,126,129,134,144,146})) {
++        effect(!oneOf(op,{15,37,64,68,80,100,110,111,116})); return;
 +    }
 +    block(slot,std::string(commands[op].name)+" dispatch missing");
 +}
@@ -7263,6 +7501,83 @@ index 0000000..e455b34
 +    bool wait(int slot,const Instruction&);
 +    bool predicate(int slot,Instruction&,bool&);
 +    WorldResult execute(int slot,Instruction&);
++};
++}
+diff --git a/src/mission/OriginalWeapons.h b/src/mission/OriginalWeapons.h
+new file mode 100755
+index 0000000..ff8d036
+--- /dev/null
++++ b/src/mission/OriginalWeapons.h
+@@ -0,0 +1,71 @@
++#pragma once
++#include <array>
++#include <cstdint>
++namespace gta {
++// Recovered participant fields: 0074f2a0..b2, f2f4/f2f6.
++// Original order is fists,pistol,machinegun,rocket,flame (not engine order).
++struct OriginalWeapons {
++ std::array<std::uint8_t,5> ammo{};
++ int selected=0;
++ std::uint8_t machine=0,flame=0;
++ std::uint16_t timer=0;
++ std::int16_t kfTimer=-1;
++ bool active() const {
++  for(int i=1;i<=4;++i) if(ammo[i]==100) return true;
++  return false;
++ }
++ bool collect(int type,int value) {
++  if(type<1 || type>4) return false;
++  // 0046a560 gates before removing the world object.
++  if(value<100 && ammo[type]==99) return false;
++  if(value>=100) {
++   if(kfTimer!=-1 || active()) return false;
++   savedSelected=selected; savedAmmo=ammo[selected];
++   savedMachine=machine; savedFlame=flame;
++   ammo[type]=100; timer=static_cast<std::uint16_t>(value-100); selected=type;
++  } else if(ammo[type]!=100) {
++   // 00461b50: byte addition BEFORE unsigned clamp; default table stride8.
++   constexpr int defaults[]={0,20,20,5,10};
++   const auto sum=static_cast<std::uint8_t>(ammo[type]+(value==0?defaults[type]:value));
++   ammo[type]=sum>99?99:sum;
++   if(type==2) machine=5;
++   if(type==4) flame=5;
++   if(ammo[selected]!=100) selected=type;
++  }
++  return true;
++ }
++ void next() { // 004619f0, fists terminates search; no wrap past fists.
++  if(ammo[selected]==100) return;
++  do {if(++selected==5) {selected=0;return;}} while(ammo[selected]==0);
++ }
++ void previous() { // 00461a50
++  if(ammo[selected]==100) return;
++  if(selected==0) selected=5;
++  do {if(--selected==0) return;} while(ammo[selected]==0);
++ }
++ void fire() { // 00461d40 called only after original shot dispatch.
++  if(selected==0 || ammo[selected]==100) return;
++  if(ammo[selected]) {
++   bool consume=true;
++   if(selected==2) {machine=static_cast<std::uint8_t>(machine-1);consume=machine==0;if(consume)machine=5;}
++   if(selected==4) {flame=static_cast<std::uint8_t>(flame-1);consume=flame==0;if(consume)flame=5;}
++   if(consume) --ammo[selected];
++  }
++  if(ammo[selected]==0) selected=ammo[1]?1:0;
++ }
++ void stop() { // 00461c70 restores only saved SELECTED ammo, not whole inventory.
++  for(int i=1;i<=4;++i) if(ammo[i]==100) {
++   ammo[i]=0; timer=0; selected=savedSelected;
++   ammo[selected]=savedAmmo; machine=savedMachine;flame=savedFlame;
++   if(selected!=0 && ammo[selected]==0) previous();
++  }
++ }
++ void tick() { // 00464880: update counters, not dt seconds; zero never expires.
++  if(timer && --timer==0) stop();
++  if(kfTimer>=0) --kfTimer;
++ }
++private:
++ int savedSelected=0;
++ std::uint8_t savedAmmo=0,savedMachine=0,savedFlame=0;
 +};
 +}
 diff --git a/src/mission/ParkRules.h b/src/mission/ParkRules.h
@@ -7628,10 +7943,10 @@ index 117d3a9..50017e4 100644
          enumproc(currentFile.filename().generic_string());
 diff --git a/src/police/PoliceRuntime.cpp b/src/police/PoliceRuntime.cpp
 new file mode 100755
-index 0000000..f290c6b
+index 0000000..02e4b6f
 --- /dev/null
 +++ b/src/police/PoliceRuntime.cpp
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,129 @@
 +#include "../stdafx.h"
 +#include "PoliceRuntime.h"
 +#include "../CarnageGame.h"
@@ -7719,13 +8034,20 @@ index 0000000..f290c6b
 +    const bool preserve=reason==Action::ArrestRespawn && !system_.clearInventory(owner);
 +    std::array<Weapon,eWeapon_COUNT> weapons;
 +    std::copy(std::begin(ped->mWeapons),std::end(ped->mWeapons),weapons.begin());
-+    const auto selected=ped->mCurrentWeapon;
++    // 00464880 restores frenzy even when jail-free preserves ordinary inventory.
++    if(ped->mOriginalWeaponsEnabled) {ped->mOriginalWeapons.stop();ped->mOriginalWeapons.kfTimer=-1;ped->SyncOriginalWeapons();}
++    const bool originalEnabled=ped->mOriginalWeaponsEnabled;
++    const auto originalInventory=ped->mOriginalWeapons;
++    // Refresh projected weapon snapshots after restoration.
++    std::copy(std::begin(ped->mWeapons),std::end(ped->mWeapons),weapons.begin());
++    const auto selected=originalEnabled?ped->mChangeWeapon:ped->mCurrentWeapon;
 +    const int armor=ped->mArmorHitPoints;
 +    ped->PutOnFoot(); ped->HandleDespawn();
 +    ped->SetTransform(position,Convert::Fix16ToAngle(heading)); ped->HandleSpawn();
 +    if(preserve) {
 +        std::copy(weapons.begin(),weapons.end(),std::begin(ped->mWeapons));
-+        ped->ChangeWeapon(selected); ped->mArmorHitPoints=armor;
++        ped->mOriginalWeaponsEnabled=originalEnabled;ped->mOriginalWeapons=originalInventory;
++        ped->ChangeWeapon(selected);ped->SyncOriginalWeapons(); ped->mArmorHitPoints=armor;
 +    }
 +    representation2_[owner]=true; system_.respawned(owner); reported_[owner]=false;
 +    return true;
