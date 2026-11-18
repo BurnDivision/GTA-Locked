@@ -23,6 +23,11 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
   options with cancel rollback, original exit credits. Touch, gamepad and keyboard. The automated test harness
   (config/test_input.txt present) skips the menu and starts the default scenario.
 
+- The mission file has one fused line (`-1[1003]`) that ends one chapter and starts the next; the parser now
+  reads all 18 chapters (was 17).
+- Car collision damage counts during an impact, not for every physics frame of a lasting contact (holding the gas
+  against a wall used to blow the car up within a second). The original's exact damage rule is still to be recovered.
+
 ## Not yet working
 - The first mission chain runs (headless) phone -> RESET -> brief -> PARKED_ON (original car) -> POWERUP_ON (original
   pickup object, help text, sound; ped and stationary-driver contact) -> ARROW -> DOOR -> PLAYER/IS_PED_IN_CAR -> ENABLE

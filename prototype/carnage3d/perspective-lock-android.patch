@@ -903,6 +903,37 @@ index 80c49d3..15b4b1d 100644
      void SetLifeDuration(int numAnimationCycles);
  
      // Set decoration move in direction
+diff --git a/src/DrivingInput.h b/src/DrivingInput.h
+new file mode 100755
+index 0000000..f7a26fe
+--- /dev/null
++++ b/src/DrivingInput.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include <algorithm>
++#include <cmath>
++namespace driving {
++struct Result { float acceleration; float steering; };
++inline Result Resolve(float acceleration, float steering, float leftX,
++                      float rightY, float leftTrigger, float rightTrigger)
++{
++    if (std::fabs(leftX) > 0.2f)
++    {
++        const float amount = std::min((std::fabs(leftX) - 0.2f) / 0.7f, 1.0f);
++        steering = leftX > 0 ? amount : -amount;
++    }
++    // GLFW stick Y is positive down. Rescale outside the dead zone to 0..1.
++    // Override both triggers, including the touch aim stick's synthetic fire trigger.
++    if (std::fabs(rightY) > 0.2f)
++    {
++        const float amount = std::min((std::fabs(rightY) - 0.2f) / 0.8f, 1.0f);
++        return {rightY < 0 ? amount : -amount, steering};
++    }
++    if (rightTrigger > 0.1f) acceleration = std::max(acceleration, rightTrigger);
++    if (leftTrigger > 0.1f) acceleration = std::max(-1.0f, std::min(acceleration - leftTrigger, 1.0f));
++    return {acceleration, steering};
++}
++}
 diff --git a/src/FileSystem.cpp b/src/FileSystem.cpp
 index feb69e3..4610835 100644
 --- a/src/FileSystem.cpp
@@ -2628,11 +2659,12 @@ index 7eb198f..f8b7f94 100644
  
      void ShowBigFontMessage(eHUDBigFontMessage messageType);
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..2103152 100644
+index a13af22..e8975f1 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
-@@ -1,5 +1,24 @@
+@@ -1,5 +1,25 @@
  #include "stdafx.h"
++#include "DrivingInput.h"
  #include "HumanPlayer.h"
 +#include "AudioManager.h"
 +#include "imgui.h"
@@ -2656,7 +2688,7 @@ index a13af22..2103152 100644
  #include "Pedestrian.h"
  #include "PhysicsManager.h"
  #include "PhysicsBody.h"
-@@ -134,6 +153,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
+@@ -134,6 +154,7 @@ void HumanPlayer::InputEvent(MouseScrollInputEvent& inputEvent)
  void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
  {
      debug_assert(mCharacter);
@@ -2664,7 +2696,7 @@ index a13af22..2103152 100644
  
      if (mCameraController)
      {
-@@ -151,7 +171,8 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
+@@ -151,7 +172,8 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
      if (action != eInputAction_null)
      {
          ProcessInputAction(action, inputEvent.mPressed);
@@ -2674,7 +2706,7 @@ index a13af22..2103152 100644
      }
  
      // handle special keys
-@@ -168,6 +189,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+@@ -168,6 +190,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
  
      if (inputEvent.mGamepad != mActionsMapping.mGamepadID)
          return;
@@ -2682,7 +2714,7 @@ index a13af22..2103152 100644
  
      eInputActionsGroup actionGroup = mCharacter->IsCarPassenger() ? eInputActionsGroup_InCar : eInputActionsGroup_OnFoot;
      eInputAction action = mActionsMapping.GetAction(actionGroup, inputEvent.mButton);
-@@ -181,6 +203,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
+@@ -181,6 +204,7 @@ void HumanPlayer::InputEvent(GamepadInputEvent& inputEvent)
      {
          ProcessInputAction(action, inputEvent.mPressed);
          inputEvent.SetConsumed();
@@ -2690,7 +2722,7 @@ index a13af22..2103152 100644
      }
  }
  
-@@ -194,6 +217,7 @@ void HumanPlayer::InputEventLost()
+@@ -194,6 +218,7 @@ void HumanPlayer::InputEventLost()
      // reset actions
      mCtlState.Clear();
      mUpdateInputs = false;
@@ -2698,7 +2730,7 @@ index a13af22..2103152 100644
  }
  
  void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
-@@ -215,6 +239,10 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+@@ -215,6 +240,10 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
              // those are updating in ProcessRepetitiveActions
          break;
  
@@ -2709,7 +2741,7 @@ index a13af22..2103152 100644
          case eInputAction_Horn:
              if (mCharacter->IsCarPassenger())
              {
-@@ -274,6 +302,10 @@ void HumanPlayer::SetWantedLevel(int wantedLevel)
+@@ -274,6 +303,10 @@ void HumanPlayer::SetWantedLevel(int wantedLevel)
  
  void HumanPlayer::SwitchNextWeapon()
  {
@@ -2720,7 +2752,7 @@ index a13af22..2103152 100644
      int nextWeaponIndex = (mCharacter->mCurrentWeapon + 1) % eWeapon_COUNT;
      for (; nextWeaponIndex != mCharacter->mCurrentWeapon; )
      {
-@@ -289,6 +321,10 @@ void HumanPlayer::SwitchNextWeapon()
+@@ -289,6 +322,10 @@ void HumanPlayer::SwitchNextWeapon()
  
  void HumanPlayer::SwitchPrevWeapon()
  {
@@ -2731,7 +2763,7 @@ index a13af22..2103152 100644
      int nextWeaponIndex = mCharacter->mCurrentWeapon == 0 ? (eWeapon_COUNT - 1) : (mCharacter->mCurrentWeapon - 1);
      for (; nextWeaponIndex != mCharacter->mCurrentWeapon; )
      {
-@@ -354,12 +390,37 @@ void HumanPlayer::Respawn()
+@@ -354,12 +391,37 @@ void HumanPlayer::Respawn()
  
  void HumanPlayer::ProcessRepetitiveActions()
  {
@@ -2769,7 +2801,7 @@ index a13af22..2103152 100644
      // update in car
      if (mCharacter->IsCarPassenger())
      {
-@@ -384,10 +445,14 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -384,10 +446,14 @@ void HumanPlayer::ProcessRepetitiveActions()
          }
  
          mCtlState.mHandBrake = GetActionState(eInputAction_HandBrake);
@@ -2784,7 +2816,7 @@ index a13af22..2103152 100644
          mCtlState.mTurnLeft = GetActionState(eInputAction_TurnLeft);
          mCtlState.mTurnRight = GetActionState(eInputAction_TurnRight);
          mCtlState.mRun = GetActionState(eInputAction_Run);
-@@ -403,6 +468,364 @@ void HumanPlayer::ProcessRepetitiveActions()
+@@ -403,6 +469,356 @@ void HumanPlayer::ProcessRepetitiveActions()
      }
  }
  
@@ -2962,27 +2994,19 @@ index a13af22..2103152 100644
 +}
 +
 +// in a car with a gamepad: the left stick steers in proportion, the right trigger is the gas
-+// and the left trigger brakes / reverses (the d-pad and stick-as-d-pad keep working too)
++// and the left trigger brakes / reverses; the right stick Y overrides both (the d-pad keeps working too)
 +void HumanPlayer::ProcessGamepadDriving()
 +{
 +    const GamepadState& pad = GetPadState();
 +    if (!pad.mPresent)
 +        return;
 +
-+    const float stickX = pad.mAxes[0];
-+    if (fabsf(stickX) > 0.2f)
-+    {
-+        const float amount = glm::min((fabsf(stickX) - 0.2f) / 0.7f, 1.0f);
-+        mCtlState.mSteerDirection = (stickX > 0.0f) ? amount : -amount;
-+    }
-+    if (pad.mAxes[5] > 0.1f)
-+    {
-+        mCtlState.mAcceleration = glm::max(mCtlState.mAcceleration, pad.mAxes[5]);
-+    }
-+    if (pad.mAxes[4] > 0.1f)
-+    {
-+        mCtlState.mAcceleration = glm::clamp(mCtlState.mAcceleration - pad.mAxes[4], -1.0f, 1.0f);
-+    }
++    // right stick Y (up = gas, down = brake/reverse) overrides the triggers outside its dead zone
++    const driving::Result input = driving::Resolve(
++        mCtlState.mAcceleration, mCtlState.mSteerDirection,
++        pad.mAxes[0], pad.mAxes[3], pad.mAxes[4], pad.mAxes[5]);
++    mCtlState.mAcceleration = input.acceleration;
++    mCtlState.mSteerDirection = input.steering;
 +    mTestScript.mTwinStick = false;
 +    mTestScript.mFire = false;
 +}
@@ -4457,10 +4481,19 @@ index 0000000..5374a82
 +}
 +}
 diff --git a/src/Vehicle.cpp b/src/Vehicle.cpp
-index 3847938..e42e457 100644
+index 3847938..7686ad9 100644
 --- a/src/Vehicle.cpp
 +++ b/src/Vehicle.cpp
-@@ -91,6 +91,20 @@ void Vehicle::UpdateFrame()
+@@ -49,6 +49,8 @@ void Vehicle::HandleSpawn()
+ 
+     mCarWrecked = false;
+     mCurrentDamage = 0;
++    mCollisionContactStartTime = -1000.0f;
++    mCollisionContactLastTime = -1000.0f;
+     mDamageDeltaBits = 0;
+     mPrevDeltaBits = 0;
+     mSpriteIndex = mCarInfo->mSpriteIndex; // todo: handle bike fallen state 
+@@ -91,6 +93,20 @@ void Vehicle::UpdateFrame()
      UpdateBurnEffect();
      UpdateDamageFromRailways();
      UpdateEngineSound();
@@ -4481,7 +4514,7 @@ index 3847938..e42e457 100644
      if (IsWrecked())
          return;
  
-@@ -674,6 +688,19 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
+@@ -674,6 +690,31 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
          }
          if (damageInfo.mContactImpulse < 100.0f) // todo: magic numbers
              return false;
@@ -4498,11 +4531,35 @@ index 3847938..e42e457 100644
 +            if (IsAiDriven(this) && IsAiDriven(static_cast<const Vehicle*>(damageInfo.mSourceObject)))
 +                return false;
 +        }
++
++        // The physics engine reports a contact on every step while two bodies stay pressed together.
++        // Counting each of those frames meant that holding the gas against a wall for a second added
++        // 100 damage and blew the car up. Damage now counts during the impact (the first moments of
++        // a contact); a new impact starts once the contact has been quiet for a moment.
++        const float contactNow = gTimeManager.mGameTime;
++        if ((contactNow - mCollisionContactLastTime) > 0.25f)
++        {
++            mCollisionContactStartTime = contactNow;
++        }
++        mCollisionContactLastTime = contactNow;
++        const bool isImpactPhase = (contactNow - mCollisionContactStartTime) <= 0.15f;
  
          glm::vec2 localPoint = mPhysicsBody->GetLocalPoint(damageInfo.mContactPoint.mPosition);
  
+@@ -743,7 +784,10 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
+             }
+         }
+ 
+-        ++mCurrentDamage;
++        if (isImpactPhase)
++        {
++            ++mCurrentDamage;
++        }
+         return true;
+     }
+ 
 diff --git a/src/Vehicle.h b/src/Vehicle.h
-index 0d3a52f..e691f13 100644
+index 0d3a52f..1c05673 100644
 --- a/src/Vehicle.h
 +++ b/src/Vehicle.h
 @@ -21,6 +21,7 @@ class Vehicle final: public GameObject, public SpriteAnimListener
@@ -4513,6 +4570,16 @@ index 0d3a52f..e691f13 100644
      friend class PhysicsManager;
  
  public:
+@@ -176,6 +177,9 @@ private:
+     int mRemapIndex = NO_REMAP;
+     int mSpriteIndex = 0;
+     int mCurrentDamage = 0;
++    // collision damage counts during the impact, not for as long as the bodies stay pressed together
++    float mCollisionContactStartTime = -1000.0f;
++    float mCollisionContactLastTime = -1000.0f;
+ 
+     bool mCarWrecked = false;
+ 
 diff --git a/src/Weapon.cpp b/src/Weapon.cpp
 index c985a63..d2825fa 100644
 --- a/src/Weapon.cpp
@@ -7187,10 +7254,10 @@ index 0000000..0f786bb
 +}
 diff --git a/src/mission/MissionScript.cpp b/src/mission/MissionScript.cpp
 new file mode 100755
-index 0000000..1d41912
+index 0000000..b8b1f7f
 --- /dev/null
 +++ b/src/mission/MissionScript.cpp
-@@ -0,0 +1,86 @@
+@@ -0,0 +1,94 @@
 +#include "MissionScript.h"
 +#include <regex>
 +#include <sstream>
@@ -7222,8 +7289,9 @@ index 0000000..1d41912
 +    const std::regex instruction(R"(^([0-9]+)\s+([A-Z_][A-Z_0-9]*)(\s.*)?$)");
 +    const std::regex title(R"(^[^,]+,\s*[0-9]+,\s*[^,\s]+\.[cC][mM][pP],\s*[+-]?[0-9]+,\s*$)");
 +    const std::regex config(R"(^[0-9]+(?:\s+[0-9]+){5}$)");
-+    // A fused terminator/header is retained as a marker, not silently repaired.
-+    const std::regex marker(R"(^-1(?:\[[^\[\]]+\])?$)");
++    // The original data has one fused terminator/header line ("-1[1003]"): it ends the current
++    // section and starts the next one. The marker is kept on the section it terminates.
++    const std::regex marker(R"(^-1(?:\[([^\[\]]+)\])?$)");
 +    MissionScript result;
 +    for (std::string raw; std::getline(input, raw);) {
 +        const auto line = ++result.lineCount;
@@ -7261,7 +7329,14 @@ index 0000000..1d41912
 +                section.instructionsByLabel[record.label].push_back(section.instructions.size());
 +                section.instructions.push_back(std::move(record));
 +            }
-+        } else if (std::regex_match(text, marker)) section.markers.push_back({line, raw});
++        } else if (std::regex_match(text, match, marker)) {
++            section.markers.push_back({line, raw});
++            if (match[1].matched) {
++                Section next;
++                next.line = line; next.raw = raw; next.name = match[1].str();
++                result.sections.push_back(std::move(next));
++            }
++        }
 +        else if (std::regex_match(text, title) || std::regex_match(text, config)) section.metadata.push_back({line, raw});
 +        else result.unparsed.push_back({line, raw});
 +    }
