@@ -5277,7 +5277,7 @@ index 7eb198f..4764ca5 100644
  };
 \ No newline at end of file
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..b2080f7 100644
+index a13af22..c6b0c28 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,157 +1,180 @@
@@ -5730,7 +5730,7 @@ index a13af22..b2080f7 100644
              if (mCharacter->IsCarPassenger())
              {
                  mCtlState.mHorn = isActivated;
-@@ -223,287 +253,762 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+@@ -223,287 +253,783 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
                  {
                      mCharacter->mCurrentCar->EnableEmergencyLights(isActivated);
                  }
@@ -6547,7 +6547,10 @@ index a13af22..b2080f7 100644
 +    else if (first == "@log") ts.mLogInterval = glm::max(0.05f, (float) atof(arg.c_str()));
 +    else if (first == "@facing")
 +    {
-+        mCharacter->SetOrientation(cxx::angle_t::from_degrees((float) atof(arg.c_str())), eTransformSpace_World);
++        if (mCharacter->mCurrentCar)
++            mCharacter->mCurrentCar->SetOrientation(cxx::angle_t::from_degrees((float) atof(arg.c_str())), eTransformSpace_World);
++        else
++            mCharacter->SetOrientation(cxx::angle_t::from_degrees((float) atof(arg.c_str())), eTransformSpace_World);
 +    }
 +    else if (first == "@car")
 +    {
@@ -6595,6 +6598,24 @@ index a13af22..b2080f7 100644
 +            subject->SetPosition(position);
 +        }
 +        gConsole.LogMessage(eLogMessage_Debug, "RPT tp %.2f,%.2f", cellX, cellY);
++    }
++    else if (first == "@seat")
++    {
++        // "@seat <record>": put the player in the driver seat of that mission car
++        int seated = 0;
++        if (mission::MissionSession* session = mission::MissionSession::Current())
++        {
++            for (const auto& record: session->World().CarRecords())
++            {
++                GameObject* object = gGameObjectsManager.GetGameObjectByID(record.first);
++                if (record.second == atoi(arg.c_str()) && object && object->mClassID == eGameObjectClass_Car)
++                {
++                    mCharacter->PutInsideCar(static_cast<Vehicle*>(object), eCarSeat_Driver);
++                    seated = 1;
++                }
++            }
++        }
++        gConsole.LogMessage(eLogMessage_Debug, "RPT seat %s ok=%d", arg.c_str(), seated);
 +    }
 +    else if (first == "@mis")
 +    {
@@ -8085,22 +8106,1317 @@ index 0000000..5374a82
 +}
 +}
 diff --git a/src/Vehicle.cpp b/src/Vehicle.cpp
-index 3847938..7686ad9 100644
+index 3847938..2143f47 100644
 --- a/src/Vehicle.cpp
 +++ b/src/Vehicle.cpp
-@@ -49,6 +49,8 @@ void Vehicle::HandleSpawn()
- 
-     mCarWrecked = false;
-     mCurrentDamage = 0;
+@@ -1,1210 +1,1265 @@
+-#include "stdafx.h"
+-#include "Vehicle.h"
+-#include "PhysicsManager.h"
+-#include "PhysicsBody.h"
+-#include "GameMapManager.h"
+-#include "SpriteBatch.h"
+-#include "RenderingManager.h"
+-#include "SpriteManager.h"
+-#include "Pedestrian.h"
+-#include "TimeManager.h"
+-#include "GameObjectsManager.h"
+-#include "AudioManager.h"
+-#include "Collider.h"
+-
+-Vehicle::Vehicle(GameObjectID id) : GameObject(eGameObjectClass_Car, id)
+-    , mCarWrecked()
+-    , mCarInfo()
+-    , mDamageDeltaBits()
+-    , mDrivingDeltaAnim()
+-{
+-}
+-
+-void Vehicle::HandleSpawn()
+-{
+-    mStandingOnRailwaysTimer = 0.0f;
+-
+-    debug_assert(mCarInfo);
+-
+-    mRearTireOffset = Convert::PixelsToMeters(mCarInfo->mDriveWheelOffset);
+-    mFrontTireOffset = Convert::PixelsToMeters(mCarInfo->mSteeringWheelOffset);
+-    mSteeringAngleRadians = 0.0f;
+-    
+-    glm::vec3 halfExtents { 
+-        mCarInfo->mDimensions.z * 0.5f, 
+-        mCarInfo->mDimensions.y * 0.5f, 
+-        mCarInfo->mDimensions.x * 0.5f }; // swap z and x
+-
+-    CollisionShape shapeData;
+-    shapeData.SetAsBox(halfExtents, glm::vec3());
+-
+-    PhysicsMaterial materialData;
+-    materialData.mDensity = 80.0f; // todo: magic numbers
+-    materialData.mFriction = 0.0f;
+-    materialData.mRestitution = 0.0f;
+-
+-    PhysicsBody* physicsBody = gPhysics.CreateBody(this, shapeData, materialData, CollisionGroup_Car, CollisionGroup_All, ColliderFlags_None, PhysicsBodyFlags_None);
+-    debug_assert(physicsBody);
+-    SetPhysics(physicsBody);
+-
+-    mCarWrecked = false;
+-    mCurrentDamage = 0;
+-    mDamageDeltaBits = 0;
+-    mPrevDeltaBits = 0;
+-    mSpriteIndex = mCarInfo->mSpriteIndex; // todo: handle bike fallen state 
+-
+-    SetupDeltaAnimations();
+-    SetRemap(NO_REMAP);
+-
+-    mDrawSprite.mDrawOrder = eSpriteDrawOrder_Car;
+-    SetSprite(mSpriteIndex, GetSpriteDeltas());
+-}
+-
+-void Vehicle::HandleDespawn()
+-{
+-    SetBurnEffectActive(false);  
+-
+-    // eject passengers
+-    if (HasPassengers())
+-    {
+-        std::vector<Pedestrian*> passengers = mPassengers;
+-        for (Pedestrian* currPassenger: passengers)
+-        {
+-            if (currPassenger->IsMarkedForDeletion())
+-                continue;
+-
+-            currPassenger->PutOnFoot();
+-        }
+-        mPassengers.clear();
+-    }
+-
+-    // force stop sounds
+-    StopGameObjectSounds();
+-
+-    gSpriteManager.FlushSpritesCache(mObjectID);
+-
+-    GameObject::HandleDespawn();
+-}
+-
+-void Vehicle::UpdateFrame()
+-{
+-    UpdateBurnEffect();
+-    UpdateDamageFromRailways();
+-    UpdateEngineSound();
+-    if (IsWrecked())
+-        return;
+-
+-    // check if car destroyed
+-    if (IsCriticalDamageState())
+-    {
+-        if (mExplosionWaitTime > 0.0f)
+-        {
+-            mExplosionWaitTime -= gTimeManager.mGameFrameDelta;
+-            if (mExplosionWaitTime > 0.0f)
+-                return;
+-        }
+-        SetWrecked();
+-        Explode();
+-        return;
+-    }
+-
+-    UpdateDeltaAnimations();
+-}
+-
+-void Vehicle::SimulationStep()
+-{
+-    DriveCtlState currCtlState;
+-
+-    if (!IsWrecked())
+-    {
+-        Pedestrian* carDriver = GetCarDriver();
+-        if (carDriver)
+-        {
+-            const PedestrianCtlState& ctlState = carDriver->GetCtlState();
+-            currCtlState.mDriveDirection = ctlState.mAcceleration;
+-            currCtlState.mSteerDirection = ctlState.mSteerDirection;
+-            currCtlState.mHandBrake = ctlState.mHandBrake;
+-        }
+-    }
+-    UpdateFriction(currCtlState);
+-    UpdateDrive(currCtlState);
+-    UpdateSteer(currCtlState);
+-}
+-
+-void Vehicle::DebugDraw(DebugRenderer& debugRender)
+-{
+-    glm::vec3 position = mPhysicsBody->GetPosition();
+-
+-    glm::vec2 corners[4];
+-    GetChassisCorners(corners);
+-
+-    float drawHeight = mPhysicsBody->mPositionY;
+-
+-    glm::vec3 points[4];
+-    for (int i = 0; i < 4; ++i)
+-    {
+-        points[i].x = corners[i].x;
+-        points[i].z = corners[i].y;
+-        points[i].y = drawHeight;
+-    }
+-    for (int i = 0; i < 4; ++i)
+-    {
+-        debugRender.DrawLine(points[i], points[(i + 1) % 4], Color32_Red, false);
+-    }
+-
+-    // draw doors
+-    for (int idoor = 0; idoor < mCarInfo->mDoorsCount; ++idoor)
+-    {
+-        glm::vec2 rotated_pos;
+-        GetDoorPos(idoor, rotated_pos);
+-        debugRender.DrawCube(glm::vec3(rotated_pos.x, position.y + 0.15f, rotated_pos.y), glm::vec3(0.15f, 0.15f, 0.15f), Color32_Yellow, false);
+-    }
+-
+-    if (mCarInfo->mDoorsCount > 0)
+-    {
+-        glm::vec2 seatpos;
+-        GetSeatPos(eCarSeat_Driver, seatpos);
+-        debugRender.DrawCube(glm::vec3(seatpos.x, position.y + 0.15f, seatpos.y), glm::vec3(0.15f, 0.15f, 0.15f), Color32_Green, false);
+-    }
+-
+-    // draw body velocity
+-    glm::vec2 bodyLinearVelocity = mPhysicsBody->GetLinearVelocity();
+-    debugRender.DrawLine(
+-        glm::vec3 {position.x, drawHeight, position.z},
+-        glm::vec3 {position.x + bodyLinearVelocity.x, drawHeight, position.z + bodyLinearVelocity.y}, Color32_Cyan, false);
+-
+-    // draw wheels
+-    for (eCarTire currID: {eCarTire_Rear, eCarTire_Front})
+-    {
+-        GetTireCorners(currID, corners);
+-
+-        for (int i = 0; i < 4; ++i)
+-        {
+-            points[i].x = corners[i].x;
+-            points[i].z = corners[i].y;
+-            points[i].y = drawHeight;
+-        }
+-        for (int i = 0; i < 4; ++i)
+-        {
+-            debugRender.DrawLine(points[i], points[(i + 1) % 4], Color32_Yellow, false);
+-        }
+-
+-        glm::vec2 forwardVelocity = GetTireForwardVelocity(currID);
+-        glm::vec2 lateralVelocity = GetTireLateralVelocity(currID);
+-        glm::vec2 wheelPosition = GetTirePosition(currID);
+-
+-        debugRender.DrawLine(
+-            glm::vec3 {wheelPosition.x, drawHeight, wheelPosition.y},
+-            glm::vec3 {wheelPosition.x + forwardVelocity.x, drawHeight, wheelPosition.y + forwardVelocity.y}, Color32_Green, false);
+-        debugRender.DrawLine(
+-            glm::vec3 {wheelPosition.x, drawHeight, wheelPosition.y},
+-            glm::vec3 {wheelPosition.x + lateralVelocity.x, drawHeight, wheelPosition.y + lateralVelocity.y}, Color32_Red, false);
+-
+-        glm::vec2 signDirection = GetTireForward(currID);
+-        debugRender.DrawLine(
+-            glm::vec3 {wheelPosition.x, drawHeight, wheelPosition.y},
+-            glm::vec3 {wheelPosition.x + signDirection.x, drawHeight, wheelPosition.y + signDirection.y}, Color32_Yellow, false);
+-    }
+-}
+-
+-SpriteDeltaBits Vehicle::GetSpriteDeltas() const
+-{
+-    SpriteDeltaBits deltaBits = mDamageDeltaBits;
+-
+-    // add doors
+-    for (int idoor = 0; idoor < MAX_CAR_DOORS; ++idoor)
+-    {
+-        if (!mDoorsAnims[idoor].IsNull())
+-        {
+-            unsigned int deltaBit = mDoorsAnims[idoor].GetSpriteIndex();
+-            deltaBits |= deltaBit;
+-        }
+-    }
+-
+-    // add emergency lights
+-    if (mEmergLightsAnim.IsActive())
+-    {
+-        unsigned int deltaBit = mEmergLightsAnim.GetSpriteIndex();
+-        deltaBits |= deltaBit;
+-    }
+-
+-    if (mDrivingDeltaAnim.IsActive())
+-    {
+-        unsigned int deltaBit = mDrivingDeltaAnim.GetSpriteIndex();
+-        deltaBits |= deltaBit;
+-    }
+-
+-    return deltaBits;
+-}
+-
+-void Vehicle::SetupDeltaAnimations()
+-{
+-    SpriteInfo& spriteInfo = gGameMap.mStyleData.mSprites[mSpriteIndex];
+-    SpriteDeltaBits deltaBits = spriteInfo.GetDeltaBits();
+-
+-    mEmergLightsAnim.Clear();
+-    mDrivingDeltaAnim.Clear();
+-    for (int idoor = 0; idoor < MAX_CAR_DOORS; ++idoor)
+-    {
+-        mDoorsAnims[idoor].Clear();
+-    }
+-
+-    if (deltaBits == 0)
+-        return;
+-
+-    SpriteDeltaBits maskBits = BIT(CAR_LIGHTING_SPRITE_DELTA_0) | BIT(CAR_LIGHTING_SPRITE_DELTA_1);
+-    if ((deltaBits & maskBits) == maskBits)
+-    {
+-        mEmergLightsAnim.mAnimDesc.mFrameRate = CAR_DELTA_ANIMS_SPEED;
+-        mEmergLightsAnim.mAnimDesc.SetFrames(
+-        {
+-            BIT(CAR_LIGHTING_SPRITE_DELTA_0), BIT(CAR_LIGHTING_SPRITE_DELTA_0), BIT(CAR_LIGHTING_SPRITE_DELTA_0),
+-            BIT(CAR_LIGHTING_SPRITE_DELTA_1), BIT(CAR_LIGHTING_SPRITE_DELTA_1), BIT(CAR_LIGHTING_SPRITE_DELTA_1),
+-        });
+-    }
+-
+-    if (mCarInfo->mExtraDrivingAnim)
+-    {
+-        debug_assert(spriteInfo.mDeltaCount > CAR_DRIVE_SPRITE_DELTA);
+-        mDrivingDeltaAnim.mAnimDesc.mFrameRate = CAR_DELTA_DRIVING_ANIM_SPEED;
+-        mDrivingDeltaAnim.mAnimDesc.SetFrames(
+-        {
+-            0, BIT(CAR_DRIVE_SPRITE_DELTA),
+-            0, BIT(CAR_DRIVE_SPRITE_DELTA),
+-        });
+-    }
+-
+-    // doors
+-    if (mCarInfo->mDoorsCount >= 1)
+-    {
+-        mDoorsAnims[0].mAnimDesc.mFrameRate = CAR_DELTA_ANIMS_SPEED;
+-        mDoorsAnims[0].mAnimDesc.SetFrames(
+-        {
+-            0, 
+-            BIT(CAR_DOOR1_SPRITE_DELTA_0), BIT(CAR_DOOR1_SPRITE_DELTA_1),
+-            BIT(CAR_DOOR1_SPRITE_DELTA_2), BIT(CAR_DOOR1_SPRITE_DELTA_3)
+-        });
+-        mDoorsAnims[0].SetFrameAction(0, eSpriteAnimAction_CarDoors);
+-        mDoorsAnims[0].SetListener(this);
+-    }
+-
+-    if (mCarInfo->mDoorsCount >= 2)
+-    {
+-        mDoorsAnims[1].mAnimDesc.mFrameRate = CAR_DELTA_ANIMS_SPEED;
+-        mDoorsAnims[1].mAnimDesc.SetFrames(
+-        {
+-            0, 
+-            BIT(CAR_DOOR2_SPRITE_DELTA_0), BIT(CAR_DOOR2_SPRITE_DELTA_1),
+-            BIT(CAR_DOOR2_SPRITE_DELTA_2), BIT(CAR_DOOR2_SPRITE_DELTA_3)
+-        });
+-        mDoorsAnims[0].SetFrameAction(0, eSpriteAnimAction_CarDoors);
+-        mDoorsAnims[1].SetListener(this);
+-    }
+-}
+-
+-void Vehicle::UpdateDeltaAnimations()
+-{  
+-    float deltaTime = gTimeManager.mGameFrameDelta;
+-    for (int idoor = 0; idoor < MAX_CAR_DOORS; ++idoor)
+-    {
+-        if (mDoorsAnims[idoor].IsActive())
+-        {
+-            mDoorsAnims[idoor].UpdateFrame(deltaTime);
+-        }
+-    }
+-
+-    if (mEmergLightsAnim.IsActive())
+-    {
+-        mEmergLightsAnim.UpdateFrame(deltaTime);
+-    }
+-
+-    if (mCarInfo->mExtraDrivingAnim)
+-    {
+-        bool shouldEnable = fabs(GetCurrentSpeed()) > 0.5f; // todo: magic numbers
+-        if (mDrivingDeltaAnim.IsActive())
+-        {
+-            if (!shouldEnable)
+-            {
+-                mDrivingDeltaAnim.StopAnimation();
+-            }
+-            else
+-            {
+-                mDrivingDeltaAnim.UpdateFrame(deltaTime);
+-            }
+-        }
+-        else if (shouldEnable)
+-        {
+-            mDrivingDeltaAnim.PlayAnimation(eSpriteAnimLoop_FromStart);
+-        }
+-    }
+-
+-    SpriteDeltaBits currDeltaBits = GetSpriteDeltas();
+-    if (mPrevDeltaBits != currDeltaBits)
+-    {
+-        mPrevDeltaBits = currDeltaBits;
+-        SetSprite(mSpriteIndex, currDeltaBits);
+-    }
+-}
+-
+-void Vehicle::OpenDoor(int doorIndex)
+-{
+-    if (HasDoorAnimation(doorIndex))
+-    {
+-        if (IsDoorOpening(doorIndex) || IsDoorOpened(doorIndex))
+-            return;
+-
+-        mDoorsAnims[doorIndex].PlayAnimation(eSpriteAnimLoop_None);
+-    }
+-}
+-
+-void Vehicle::CloseDoor(int doorIndex)
+-{
+-    if (HasDoorAnimation(doorIndex))
+-    {
+-        if (IsDoorClosing(doorIndex) || IsDoorClosed(doorIndex))
+-            return;
+-
+-        mDoorsAnims[doorIndex].RewindToEnd();
+-        mDoorsAnims[doorIndex].PlayAnimation(eSpriteAnimLoop_None, eSpriteAnimMode_Reverse);
+-    }
+-}
+-
+-bool Vehicle::HasDoorAnimation(int doorIndex) const
+-{
+-    debug_assert(doorIndex < MAX_CAR_DOORS);
+-    return !mDoorsAnims[doorIndex].IsNull();
+-}
+-
+-bool Vehicle::IsDoorOpened(int doorIndex) const
+-{
+-    debug_assert(doorIndex < MAX_CAR_DOORS);
+-    return HasDoorAnimation(doorIndex) && !mDoorsAnims[doorIndex].IsActive() && 
+-        mDoorsAnims[doorIndex].IsLastFrame();
+-}
+-
+-bool Vehicle::IsDoorClosed(int doorIndex) const
+-{
+-    debug_assert(doorIndex < MAX_CAR_DOORS);
+-    return HasDoorAnimation(doorIndex) && !mDoorsAnims[doorIndex].IsActive() && 
+-        mDoorsAnims[doorIndex].IsFirstFrame();
+-}
+-
+-bool Vehicle::IsDoorOpening(int doorIndex) const
+-{
+-    debug_assert(doorIndex < MAX_CAR_DOORS);
+-    return HasDoorAnimation(doorIndex) && mDoorsAnims[doorIndex].IsActive() && 
+-        mDoorsAnims[doorIndex].IsRunsForwards();
+-}
+-
+-bool Vehicle::IsDoorClosing(int doorIndex) const
+-{
+-    debug_assert(doorIndex < MAX_CAR_DOORS);
+-    return HasDoorAnimation(doorIndex) && mDoorsAnims[doorIndex].IsActive() && 
+-        mDoorsAnims[doorIndex].IsRunsInReverse();
+-}
+-
+-bool Vehicle::HasEmergencyLightsAnimation() const
+-{
+-    return !mEmergLightsAnim.IsNull();
+-}
+-
+-bool Vehicle::IsEmergencyLightsEnabled() const
+-{
+-    return HasEmergencyLightsAnimation() && mEmergLightsAnim.IsActive();
+-}
+-
+-void Vehicle::EnableEmergencyLights(bool isEnabled)
+-{
+-    if (HasEmergencyLightsAnimation())
+-    {
+-        if (isEnabled == mEmergLightsAnim.IsActive())
+-            return;
+-
+-        if (isEnabled)
+-        {
+-            mEmergLightsAnim.PlayAnimation(eSpriteAnimLoop_FromStart);
+-        }
+-        else
+-        {
+-            mEmergLightsAnim.StopAnimation();
+-            mEmergLightsAnim.RewindToStart();
+-        }
+-    }
+-}
+-
+-int Vehicle::GetDoorIndexForSeat(eCarSeat carSeat) const
+-{
+-    switch (carSeat)
+-    {
+-        case eCarSeat_Driver: return 0;
+-        case eCarSeat_Passenger: return 1;
+-        case eCarSeat_PassengerExtra: return 2;
+-        default: break;
+-    }
+-    debug_assert(false);
+-    return 0;
+-}
+-
+-bool Vehicle::GetDoorPosLocal(int doorIndex, glm::vec2& out) const
+-{
+-    if (doorIndex > -1 && doorIndex < mCarInfo->mDoorsCount)
+-    {
+-        out.x = Convert::PixelsToMeters(mCarInfo->mDoors[doorIndex].mRpy);
+-        out.y = -Convert::PixelsToMeters(mCarInfo->mDoors[doorIndex].mRpx);
+-        return true;
+-    }
+-
+-    debug_assert(false);
+-    return false;
+-}
+-
+-bool Vehicle::GetDoorPos(int doorIndex, glm::vec2& out) const
+-{
+-    if (GetDoorPosLocal(doorIndex, out))
+-    {
+-        out = mPhysicsBody->GetWorldPoint(out);
+-        return true;
+-    }
+-
+-    debug_assert(false);
+-    return false;
+-}
+-
+-bool Vehicle::GetSeatPosLocal(eCarSeat carSeat, glm::vec2& out) const
+-{
+-    int doorIndex = GetDoorIndexForSeat(carSeat);
+-
+-    glm::vec2 doorLocalPos;
+-    if (GetDoorPosLocal(doorIndex, doorLocalPos))
+-    {
+-        bool isBike = (mCarInfo->mClassID == eVehicleClass_Motorcycle);
+-        if (isBike)
+-        {
+-            out.y = 0.0f; // dead center
+-        }
+-        else
+-        {
+-            out.y = -mCarInfo->mDimensions.x * 0.25f * -glm::sign(doorLocalPos.y);
+-        }
+-        out.x = doorLocalPos.x;
+-        return true;
+-    }
+-    return false;
+-}
+-
+-bool Vehicle::GetSeatPos(eCarSeat carSeat, glm::vec2& out) const
+-{
+-    if (GetSeatPosLocal(carSeat, out))
+-    {
+-        out = mPhysicsBody->GetWorldPoint(out);
+-        return true;
+-    }
+-
+-    debug_assert(false);
+-    return false;
+-}
+-
+-bool Vehicle::IsSeatPresent(eCarSeat carSeat) const
+-{
+-    int doorIndex = GetDoorIndexForSeat(carSeat);
+-    return (doorIndex < mCarInfo->mDoorsCount && doorIndex > -1);
+-}
+-
+-void Vehicle::RegisterPassenger(Pedestrian* pedestrian, eCarSeat carSeat)
+-{
+-    if (pedestrian == nullptr || carSeat == eCarSeat_Any)
+-    {
+-        debug_assert(false);
+-        return;
+-    }
+-
+-    if (pedestrian->IsAttachedToObject(this)) // already attached
+-    {
+-        debug_assert(false);
+-        return;
+-    }
+-
+-    AttachObject(pedestrian);
+-    mPassengers.push_back(pedestrian);
+-}
+-
+-void Vehicle::UnregisterPassenger(Pedestrian* pedestrian)
+-{
+-    if (pedestrian->IsAttachedToObject(this))
+-    {
+-        DetachObject(pedestrian);
+-    }
+-
+-    cxx::erase_elements(mPassengers, pedestrian);
+-}
+-
+-Pedestrian* Vehicle::GetCarDriver() const
+-{
+-    for (Pedestrian* currPassenger: mPassengers)
+-    {
+-        if (currPassenger->mCurrentSeat == eCarSeat_Driver)
+-            return currPassenger;
+-    }
+-    return nullptr;
+-}
+-
+-Pedestrian* Vehicle::GetFirstPassenger(eCarSeat carSeat) const
+-{
+-    for (Pedestrian* currPassenger: mPassengers)
+-    {
+-        if (currPassenger->mCurrentSeat == carSeat)
+-            return currPassenger;
+-    }
+-    return nullptr;
+-}
+-
+-void Vehicle::Explode()
+-{
+-    glm::vec3 explosionPos = mPhysicsBody->GetPosition();
+-    explosionPos.y = mDrawSprite.mHeight;
+-
+-    mSpriteIndex = gGameMap.mStyleData.GetWreckedVehicleSpriteIndex(mCarInfo->mClassID);
+-    SetRemap(NO_REMAP);
+-    SetSprite(mSpriteIndex, GetSpriteDeltas());
+-
+-    Explosion* explosion = gGameObjectsManager.CreateExplosion(this, nullptr, eExplosionType_CarDetonate, explosionPos);
+-    debug_assert(explosion);
+-
+-    SetBurnEffectActive(true);
+-
+-    // kill passengers inside
+-    DamageInfo damageInfo;
+-    damageInfo.SetExplosionDamage(nullptr);
+-    for (Pedestrian* currentPed: mPassengers)
+-    {
+-        currentPed->DieFromDamage(damageInfo);
+-    }
+-    mExplosionWaitTime = 0.0f;
+-}
+-
+-bool Vehicle::HasHardTop() const
+-{
+-    return !mCarInfo->mConvertible && (mCarInfo->mClassID != eVehicleClass_Motorcycle);
+-}
+-
+-bool Vehicle::CanResistElectricity() const
+-{
+-    if ((mCarInfo->mClassID == eVehicleClass_Train) ||
+-        (mCarInfo->mClassID == eVehicleClass_Tram) ||
+-        (mCarInfo->mClassID == eVehicleClass_Tank))
+-    {
+-        return true;
+-    }
+-    return false;
+-}
+-
+-bool Vehicle::IsWrecked() const
+-{
+-    return mCarWrecked;
+-}
+-
+-bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
+-{
+-    if (IsWrecked())
+-        return false;
+-
+-    if (damageInfo.mDamageCause == eDamageCause_Electricity)
+-    {
+-        if (CanResistElectricity())
+-            return false;
+-
+-        mCurrentDamage += 1; // todo: magic numbers
+-        return true;
+-    }
+-
+-    if (damageInfo.mDamageCause == eDamageCause_Gravity)
+-    {
+-        float damageHeight = Convert::MapUnitsToMeters(1.3f); // todo: move to config
+-        if (damageInfo.mFallHeight >= damageHeight)
+-        {
+-            mDamageDeltaBits = CAR_DAMAGE_SPRITE_DELTA_MASK; // set all damages
+-            mCurrentDamage += 5; // todo: magic numbers
+-        }
+-        return true;
+-    }
+-
+-    if ((damageInfo.mDamageCause == eDamageCause_Explosion) ||
+-        (damageInfo.mDamageCause == eDamageCause_ExplosionChain))
+-    {
+-        if (IsCriticalDamageState())
+-            return false; // ignore explosions
+-
+-        if (damageInfo.mDamageCause == eDamageCause_ExplosionChain) // delayed explosion
+-        {
+-            mExplosionWaitTime = gGameParams.mCarExplosionChainDelayTime;
+-        }
+-        mCurrentDamage = 100; // force max damage
+-        return true;
+-    }
+-
+-    if (damageInfo.mDamageCause == eDamageCause_Water)
+-    {
+-        SetWrecked();
+-        // kill passengers inside
+-        for (Pedestrian* currentPed: mPassengers)
+-        {
+-            currentPed->DieFromDamage(damageInfo);
+-        }
+-        return true;
+-    }
+-
+-    if (damageInfo.mDamageCause == eDamageCause_Bullet)
+-    {
+-        mCurrentDamage += 5; // todo: magic numbers
+-        return true;
+-    }
+-    
+-    if (damageInfo.mDamageCause == eDamageCause_Flame)
+-    {
+-        mCurrentDamage += 15; // todo: magic numbers
+-        return true;
+-    }
+-
+-    if ((damageInfo.mDamageCause == eDamageCause_Collision) || (damageInfo.mDamageCause == eDamageCause_MapCollision))
+-    {
+-        if (damageInfo.mDamageCause == eDamageCause_Collision)
+-        {
+-            if (damageInfo.mSourceObject == nullptr || !damageInfo.mSourceObject->IsVehicleClass())
+-                return false;
+-        }
+-        if (damageInfo.mContactImpulse < 100.0f) // todo: magic numbers
+-            return false;
+-
+-        glm::vec2 localPoint = mPhysicsBody->GetLocalPoint(damageInfo.mContactPoint.mPosition);
+-
+-        // clockwise from top left corner
+-        glm::vec2 chassisCorners[4];
+-        GetChassisCornersLocal(chassisCorners);
+-
+-        float miny = chassisCorners[1].y;
+-        float maxy = chassisCorners[2].y;
+-        float minx = chassisCorners[0].x;
+-        float maxx = chassisCorners[1].x;
+-
+-        /*
+-                                Left
+-                         _______________________
+-                        |  |        |        |  |
+-                        |  |        |        |  |
+-                Rear    | --------- O --------- |    Front
+-                        |  |        |        |  |
+-                        |__|________|________|__|
+-
+-                                Right
+-        */
+-
+-        float fr_bias = (maxx / 3.0f); // front-rear offset from corners
+-
+-        if (maxx - fabs(localPoint.x) < fr_bias)
+-        {
+-            if (localPoint.x > 0.0f)
+-            {
+-                // front left
+-                if (localPoint.y < 0.0f)
+-                {
+-                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_FL);
+-                }
+-                // front right
+-                else
+-                {
+-                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_FR);
+-                }
+-            }
+-            else
+-            {
+-                // rear left
+-                if (localPoint.y < 0.0f)
+-                {
+-                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_BL);
+-                }
+-                // rear right
+-                else
+-                {
+-                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_BR);
+-                }
+-            }
+-        }
+-        else
+-        {
+-            // middle left
+-            if (localPoint.y < 0.0f)
+-            {
+-                mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_ML);
+-            }
+-            // middle right
+-            else
+-            {
+-                mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_MR);
+-            }
+-        }
+-
+-        ++mCurrentDamage;
+-        return true;
+-    }
+-
+-    return false;
+-}
+-
+-bool Vehicle::ShouldCollide(GameObject* otherObject) const
+-{
+-    if (otherObject->IsVehicleClass() || otherObject->IsObstacleClass())
+-        return true;
+-
+-    return false;
+-}
+-
+-void Vehicle::HandleCollision(const Collision& collision)
+-{
+-    DamageInfo damageInfo;
+-    damageInfo.SetCollisionDamage(collision);
+-    ReceiveDamage(damageInfo);
+-}
+-
+-void Vehicle::HandleCollisionWithMap(const MapCollision& collision)
+-{
+-    DamageInfo damageInfo;
+-    damageInfo.SetCollisionDamage(collision);
+-    ReceiveDamage(damageInfo);
+-}
+-
+-void Vehicle::HandleFallsOnWater(float fallDistance)
+-{
+-    mPhysicsBody->ClearForces();
+-
+-    // boats aren't receive damage from water
+-    if (mCarInfo->mClassID == eVehicleClass_Boat)
+-        return;
+-
+-    if (!IsWrecked())
+-    {
+-        DamageInfo damageInfo;
+-        damageInfo.mDamageCause = eDamageCause_Water;
+-        ReceiveDamage(damageInfo);
+-    }
+-}
+-
+-void Vehicle::HandleFallsOnGround(float fallDistance)
+-{
+-    DamageInfo damageInfo;
+-    damageInfo.SetFallDamage(fallDistance);
+-    ReceiveDamage(damageInfo);
+-}
+-
+-bool Vehicle::IsBurn() const
+-{
+-    return mFireEffect != nullptr;
+-}
+-
+-void Vehicle::SetBurnEffectActive(bool activate)
+-{
+-    if (activate == IsBurn())
+-        return;
+-
+-    if (activate)
+-    {
+-        debug_assert(mFireEffect == nullptr);
+-        GameObjectInfo& objectInfo = gGameMap.mStyleData.mObjects[GameObjectType_Fire1];
+-        mFireEffect = gGameObjectsManager.CreateDecoration(mTransform.mPosition, mTransform.mOrientation, &objectInfo);
+-        debug_assert(mFireEffect);
+-        if (mFireEffect)
+-        {
+-            mFireEffect->SetLifeDuration(0);
+-            mFireEffect->SetDrawOrder(eSpriteDrawOrder_CarRoof);
+-            AttachObject(mFireEffect);
+-        }
+-        mBurnStartTime = gTimeManager.mGameTime;
+-    }
+-    else
+-    {
+-        debug_assert(mFireEffect);
+-        if (mFireEffect)
+-        {
+-            DetachObject(mFireEffect);
+-        }
+-        mFireEffect->MarkForDeletion();
+-        mFireEffect = nullptr;
+-    }
+-}
+-
+-void Vehicle::UpdateBurnEffect()
+-{
+-    if (!IsBurn())
+-        return;
+-
+-    if (gTimeManager.mGameTime > (mBurnStartTime + gGameParams.mCarBurnDuration))
+-    {
+-        SetBurnEffectActive(false);
+-        return;
+-    }
+-}
+-
+-void Vehicle::SetWrecked()
+-{
+-    mCarWrecked = true;
+-}
+-
+-bool Vehicle::HasPassengers() const
+-{
+-    return !mPassengers.empty();
+-}
+-
+-void Vehicle::Repair()
+-{
+-    if (IsWrecked())
+-        return;
+-
+-    mCurrentDamage = 0;
+-    mDamageDeltaBits = 0;
+-    mExplosionWaitTime = 0.0f;
+-}
+-
+-int Vehicle::GetCurrentDamage() const
+-{
+-    return mCurrentDamage;
+-}
+-
+-bool Vehicle::IsInWater() const
+-{
+-    return mPhysicsBody->mWaterContact;
+-}
+-
+-void Vehicle::UpdateDamageFromRailways()
+-{
+-    if (IsWrecked() || CanResistElectricity())
+-        return;
+-
+-    if (mPhysicsBody->mFalling)
+-    {
+-        mStandingOnRailwaysTimer = 0.0f;
+-        return;
+-    }
+-
+-    glm::ivec3 logPosition = Convert::MetersToMapUnits(mTransform.mPosition);
+-    
+-    const MapBlockInfo* blockInfo = gGameMap.GetBlockInfo(logPosition.x, logPosition.z, logPosition.y);
+-    if ((blockInfo->mGroundType == eGroundType_Field) && blockInfo->mIsRailway)
+-    {
+-        mStandingOnRailwaysTimer += gTimeManager.mGameFrameDelta;
+-        if (mStandingOnRailwaysTimer > gGameParams.mGameRailwaysDamageDelay)
+-        {
+-            DamageInfo damageInfo;
+-            damageInfo.SetElectricityDamage();
+-            ReceiveDamage(damageInfo);
+-        }
+-    }
+-    else
+-    {
+-        mStandingOnRailwaysTimer = 0.0f;
+-    }
+-}
+-
+-bool Vehicle::HasDoorsOpened() const
+-{
+-    for (int icurrDoor = 0; icurrDoor < MAX_CAR_DOORS; ++icurrDoor)
+-    {
+-        if (HasDoorAnimation(icurrDoor) && !IsDoorClosed(icurrDoor))
+-            return true;
+-    }
+-    return false;
+-}
+-
+-bool Vehicle::OnAnimFrameAction(SpriteAnimation* animation, int frameIndex, eSpriteAnimAction actionID)
+-{
+-    if (actionID == eSpriteAnimAction_CarDoors)
+-    {
+-        bool openDoors = animation->IsRunsForwards();
+-        StartGameObjectSound(eCarSfxChannelIndex_Doors, eSfxSampleType_Level, openDoors ? SfxLevel_CarDoorOpen : SfxLevel_CarDoorClose, SfxFlags_RandomPitch);
+-    }
+-    return true;
+-}
+-
+-bool Vehicle::IsCriticalDamageState() const
+-{
+-    return mCurrentDamage >= 100;
+-}
+-
+-void Vehicle::UpdateEngineSound()
+-{
+-    if (mSfxEmitter == nullptr)
+-    {
+-        InitSounds();
+-        if (mSfxEmitter == nullptr)
+-            return;
+-    }
+-
+-    if (IsWrecked())
+-    {
+-        mSfxEmitter->StopSound(eCarSfxChannelIndex_Engine);
+-        return;
+-    }
+-
+-    if (!HasPassengers())
+-    {
+-        mSfxEmitter->StopSound(eCarSfxChannelIndex_Engine);
+-        return;
+-    }
+-
+-    SfxSampleIndex sfxIndex = SfxLevel_FirstCarEngineSound + mCarInfo->mEngine;
+-
+-    if (!mSfxEmitter->IsPlaying(eCarSfxChannelIndex_Engine))
+-    {
+-        if (!StartGameObjectSound(eCarSfxChannelIndex_Engine, eSfxSampleType_Level, sfxIndex, SfxFlags_Loop))
+-            return;
+-    }
+-    // todo: this is temporary solution!
+-
+-    float speed = fabs(GetCurrentSpeed());
+-    float maxSpeed = 3.0f;
+-    float pitchValue = 0.8f + (speed / maxSpeed);
+-    pitchValue = std::min(pitchValue, 4.0f);
+-    mSfxEmitter->SetPitch(eCarSfxChannelIndex_Engine, pitchValue);
+-}
+-
+-float Vehicle::GetCurrentSpeed() const
+-{
+-    if (mPhysicsBody)
+-    {
+-        glm::vec2 currentForwardNormal = mPhysicsBody->GetWorldVector(LocalForwardVector);
+-        glm::vec2 forwardVelocity = currentForwardNormal * glm::dot(currentForwardNormal, mPhysicsBody->GetLinearVelocity());
+-        return glm::dot(forwardVelocity, currentForwardNormal);
+-    }
+-    return 0.0f;
+-}
+-
+-void Vehicle::GetChassisCorners(glm::vec2 corners[4]) const
+-{
+-    GetChassisCornersLocal(corners);
+-    for (int icorner = 0; icorner < 4; ++icorner)
+-    {
+-        corners[icorner] = mPhysicsBody->GetWorldPoint(corners[icorner]);
+-    }
+-}
+-
+-void Vehicle::GetChassisCornersLocal(glm::vec2 corners[4]) const
+-{
+-    Collider* chassis = mPhysicsBody->GetColliderWithIndex(0);
+-    debug_assert(chassis);
+-
+-    const CollisionShape& shapeData = chassis->mShapeData;
+-    debug_assert(shapeData.mType == eCollisionShape_Box);
+-
+-    corners[0] = {shapeData.mBox.mCenter.x - shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z - shapeData.mBox.mHalfExtents.z};
+-    corners[1] = {shapeData.mBox.mCenter.x + shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z - shapeData.mBox.mHalfExtents.z};
+-    corners[2] = {shapeData.mBox.mCenter.x + shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z + shapeData.mBox.mHalfExtents.z};
+-    corners[3] = {shapeData.mBox.mCenter.x - shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z + shapeData.mBox.mHalfExtents.z};
+-}
+-
+-void Vehicle::GetTireCorners(eCarTire tireID, glm::vec2 corners[4]) const
+-{
+-    debug_assert(tireID < eCarTire_COUNT);
+-
+-    const float wheel_size_w = Convert::PixelsToMeters(CAR_WHEEL_SIZE_W_PX) * 0.5f;
+-    const float wheel_size_h = Convert::PixelsToMeters(CAR_WHEEL_SIZE_H_PX) * 0.5f;
+-    static const glm::vec2 points[4] =
+-    {
+-        glm::vec2(-wheel_size_h, -wheel_size_w),
+-        glm::vec2( wheel_size_h, -wheel_size_w),
+-        glm::vec2( wheel_size_h,  wheel_size_w),
+-        glm::vec2(-wheel_size_h,  wheel_size_w),
+-    };
+-    float positionOffset = 0.0f;
+-    if (tireID == eCarTire_Rear)
+-    {
+-        positionOffset = mRearTireOffset;
+-    }
+-    else
+-    {
+-        positionOffset = mFrontTireOffset;
+-    }
+-
+-    for (int icorner = 0; icorner < 4; ++icorner)
+-    {
+-        glm::vec2 currPoint = points[icorner];
+-        if ((tireID == eCarTire_Front) && mSteeringAngleRadians)
+-        {
+-            currPoint = glm::rotate(points[icorner], mSteeringAngleRadians);
+-        }
+-        glm::vec2 point = mPhysicsBody->GetWorldPoint(currPoint + glm::vec2(positionOffset, 0.0f));
+-        corners[icorner] = point;
+-    }
+-}
+-
+-void Vehicle::UpdateSteer(const DriveCtlState& currCtlState)
+-{
+-    const float LockAngleRadians = glm::radians(30.0f);
+-    const float TurnSpeedPerSec = glm::radians(270.0f * 1.0f);
+-
+-    float turnPerTimeStep = (TurnSpeedPerSec * gTimeManager.mGameFrameDelta);
+-    float desiredAngle = (LockAngleRadians * currCtlState.mSteerDirection);
+-    float angleToTurn = glm::clamp((desiredAngle - mSteeringAngleRadians), -turnPerTimeStep, turnPerTimeStep);
+-    mSteeringAngleRadians = glm::clamp(mSteeringAngleRadians + angleToTurn, -LockAngleRadians, LockAngleRadians);
+-}
+-
+-void Vehicle::UpdateFriction(const DriveCtlState& currCtlState)
+-{
+-    float linearSpeed = 0.0f;
+-
+-    glm::vec2 linearVelocityVector = mPhysicsBody->GetLinearVelocity();
+-    if (glm::length2(linearVelocityVector) > 0.0f)
+-    {
+-        linearSpeed = glm::length(linearVelocityVector);
+-    }
+-
+-    // kill lateral velocity front tire
+-    {
+-        glm::vec2 impulse = mPhysicsBody->GetMass() * 0.20f * -GetTireLateralVelocity(eCarTire_Front);
+-        mPhysicsBody->ApplyLinearImpulse(impulse, GetTirePosition(eCarTire_Front));
+-    }
+-
+-    // kill lateral velocity rear tire
+-    {
+-        glm::vec2 impulse = mPhysicsBody->GetMass() * 0.20f * -GetTireLateralVelocity(eCarTire_Rear);
+-        mPhysicsBody->ApplyLinearImpulse(impulse, GetTirePosition(eCarTire_Rear));
+-    }
+-
+-    // rolling resistance
+-    if (linearSpeed > 0.0f)
+-    {
+-        float rrCoef = 50.0f;
+-        mPhysicsBody->ApplyLinearImpulse(rrCoef * -linearVelocityVector, GetTirePosition(eCarTire_Front));
+-        mPhysicsBody->ApplyLinearImpulse(rrCoef * -linearVelocityVector, GetTirePosition(eCarTire_Rear));
+-    }
+-
+-    // apply drag force
+-    if (linearSpeed > 0.0f)
+-    {
+-        float dragForceCoef = 102.0f;
+-        glm::vec2 dragForce = -dragForceCoef * linearSpeed * linearVelocityVector;
+-
+-        mPhysicsBody->AddForce(dragForce);
+-    }
+-}
+-
+-void Vehicle::UpdateDrive(const DriveCtlState& currCtlState)
+-{
+-    if (currCtlState.mDriveDirection == 0.0f)
+-        return;
+-
+-    float driveForce = 100750.0f; // todo: magic numbers
+-    float brakeForce = driveForce * mCarInfo->mHandbrakeFriction;
+-    float reverseForce = driveForce * 0.75f;
+-
+-    float currentSpeed = GetCurrentSpeed();
+-    float engineForce = 0.0f;
+-
+-    if (currCtlState.mDriveDirection > 0.0f)
+-    {
+-        engineForce = driveForce;
+-    }
+-    else
+-    {
+-        if (currentSpeed > 0.0f)
+-        {
+-            engineForce = brakeForce;
+-        }
+-        else
+-        {
+-            engineForce = reverseForce;
+-        }
+-    }
+-
+-    glm::vec2 F = engineForce * currCtlState.mDriveDirection * GetTireForward(eCarTire_Rear);
+-    mPhysicsBody->AddForce(F, GetTirePosition(eCarTire_Rear));
+-}
+-
+-glm::vec2 Vehicle::GetTireLateralVelocity(eCarTire tireID) const
+-{
+-    debug_assert(tireID < eCarTire_COUNT);
+-
+-    glm::vec2 normal_vector = GetTireLateral(tireID);
+-    glm::vec2 local_position = GetTireLocalPos(tireID);
+-
+-    return normal_vector * glm::dot(normal_vector, mPhysicsBody->GetLinearVelocityFromLocalPoint(local_position));
+-}
+-
+-glm::vec2 Vehicle::GetTireForwardVelocity(eCarTire tireID) const
+-{
+-    debug_assert(tireID < eCarTire_COUNT);
+-
+-    glm::vec2 normal_vector = GetTireForward(tireID);
+-    glm::vec2 local_position = GetTireLocalPos(tireID);
+-
+-    return normal_vector * glm::dot(normal_vector, mPhysicsBody->GetLinearVelocityFromLocalPoint(local_position));
+-}
+-
+-glm::vec2 Vehicle::GetTirePosition(eCarTire tireID) const
+-{
+-    debug_assert(tireID < eCarTire_COUNT);
+-
+-    glm::vec2 local_position = GetTireLocalPos(tireID);
+-    return mPhysicsBody->GetWorldPoint(local_position);
+-}
+-
+-glm::vec2 Vehicle::GetTireForward(eCarTire tireID) const
+-{
+-    debug_assert(tireID < eCarTire_COUNT);
+-
+-    glm::vec2 local_vector = GetTireLocalForward(tireID);
+-    return mPhysicsBody->GetWorldVector(local_vector);
+-}
+-
+-glm::vec2 Vehicle::GetTireLateral(eCarTire tireID) const
+-{
+-    debug_assert(tireID < eCarTire_COUNT);
+-
+-    glm::vec2 local_vector = GetTireLocalLateral(tireID);
+-    return mPhysicsBody->GetWorldVector(local_vector);
+-}
+-
+-glm::vec2 Vehicle::GetTireLocalPos(eCarTire tireID) const
+-{
+-    if (tireID == eCarTire_Rear)
+-    {
+-        return (LocalForwardVector * mRearTireOffset);
+-    }
+-    if (tireID == eCarTire_Front)
+-    {
+-        return (LocalForwardVector * mFrontTireOffset);
+-    }
+-    debug_assert(false);
+-    return {};
+-}
+-
+-glm::vec2 Vehicle::GetTireLocalForward(eCarTire tireID) const
+-{
+-    if (tireID == eCarTire_Rear)
+-    {
+-        return LocalForwardVector;
+-    }
+-    if (tireID == eCarTire_Front)
+-    {
+-        return glm::rotate(LocalForwardVector, mSteeringAngleRadians);
+-    }
+-    debug_assert(false);
+-    return {};
+-}
+-
+-glm::vec2 Vehicle::GetTireLocalLateral(eCarTire tireID) const
+-{
+-    if (tireID == eCarTire_Rear)
+-    {
+-        return LocalLateralVector;
+-    }
+-    if (tireID == eCarTire_Front)
+-    {
+-        return glm::rotate(LocalLateralVector, mSteeringAngleRadians);
+-    }
+-    debug_assert(false);
+-    return {};
+-}
+-
+-void Vehicle::SetRemap(int remapIndex)
+-{
+-    mRemapIndex = remapIndex;
+-    mRemapClut = (mRemapIndex == NO_REMAP) ? 0 : (mCarInfo->mRemapsBaseIndex + mRemapIndex);
+-}
++#include "stdafx.h"
++#include "Vehicle.h"
++#include "PhysicsManager.h"
++#include "PhysicsBody.h"
++#include "GameMapManager.h"
++#include "SpriteBatch.h"
++#include "RenderingManager.h"
++#include "SpriteManager.h"
++#include "Pedestrian.h"
++#include "TimeManager.h"
++#include "GameObjectsManager.h"
++#include "AudioManager.h"
++#include "Collider.h"
++
++Vehicle::Vehicle(GameObjectID id) : GameObject(eGameObjectClass_Car, id)
++    , mCarWrecked()
++    , mCarInfo()
++    , mDamageDeltaBits()
++    , mDrivingDeltaAnim()
++{
++}
++
++void Vehicle::HandleSpawn()
++{
++    mStandingOnRailwaysTimer = 0.0f;
++
++    debug_assert(mCarInfo);
++
++    mRearTireOffset = Convert::PixelsToMeters(mCarInfo->mDriveWheelOffset);
++    mFrontTireOffset = Convert::PixelsToMeters(mCarInfo->mSteeringWheelOffset);
++    mSteeringAngleRadians = 0.0f;
++    
++    glm::vec3 halfExtents { 
++        mCarInfo->mDimensions.z * 0.5f, 
++        mCarInfo->mDimensions.y * 0.5f, 
++        mCarInfo->mDimensions.x * 0.5f }; // swap z and x
++
++    CollisionShape shapeData;
++    shapeData.SetAsBox(halfExtents, glm::vec3());
++
++    PhysicsMaterial materialData;
++    materialData.mDensity = 80.0f; // todo: magic numbers
++    materialData.mFriction = 0.0f;
++    materialData.mRestitution = 0.0f;
++
++    PhysicsBody* physicsBody = gPhysics.CreateBody(this, shapeData, materialData, CollisionGroup_Car, CollisionGroup_All, ColliderFlags_None, PhysicsBodyFlags_None);
++    debug_assert(physicsBody);
++    SetPhysics(physicsBody);
++
++    mCarWrecked = false;
++    mCurrentDamage = 0;
++    mScriptedDrive = false;
++    mScriptedSpeed = 0.0f;
 +    mCollisionContactStartTime = -1000.0f;
 +    mCollisionContactLastTime = -1000.0f;
-     mDamageDeltaBits = 0;
-     mPrevDeltaBits = 0;
-     mSpriteIndex = mCarInfo->mSpriteIndex; // todo: handle bike fallen state 
-@@ -91,6 +93,20 @@ void Vehicle::UpdateFrame()
-     UpdateBurnEffect();
-     UpdateDamageFromRailways();
-     UpdateEngineSound();
++    mDamageDeltaBits = 0;
++    mPrevDeltaBits = 0;
++    mSpriteIndex = mCarInfo->mSpriteIndex; // todo: handle bike fallen state 
++
++    SetupDeltaAnimations();
++    SetRemap(NO_REMAP);
++
++    mDrawSprite.mDrawOrder = eSpriteDrawOrder_Car;
++    SetSprite(mSpriteIndex, GetSpriteDeltas());
++}
++
++void Vehicle::HandleDespawn()
++{
++    SetBurnEffectActive(false);  
++
++    // eject passengers
++    if (HasPassengers())
++    {
++        std::vector<Pedestrian*> passengers = mPassengers;
++        for (Pedestrian* currPassenger: passengers)
++        {
++            if (currPassenger->IsMarkedForDeletion())
++                continue;
++
++            currPassenger->PutOnFoot();
++        }
++        mPassengers.clear();
++    }
++
++    // force stop sounds
++    StopGameObjectSounds();
++
++    gSpriteManager.FlushSpritesCache(mObjectID);
++
++    GameObject::HandleDespawn();
++}
++
++void Vehicle::UpdateFrame()
++{
++    UpdateBurnEffect();
++    UpdateDamageFromRailways();
++    UpdateEngineSound();
 +    Pedestrian* driver = GetCarDriver();
 +    const bool horn = !IsWrecked() && driver && driver->GetCtlState().mHorn && mCarInfo->mHorn >= 0 && mCarInfo->mHorn < 60;
 +    if (horn)
@@ -8115,13 +9431,598 @@ index 3847938..7686ad9 100644
 +    }
 +    else if (mSfxEmitter)
 +        mSfxEmitter->StopSound(eCarSfxChannelIndex_Misc);
-     if (IsWrecked())
-         return;
- 
-@@ -674,6 +690,31 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
-         }
-         if (damageInfo.mContactImpulse < 100.0f) // todo: magic numbers
-             return false;
++    if (IsWrecked())
++        return;
++
++    // check if car destroyed
++    if (IsCriticalDamageState())
++    {
++        if (mExplosionWaitTime > 0.0f)
++        {
++            mExplosionWaitTime -= gTimeManager.mGameFrameDelta;
++            if (mExplosionWaitTime > 0.0f)
++                return;
++        }
++        SetWrecked();
++        Explode();
++        return;
++    }
++
++    UpdateDeltaAnimations();
++}
++
++void Vehicle::SimulationStep()
++{
++    DriveCtlState currCtlState;
++
++    if (mScriptedDrive && !IsWrecked() && mPhysicsBody)
++    {
++        UpdateFriction(currCtlState);
++        const glm::vec2 forward = mPhysicsBody->GetWorldVector(LocalForwardVector);
++        mPhysicsBody->SetLinearVelocity(forward * mScriptedSpeed);
++        mPhysicsBody->SetAngularVelocity(cxx::angle_t());
++        return;
++    }
++
++    if (!IsWrecked())
++    {
++        Pedestrian* carDriver = GetCarDriver();
++        if (carDriver)
++        {
++            const PedestrianCtlState& ctlState = carDriver->GetCtlState();
++            currCtlState.mDriveDirection = ctlState.mAcceleration;
++            currCtlState.mSteerDirection = ctlState.mSteerDirection;
++            currCtlState.mHandBrake = ctlState.mHandBrake;
++        }
++    }
++    UpdateFriction(currCtlState);
++    UpdateDrive(currCtlState);
++    UpdateSteer(currCtlState);
++}
++
++void Vehicle::DebugDraw(DebugRenderer& debugRender)
++{
++    glm::vec3 position = mPhysicsBody->GetPosition();
++
++    glm::vec2 corners[4];
++    GetChassisCorners(corners);
++
++    float drawHeight = mPhysicsBody->mPositionY;
++
++    glm::vec3 points[4];
++    for (int i = 0; i < 4; ++i)
++    {
++        points[i].x = corners[i].x;
++        points[i].z = corners[i].y;
++        points[i].y = drawHeight;
++    }
++    for (int i = 0; i < 4; ++i)
++    {
++        debugRender.DrawLine(points[i], points[(i + 1) % 4], Color32_Red, false);
++    }
++
++    // draw doors
++    for (int idoor = 0; idoor < mCarInfo->mDoorsCount; ++idoor)
++    {
++        glm::vec2 rotated_pos;
++        GetDoorPos(idoor, rotated_pos);
++        debugRender.DrawCube(glm::vec3(rotated_pos.x, position.y + 0.15f, rotated_pos.y), glm::vec3(0.15f, 0.15f, 0.15f), Color32_Yellow, false);
++    }
++
++    if (mCarInfo->mDoorsCount > 0)
++    {
++        glm::vec2 seatpos;
++        GetSeatPos(eCarSeat_Driver, seatpos);
++        debugRender.DrawCube(glm::vec3(seatpos.x, position.y + 0.15f, seatpos.y), glm::vec3(0.15f, 0.15f, 0.15f), Color32_Green, false);
++    }
++
++    // draw body velocity
++    glm::vec2 bodyLinearVelocity = mPhysicsBody->GetLinearVelocity();
++    debugRender.DrawLine(
++        glm::vec3 {position.x, drawHeight, position.z},
++        glm::vec3 {position.x + bodyLinearVelocity.x, drawHeight, position.z + bodyLinearVelocity.y}, Color32_Cyan, false);
++
++    // draw wheels
++    for (eCarTire currID: {eCarTire_Rear, eCarTire_Front})
++    {
++        GetTireCorners(currID, corners);
++
++        for (int i = 0; i < 4; ++i)
++        {
++            points[i].x = corners[i].x;
++            points[i].z = corners[i].y;
++            points[i].y = drawHeight;
++        }
++        for (int i = 0; i < 4; ++i)
++        {
++            debugRender.DrawLine(points[i], points[(i + 1) % 4], Color32_Yellow, false);
++        }
++
++        glm::vec2 forwardVelocity = GetTireForwardVelocity(currID);
++        glm::vec2 lateralVelocity = GetTireLateralVelocity(currID);
++        glm::vec2 wheelPosition = GetTirePosition(currID);
++
++        debugRender.DrawLine(
++            glm::vec3 {wheelPosition.x, drawHeight, wheelPosition.y},
++            glm::vec3 {wheelPosition.x + forwardVelocity.x, drawHeight, wheelPosition.y + forwardVelocity.y}, Color32_Green, false);
++        debugRender.DrawLine(
++            glm::vec3 {wheelPosition.x, drawHeight, wheelPosition.y},
++            glm::vec3 {wheelPosition.x + lateralVelocity.x, drawHeight, wheelPosition.y + lateralVelocity.y}, Color32_Red, false);
++
++        glm::vec2 signDirection = GetTireForward(currID);
++        debugRender.DrawLine(
++            glm::vec3 {wheelPosition.x, drawHeight, wheelPosition.y},
++            glm::vec3 {wheelPosition.x + signDirection.x, drawHeight, wheelPosition.y + signDirection.y}, Color32_Yellow, false);
++    }
++}
++
++SpriteDeltaBits Vehicle::GetSpriteDeltas() const
++{
++    SpriteDeltaBits deltaBits = mDamageDeltaBits;
++
++    // add doors
++    for (int idoor = 0; idoor < MAX_CAR_DOORS; ++idoor)
++    {
++        if (!mDoorsAnims[idoor].IsNull())
++        {
++            unsigned int deltaBit = mDoorsAnims[idoor].GetSpriteIndex();
++            deltaBits |= deltaBit;
++        }
++    }
++
++    // add emergency lights
++    if (mEmergLightsAnim.IsActive())
++    {
++        unsigned int deltaBit = mEmergLightsAnim.GetSpriteIndex();
++        deltaBits |= deltaBit;
++    }
++
++    if (mDrivingDeltaAnim.IsActive())
++    {
++        unsigned int deltaBit = mDrivingDeltaAnim.GetSpriteIndex();
++        deltaBits |= deltaBit;
++    }
++
++    return deltaBits;
++}
++
++void Vehicle::SetupDeltaAnimations()
++{
++    SpriteInfo& spriteInfo = gGameMap.mStyleData.mSprites[mSpriteIndex];
++    SpriteDeltaBits deltaBits = spriteInfo.GetDeltaBits();
++
++    mEmergLightsAnim.Clear();
++    mDrivingDeltaAnim.Clear();
++    for (int idoor = 0; idoor < MAX_CAR_DOORS; ++idoor)
++    {
++        mDoorsAnims[idoor].Clear();
++    }
++
++    if (deltaBits == 0)
++        return;
++
++    SpriteDeltaBits maskBits = BIT(CAR_LIGHTING_SPRITE_DELTA_0) | BIT(CAR_LIGHTING_SPRITE_DELTA_1);
++    if ((deltaBits & maskBits) == maskBits)
++    {
++        mEmergLightsAnim.mAnimDesc.mFrameRate = CAR_DELTA_ANIMS_SPEED;
++        mEmergLightsAnim.mAnimDesc.SetFrames(
++        {
++            BIT(CAR_LIGHTING_SPRITE_DELTA_0), BIT(CAR_LIGHTING_SPRITE_DELTA_0), BIT(CAR_LIGHTING_SPRITE_DELTA_0),
++            BIT(CAR_LIGHTING_SPRITE_DELTA_1), BIT(CAR_LIGHTING_SPRITE_DELTA_1), BIT(CAR_LIGHTING_SPRITE_DELTA_1),
++        });
++    }
++
++    if (mCarInfo->mExtraDrivingAnim)
++    {
++        debug_assert(spriteInfo.mDeltaCount > CAR_DRIVE_SPRITE_DELTA);
++        mDrivingDeltaAnim.mAnimDesc.mFrameRate = CAR_DELTA_DRIVING_ANIM_SPEED;
++        mDrivingDeltaAnim.mAnimDesc.SetFrames(
++        {
++            0, BIT(CAR_DRIVE_SPRITE_DELTA),
++            0, BIT(CAR_DRIVE_SPRITE_DELTA),
++        });
++    }
++
++    // doors
++    if (mCarInfo->mDoorsCount >= 1)
++    {
++        mDoorsAnims[0].mAnimDesc.mFrameRate = CAR_DELTA_ANIMS_SPEED;
++        mDoorsAnims[0].mAnimDesc.SetFrames(
++        {
++            0, 
++            BIT(CAR_DOOR1_SPRITE_DELTA_0), BIT(CAR_DOOR1_SPRITE_DELTA_1),
++            BIT(CAR_DOOR1_SPRITE_DELTA_2), BIT(CAR_DOOR1_SPRITE_DELTA_3)
++        });
++        mDoorsAnims[0].SetFrameAction(0, eSpriteAnimAction_CarDoors);
++        mDoorsAnims[0].SetListener(this);
++    }
++
++    if (mCarInfo->mDoorsCount >= 2)
++    {
++        mDoorsAnims[1].mAnimDesc.mFrameRate = CAR_DELTA_ANIMS_SPEED;
++        mDoorsAnims[1].mAnimDesc.SetFrames(
++        {
++            0, 
++            BIT(CAR_DOOR2_SPRITE_DELTA_0), BIT(CAR_DOOR2_SPRITE_DELTA_1),
++            BIT(CAR_DOOR2_SPRITE_DELTA_2), BIT(CAR_DOOR2_SPRITE_DELTA_3)
++        });
++        mDoorsAnims[0].SetFrameAction(0, eSpriteAnimAction_CarDoors);
++        mDoorsAnims[1].SetListener(this);
++    }
++}
++
++void Vehicle::UpdateDeltaAnimations()
++{  
++    float deltaTime = gTimeManager.mGameFrameDelta;
++    for (int idoor = 0; idoor < MAX_CAR_DOORS; ++idoor)
++    {
++        if (mDoorsAnims[idoor].IsActive())
++        {
++            mDoorsAnims[idoor].UpdateFrame(deltaTime);
++        }
++    }
++
++    if (mEmergLightsAnim.IsActive())
++    {
++        mEmergLightsAnim.UpdateFrame(deltaTime);
++    }
++
++    if (mCarInfo->mExtraDrivingAnim)
++    {
++        bool shouldEnable = fabs(GetCurrentSpeed()) > 0.5f; // todo: magic numbers
++        if (mDrivingDeltaAnim.IsActive())
++        {
++            if (!shouldEnable)
++            {
++                mDrivingDeltaAnim.StopAnimation();
++            }
++            else
++            {
++                mDrivingDeltaAnim.UpdateFrame(deltaTime);
++            }
++        }
++        else if (shouldEnable)
++        {
++            mDrivingDeltaAnim.PlayAnimation(eSpriteAnimLoop_FromStart);
++        }
++    }
++
++    SpriteDeltaBits currDeltaBits = GetSpriteDeltas();
++    if (mPrevDeltaBits != currDeltaBits)
++    {
++        mPrevDeltaBits = currDeltaBits;
++        SetSprite(mSpriteIndex, currDeltaBits);
++    }
++}
++
++void Vehicle::OpenDoor(int doorIndex)
++{
++    if (HasDoorAnimation(doorIndex))
++    {
++        if (IsDoorOpening(doorIndex) || IsDoorOpened(doorIndex))
++            return;
++
++        mDoorsAnims[doorIndex].PlayAnimation(eSpriteAnimLoop_None);
++    }
++}
++
++void Vehicle::CloseDoor(int doorIndex)
++{
++    if (HasDoorAnimation(doorIndex))
++    {
++        if (IsDoorClosing(doorIndex) || IsDoorClosed(doorIndex))
++            return;
++
++        mDoorsAnims[doorIndex].RewindToEnd();
++        mDoorsAnims[doorIndex].PlayAnimation(eSpriteAnimLoop_None, eSpriteAnimMode_Reverse);
++    }
++}
++
++bool Vehicle::HasDoorAnimation(int doorIndex) const
++{
++    debug_assert(doorIndex < MAX_CAR_DOORS);
++    return !mDoorsAnims[doorIndex].IsNull();
++}
++
++bool Vehicle::IsDoorOpened(int doorIndex) const
++{
++    debug_assert(doorIndex < MAX_CAR_DOORS);
++    return HasDoorAnimation(doorIndex) && !mDoorsAnims[doorIndex].IsActive() && 
++        mDoorsAnims[doorIndex].IsLastFrame();
++}
++
++bool Vehicle::IsDoorClosed(int doorIndex) const
++{
++    debug_assert(doorIndex < MAX_CAR_DOORS);
++    return HasDoorAnimation(doorIndex) && !mDoorsAnims[doorIndex].IsActive() && 
++        mDoorsAnims[doorIndex].IsFirstFrame();
++}
++
++bool Vehicle::IsDoorOpening(int doorIndex) const
++{
++    debug_assert(doorIndex < MAX_CAR_DOORS);
++    return HasDoorAnimation(doorIndex) && mDoorsAnims[doorIndex].IsActive() && 
++        mDoorsAnims[doorIndex].IsRunsForwards();
++}
++
++bool Vehicle::IsDoorClosing(int doorIndex) const
++{
++    debug_assert(doorIndex < MAX_CAR_DOORS);
++    return HasDoorAnimation(doorIndex) && mDoorsAnims[doorIndex].IsActive() && 
++        mDoorsAnims[doorIndex].IsRunsInReverse();
++}
++
++bool Vehicle::HasEmergencyLightsAnimation() const
++{
++    return !mEmergLightsAnim.IsNull();
++}
++
++bool Vehicle::IsEmergencyLightsEnabled() const
++{
++    return HasEmergencyLightsAnimation() && mEmergLightsAnim.IsActive();
++}
++
++void Vehicle::EnableEmergencyLights(bool isEnabled)
++{
++    if (HasEmergencyLightsAnimation())
++    {
++        if (isEnabled == mEmergLightsAnim.IsActive())
++            return;
++
++        if (isEnabled)
++        {
++            mEmergLightsAnim.PlayAnimation(eSpriteAnimLoop_FromStart);
++        }
++        else
++        {
++            mEmergLightsAnim.StopAnimation();
++            mEmergLightsAnim.RewindToStart();
++        }
++    }
++}
++
++int Vehicle::GetDoorIndexForSeat(eCarSeat carSeat) const
++{
++    switch (carSeat)
++    {
++        case eCarSeat_Driver: return 0;
++        case eCarSeat_Passenger: return 1;
++        case eCarSeat_PassengerExtra: return 2;
++        default: break;
++    }
++    debug_assert(false);
++    return 0;
++}
++
++bool Vehicle::GetDoorPosLocal(int doorIndex, glm::vec2& out) const
++{
++    if (doorIndex > -1 && doorIndex < mCarInfo->mDoorsCount)
++    {
++        out.x = Convert::PixelsToMeters(mCarInfo->mDoors[doorIndex].mRpy);
++        out.y = -Convert::PixelsToMeters(mCarInfo->mDoors[doorIndex].mRpx);
++        return true;
++    }
++
++    debug_assert(false);
++    return false;
++}
++
++bool Vehicle::GetDoorPos(int doorIndex, glm::vec2& out) const
++{
++    if (GetDoorPosLocal(doorIndex, out))
++    {
++        out = mPhysicsBody->GetWorldPoint(out);
++        return true;
++    }
++
++    debug_assert(false);
++    return false;
++}
++
++bool Vehicle::GetSeatPosLocal(eCarSeat carSeat, glm::vec2& out) const
++{
++    int doorIndex = GetDoorIndexForSeat(carSeat);
++
++    glm::vec2 doorLocalPos;
++    if (GetDoorPosLocal(doorIndex, doorLocalPos))
++    {
++        bool isBike = (mCarInfo->mClassID == eVehicleClass_Motorcycle);
++        if (isBike)
++        {
++            out.y = 0.0f; // dead center
++        }
++        else
++        {
++            out.y = -mCarInfo->mDimensions.x * 0.25f * -glm::sign(doorLocalPos.y);
++        }
++        out.x = doorLocalPos.x;
++        return true;
++    }
++    return false;
++}
++
++bool Vehicle::GetSeatPos(eCarSeat carSeat, glm::vec2& out) const
++{
++    if (GetSeatPosLocal(carSeat, out))
++    {
++        out = mPhysicsBody->GetWorldPoint(out);
++        return true;
++    }
++
++    debug_assert(false);
++    return false;
++}
++
++bool Vehicle::IsSeatPresent(eCarSeat carSeat) const
++{
++    int doorIndex = GetDoorIndexForSeat(carSeat);
++    return (doorIndex < mCarInfo->mDoorsCount && doorIndex > -1);
++}
++
++void Vehicle::RegisterPassenger(Pedestrian* pedestrian, eCarSeat carSeat)
++{
++    if (pedestrian == nullptr || carSeat == eCarSeat_Any)
++    {
++        debug_assert(false);
++        return;
++    }
++
++    if (pedestrian->IsAttachedToObject(this)) // already attached
++    {
++        debug_assert(false);
++        return;
++    }
++
++    AttachObject(pedestrian);
++    mPassengers.push_back(pedestrian);
++}
++
++void Vehicle::UnregisterPassenger(Pedestrian* pedestrian)
++{
++    if (pedestrian->IsAttachedToObject(this))
++    {
++        DetachObject(pedestrian);
++    }
++
++    cxx::erase_elements(mPassengers, pedestrian);
++}
++
++Pedestrian* Vehicle::GetCarDriver() const
++{
++    for (Pedestrian* currPassenger: mPassengers)
++    {
++        if (currPassenger->mCurrentSeat == eCarSeat_Driver)
++            return currPassenger;
++    }
++    return nullptr;
++}
++
++Pedestrian* Vehicle::GetFirstPassenger(eCarSeat carSeat) const
++{
++    for (Pedestrian* currPassenger: mPassengers)
++    {
++        if (currPassenger->mCurrentSeat == carSeat)
++            return currPassenger;
++    }
++    return nullptr;
++}
++
++void Vehicle::Explode()
++{
++    glm::vec3 explosionPos = mPhysicsBody->GetPosition();
++    explosionPos.y = mDrawSprite.mHeight;
++
++    mSpriteIndex = gGameMap.mStyleData.GetWreckedVehicleSpriteIndex(mCarInfo->mClassID);
++    SetRemap(NO_REMAP);
++    SetSprite(mSpriteIndex, GetSpriteDeltas());
++
++    Explosion* explosion = gGameObjectsManager.CreateExplosion(this, nullptr, eExplosionType_CarDetonate, explosionPos);
++    debug_assert(explosion);
++
++    SetBurnEffectActive(true);
++
++    // kill passengers inside
++    DamageInfo damageInfo;
++    damageInfo.SetExplosionDamage(nullptr);
++    for (Pedestrian* currentPed: mPassengers)
++    {
++        currentPed->DieFromDamage(damageInfo);
++    }
++    mExplosionWaitTime = 0.0f;
++}
++
++bool Vehicle::HasHardTop() const
++{
++    return !mCarInfo->mConvertible && (mCarInfo->mClassID != eVehicleClass_Motorcycle);
++}
++
++bool Vehicle::CanResistElectricity() const
++{
++    if ((mCarInfo->mClassID == eVehicleClass_Train) ||
++        (mCarInfo->mClassID == eVehicleClass_Tram) ||
++        (mCarInfo->mClassID == eVehicleClass_Tank))
++    {
++        return true;
++    }
++    return false;
++}
++
++bool Vehicle::IsWrecked() const
++{
++    return mCarWrecked;
++}
++
++bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
++{
++    if (IsWrecked())
++        return false;
++
++    if (damageInfo.mDamageCause == eDamageCause_Electricity)
++    {
++        if (CanResistElectricity())
++            return false;
++
++        mCurrentDamage += 1; // todo: magic numbers
++        return true;
++    }
++
++    if (damageInfo.mDamageCause == eDamageCause_Gravity)
++    {
++        float damageHeight = Convert::MapUnitsToMeters(1.3f); // todo: move to config
++        if (damageInfo.mFallHeight >= damageHeight)
++        {
++            mDamageDeltaBits = CAR_DAMAGE_SPRITE_DELTA_MASK; // set all damages
++            mCurrentDamage += 5; // todo: magic numbers
++        }
++        return true;
++    }
++
++    if ((damageInfo.mDamageCause == eDamageCause_Explosion) ||
++        (damageInfo.mDamageCause == eDamageCause_ExplosionChain))
++    {
++        if (IsCriticalDamageState())
++            return false; // ignore explosions
++
++        if (damageInfo.mDamageCause == eDamageCause_ExplosionChain) // delayed explosion
++        {
++            mExplosionWaitTime = gGameParams.mCarExplosionChainDelayTime;
++        }
++        mCurrentDamage = 100; // force max damage
++        return true;
++    }
++
++    if (damageInfo.mDamageCause == eDamageCause_Water)
++    {
++        SetWrecked();
++        // kill passengers inside
++        for (Pedestrian* currentPed: mPassengers)
++        {
++            currentPed->DieFromDamage(damageInfo);
++        }
++        return true;
++    }
++
++    if (damageInfo.mDamageCause == eDamageCause_Bullet)
++    {
++        mCurrentDamage += 5; // todo: magic numbers
++        return true;
++    }
++    
++    if (damageInfo.mDamageCause == eDamageCause_Flame)
++    {
++        mCurrentDamage += 15; // todo: magic numbers
++        return true;
++    }
++
++    if ((damageInfo.mDamageCause == eDamageCause_Collision) || (damageInfo.mDamageCause == eDamageCause_MapCollision))
++    {
++        if (damageInfo.mDamageCause == eDamageCause_Collision)
++        {
++            if (damageInfo.mSourceObject == nullptr || !damageInfo.mSourceObject->IsVehicleClass())
++                return false;
++        }
++        if (damageInfo.mContactImpulse < 100.0f) // todo: magic numbers
++            return false;
 +        // traffic: scrapes between two AI-driven cars only count when the hit is hard
 +        // (every contact frame adds damage, so long scrapes in traffic would set cars on fire);
 +        // collisions with the player or with parked cars are unchanged
@@ -8147,43 +10048,930 @@ index 3847938..7686ad9 100644
 +        }
 +        mCollisionContactLastTime = contactNow;
 +        const bool isImpactPhase = (contactNow - mCollisionContactStartTime) <= 0.15f;
- 
-         glm::vec2 localPoint = mPhysicsBody->GetLocalPoint(damageInfo.mContactPoint.mPosition);
- 
-@@ -743,7 +784,10 @@ bool Vehicle::ReceiveDamage(const DamageInfo& damageInfo)
-             }
-         }
- 
--        ++mCurrentDamage;
++
++        glm::vec2 localPoint = mPhysicsBody->GetLocalPoint(damageInfo.mContactPoint.mPosition);
++
++        // clockwise from top left corner
++        glm::vec2 chassisCorners[4];
++        GetChassisCornersLocal(chassisCorners);
++
++        float miny = chassisCorners[1].y;
++        float maxy = chassisCorners[2].y;
++        float minx = chassisCorners[0].x;
++        float maxx = chassisCorners[1].x;
++
++        /*
++                                Left
++                         _______________________
++                        |  |        |        |  |
++                        |  |        |        |  |
++                Rear    | --------- O --------- |    Front
++                        |  |        |        |  |
++                        |__|________|________|__|
++
++                                Right
++        */
++
++        float fr_bias = (maxx / 3.0f); // front-rear offset from corners
++
++        if (maxx - fabs(localPoint.x) < fr_bias)
++        {
++            if (localPoint.x > 0.0f)
++            {
++                // front left
++                if (localPoint.y < 0.0f)
++                {
++                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_FL);
++                }
++                // front right
++                else
++                {
++                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_FR);
++                }
++            }
++            else
++            {
++                // rear left
++                if (localPoint.y < 0.0f)
++                {
++                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_BL);
++                }
++                // rear right
++                else
++                {
++                    mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_BR);
++                }
++            }
++        }
++        else
++        {
++            // middle left
++            if (localPoint.y < 0.0f)
++            {
++                mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_ML);
++            }
++            // middle right
++            else
++            {
++                mDamageDeltaBits |= BIT(CAR_DAMAGE_SPRITE_DELTA_MR);
++            }
++        }
++
 +        if (isImpactPhase)
 +        {
 +            ++mCurrentDamage;
 +        }
-         return true;
-     }
- 
++        return true;
++    }
++
++    return false;
++}
++
++bool Vehicle::ShouldCollide(GameObject* otherObject) const
++{
++    if (otherObject->IsVehicleClass() || otherObject->IsObstacleClass())
++        return true;
++
++    return false;
++}
++
++void Vehicle::HandleCollision(const Collision& collision)
++{
++    DamageInfo damageInfo;
++    damageInfo.SetCollisionDamage(collision);
++    ReceiveDamage(damageInfo);
++}
++
++void Vehicle::HandleCollisionWithMap(const MapCollision& collision)
++{
++    DamageInfo damageInfo;
++    damageInfo.SetCollisionDamage(collision);
++    ReceiveDamage(damageInfo);
++}
++
++void Vehicle::HandleFallsOnWater(float fallDistance)
++{
++    mPhysicsBody->ClearForces();
++
++    // boats aren't receive damage from water
++    if (mCarInfo->mClassID == eVehicleClass_Boat)
++        return;
++
++    if (!IsWrecked())
++    {
++        DamageInfo damageInfo;
++        damageInfo.mDamageCause = eDamageCause_Water;
++        ReceiveDamage(damageInfo);
++    }
++}
++
++void Vehicle::HandleFallsOnGround(float fallDistance)
++{
++    DamageInfo damageInfo;
++    damageInfo.SetFallDamage(fallDistance);
++    ReceiveDamage(damageInfo);
++}
++
++bool Vehicle::IsBurn() const
++{
++    return mFireEffect != nullptr;
++}
++
++void Vehicle::SetBurnEffectActive(bool activate)
++{
++    if (activate == IsBurn())
++        return;
++
++    if (activate)
++    {
++        debug_assert(mFireEffect == nullptr);
++        GameObjectInfo& objectInfo = gGameMap.mStyleData.mObjects[GameObjectType_Fire1];
++        mFireEffect = gGameObjectsManager.CreateDecoration(mTransform.mPosition, mTransform.mOrientation, &objectInfo);
++        debug_assert(mFireEffect);
++        if (mFireEffect)
++        {
++            mFireEffect->SetLifeDuration(0);
++            mFireEffect->SetDrawOrder(eSpriteDrawOrder_CarRoof);
++            AttachObject(mFireEffect);
++        }
++        mBurnStartTime = gTimeManager.mGameTime;
++    }
++    else
++    {
++        debug_assert(mFireEffect);
++        if (mFireEffect)
++        {
++            DetachObject(mFireEffect);
++        }
++        mFireEffect->MarkForDeletion();
++        mFireEffect = nullptr;
++    }
++}
++
++void Vehicle::UpdateBurnEffect()
++{
++    if (!IsBurn())
++        return;
++
++    if (gTimeManager.mGameTime > (mBurnStartTime + gGameParams.mCarBurnDuration))
++    {
++        SetBurnEffectActive(false);
++        return;
++    }
++}
++
++void Vehicle::SetWrecked()
++{
++    mCarWrecked = true;
++}
++
++bool Vehicle::HasPassengers() const
++{
++    return !mPassengers.empty();
++}
++
++void Vehicle::Repair()
++{
++    if (IsWrecked())
++        return;
++
++    mCurrentDamage = 0;
++    mDamageDeltaBits = 0;
++    mExplosionWaitTime = 0.0f;
++}
++
++int Vehicle::GetCurrentDamage() const
++{
++    return mCurrentDamage;
++}
++
++bool Vehicle::IsInWater() const
++{
++    return mPhysicsBody->mWaterContact;
++}
++
++void Vehicle::UpdateDamageFromRailways()
++{
++    if (IsWrecked() || CanResistElectricity())
++        return;
++
++    if (mPhysicsBody->mFalling)
++    {
++        mStandingOnRailwaysTimer = 0.0f;
++        return;
++    }
++
++    glm::ivec3 logPosition = Convert::MetersToMapUnits(mTransform.mPosition);
++    
++    const MapBlockInfo* blockInfo = gGameMap.GetBlockInfo(logPosition.x, logPosition.z, logPosition.y);
++    if ((blockInfo->mGroundType == eGroundType_Field) && blockInfo->mIsRailway)
++    {
++        mStandingOnRailwaysTimer += gTimeManager.mGameFrameDelta;
++        if (mStandingOnRailwaysTimer > gGameParams.mGameRailwaysDamageDelay)
++        {
++            DamageInfo damageInfo;
++            damageInfo.SetElectricityDamage();
++            ReceiveDamage(damageInfo);
++        }
++    }
++    else
++    {
++        mStandingOnRailwaysTimer = 0.0f;
++    }
++}
++
++bool Vehicle::HasDoorsOpened() const
++{
++    for (int icurrDoor = 0; icurrDoor < MAX_CAR_DOORS; ++icurrDoor)
++    {
++        if (HasDoorAnimation(icurrDoor) && !IsDoorClosed(icurrDoor))
++            return true;
++    }
++    return false;
++}
++
++bool Vehicle::OnAnimFrameAction(SpriteAnimation* animation, int frameIndex, eSpriteAnimAction actionID)
++{
++    if (actionID == eSpriteAnimAction_CarDoors)
++    {
++        bool openDoors = animation->IsRunsForwards();
++        StartGameObjectSound(eCarSfxChannelIndex_Doors, eSfxSampleType_Level, openDoors ? SfxLevel_CarDoorOpen : SfxLevel_CarDoorClose, SfxFlags_RandomPitch);
++    }
++    return true;
++}
++
++bool Vehicle::IsCriticalDamageState() const
++{
++    return mCurrentDamage >= 100;
++}
++
++void Vehicle::UpdateEngineSound()
++{
++    if (mSfxEmitter == nullptr)
++    {
++        InitSounds();
++        if (mSfxEmitter == nullptr)
++            return;
++    }
++
++    if (IsWrecked())
++    {
++        mSfxEmitter->StopSound(eCarSfxChannelIndex_Engine);
++        return;
++    }
++
++    if (!HasPassengers())
++    {
++        mSfxEmitter->StopSound(eCarSfxChannelIndex_Engine);
++        return;
++    }
++
++    SfxSampleIndex sfxIndex = SfxLevel_FirstCarEngineSound + mCarInfo->mEngine;
++
++    if (!mSfxEmitter->IsPlaying(eCarSfxChannelIndex_Engine))
++    {
++        if (!StartGameObjectSound(eCarSfxChannelIndex_Engine, eSfxSampleType_Level, sfxIndex, SfxFlags_Loop))
++            return;
++    }
++    // todo: this is temporary solution!
++
++    float speed = fabs(GetCurrentSpeed());
++    float maxSpeed = 3.0f;
++    float pitchValue = 0.8f + (speed / maxSpeed);
++    pitchValue = std::min(pitchValue, 4.0f);
++    mSfxEmitter->SetPitch(eCarSfxChannelIndex_Engine, pitchValue);
++}
++
++float Vehicle::GetCurrentSpeed() const
++{
++    if (mPhysicsBody)
++    {
++        glm::vec2 currentForwardNormal = mPhysicsBody->GetWorldVector(LocalForwardVector);
++        glm::vec2 forwardVelocity = currentForwardNormal * glm::dot(currentForwardNormal, mPhysicsBody->GetLinearVelocity());
++        return glm::dot(forwardVelocity, currentForwardNormal);
++    }
++    return 0.0f;
++}
++
++void Vehicle::GetChassisCorners(glm::vec2 corners[4]) const
++{
++    GetChassisCornersLocal(corners);
++    for (int icorner = 0; icorner < 4; ++icorner)
++    {
++        corners[icorner] = mPhysicsBody->GetWorldPoint(corners[icorner]);
++    }
++}
++
++void Vehicle::GetChassisCornersLocal(glm::vec2 corners[4]) const
++{
++    Collider* chassis = mPhysicsBody->GetColliderWithIndex(0);
++    debug_assert(chassis);
++
++    const CollisionShape& shapeData = chassis->mShapeData;
++    debug_assert(shapeData.mType == eCollisionShape_Box);
++
++    corners[0] = {shapeData.mBox.mCenter.x - shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z - shapeData.mBox.mHalfExtents.z};
++    corners[1] = {shapeData.mBox.mCenter.x + shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z - shapeData.mBox.mHalfExtents.z};
++    corners[2] = {shapeData.mBox.mCenter.x + shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z + shapeData.mBox.mHalfExtents.z};
++    corners[3] = {shapeData.mBox.mCenter.x - shapeData.mBox.mHalfExtents.x, shapeData.mBox.mCenter.z + shapeData.mBox.mHalfExtents.z};
++}
++
++void Vehicle::GetTireCorners(eCarTire tireID, glm::vec2 corners[4]) const
++{
++    debug_assert(tireID < eCarTire_COUNT);
++
++    const float wheel_size_w = Convert::PixelsToMeters(CAR_WHEEL_SIZE_W_PX) * 0.5f;
++    const float wheel_size_h = Convert::PixelsToMeters(CAR_WHEEL_SIZE_H_PX) * 0.5f;
++    static const glm::vec2 points[4] =
++    {
++        glm::vec2(-wheel_size_h, -wheel_size_w),
++        glm::vec2( wheel_size_h, -wheel_size_w),
++        glm::vec2( wheel_size_h,  wheel_size_w),
++        glm::vec2(-wheel_size_h,  wheel_size_w),
++    };
++    float positionOffset = 0.0f;
++    if (tireID == eCarTire_Rear)
++    {
++        positionOffset = mRearTireOffset;
++    }
++    else
++    {
++        positionOffset = mFrontTireOffset;
++    }
++
++    for (int icorner = 0; icorner < 4; ++icorner)
++    {
++        glm::vec2 currPoint = points[icorner];
++        if ((tireID == eCarTire_Front) && mSteeringAngleRadians)
++        {
++            currPoint = glm::rotate(points[icorner], mSteeringAngleRadians);
++        }
++        glm::vec2 point = mPhysicsBody->GetWorldPoint(currPoint + glm::vec2(positionOffset, 0.0f));
++        corners[icorner] = point;
++    }
++}
++
++void Vehicle::UpdateSteer(const DriveCtlState& currCtlState)
++{
++    const float LockAngleRadians = glm::radians(30.0f);
++    const float TurnSpeedPerSec = glm::radians(270.0f * 1.0f);
++
++    float turnPerTimeStep = (TurnSpeedPerSec * gTimeManager.mGameFrameDelta);
++    float desiredAngle = (LockAngleRadians * currCtlState.mSteerDirection);
++    float angleToTurn = glm::clamp((desiredAngle - mSteeringAngleRadians), -turnPerTimeStep, turnPerTimeStep);
++    mSteeringAngleRadians = glm::clamp(mSteeringAngleRadians + angleToTurn, -LockAngleRadians, LockAngleRadians);
++}
++
++void Vehicle::UpdateFriction(const DriveCtlState& currCtlState)
++{
++    float linearSpeed = 0.0f;
++
++    glm::vec2 linearVelocityVector = mPhysicsBody->GetLinearVelocity();
++    if (glm::length2(linearVelocityVector) > 0.0f)
++    {
++        linearSpeed = glm::length(linearVelocityVector);
++    }
++
++    // kill lateral velocity front tire
++    {
++        glm::vec2 impulse = mPhysicsBody->GetMass() * 0.20f * -GetTireLateralVelocity(eCarTire_Front);
++        mPhysicsBody->ApplyLinearImpulse(impulse, GetTirePosition(eCarTire_Front));
++    }
++
++    // kill lateral velocity rear tire
++    {
++        glm::vec2 impulse = mPhysicsBody->GetMass() * 0.20f * -GetTireLateralVelocity(eCarTire_Rear);
++        mPhysicsBody->ApplyLinearImpulse(impulse, GetTirePosition(eCarTire_Rear));
++    }
++
++    // rolling resistance
++    if (linearSpeed > 0.0f)
++    {
++        float rrCoef = 50.0f;
++        mPhysicsBody->ApplyLinearImpulse(rrCoef * -linearVelocityVector, GetTirePosition(eCarTire_Front));
++        mPhysicsBody->ApplyLinearImpulse(rrCoef * -linearVelocityVector, GetTirePosition(eCarTire_Rear));
++    }
++
++    // apply drag force
++    if (linearSpeed > 0.0f)
++    {
++        float dragForceCoef = 102.0f;
++        glm::vec2 dragForce = -dragForceCoef * linearSpeed * linearVelocityVector;
++
++        mPhysicsBody->AddForce(dragForce);
++    }
++}
++
++void Vehicle::UpdateDrive(const DriveCtlState& currCtlState)
++{
++    if (currCtlState.mDriveDirection == 0.0f)
++        return;
++
++    float driveForce = 100750.0f; // todo: magic numbers
++    float brakeForce = driveForce * mCarInfo->mHandbrakeFriction;
++    float reverseForce = driveForce * 0.75f;
++
++    float currentSpeed = GetCurrentSpeed();
++    float engineForce = 0.0f;
++
++    if (currCtlState.mDriveDirection > 0.0f)
++    {
++        engineForce = driveForce;
++    }
++    else
++    {
++        if (currentSpeed > 0.0f)
++        {
++            engineForce = brakeForce;
++        }
++        else
++        {
++            engineForce = reverseForce;
++        }
++    }
++
++    glm::vec2 F = engineForce * currCtlState.mDriveDirection * GetTireForward(eCarTire_Rear);
++    mPhysicsBody->AddForce(F, GetTirePosition(eCarTire_Rear));
++}
++
++glm::vec2 Vehicle::GetTireLateralVelocity(eCarTire tireID) const
++{
++    debug_assert(tireID < eCarTire_COUNT);
++
++    glm::vec2 normal_vector = GetTireLateral(tireID);
++    glm::vec2 local_position = GetTireLocalPos(tireID);
++
++    return normal_vector * glm::dot(normal_vector, mPhysicsBody->GetLinearVelocityFromLocalPoint(local_position));
++}
++
++glm::vec2 Vehicle::GetTireForwardVelocity(eCarTire tireID) const
++{
++    debug_assert(tireID < eCarTire_COUNT);
++
++    glm::vec2 normal_vector = GetTireForward(tireID);
++    glm::vec2 local_position = GetTireLocalPos(tireID);
++
++    return normal_vector * glm::dot(normal_vector, mPhysicsBody->GetLinearVelocityFromLocalPoint(local_position));
++}
++
++glm::vec2 Vehicle::GetTirePosition(eCarTire tireID) const
++{
++    debug_assert(tireID < eCarTire_COUNT);
++
++    glm::vec2 local_position = GetTireLocalPos(tireID);
++    return mPhysicsBody->GetWorldPoint(local_position);
++}
++
++glm::vec2 Vehicle::GetTireForward(eCarTire tireID) const
++{
++    debug_assert(tireID < eCarTire_COUNT);
++
++    glm::vec2 local_vector = GetTireLocalForward(tireID);
++    return mPhysicsBody->GetWorldVector(local_vector);
++}
++
++glm::vec2 Vehicle::GetTireLateral(eCarTire tireID) const
++{
++    debug_assert(tireID < eCarTire_COUNT);
++
++    glm::vec2 local_vector = GetTireLocalLateral(tireID);
++    return mPhysicsBody->GetWorldVector(local_vector);
++}
++
++glm::vec2 Vehicle::GetTireLocalPos(eCarTire tireID) const
++{
++    if (tireID == eCarTire_Rear)
++    {
++        return (LocalForwardVector * mRearTireOffset);
++    }
++    if (tireID == eCarTire_Front)
++    {
++        return (LocalForwardVector * mFrontTireOffset);
++    }
++    debug_assert(false);
++    return {};
++}
++
++glm::vec2 Vehicle::GetTireLocalForward(eCarTire tireID) const
++{
++    if (tireID == eCarTire_Rear)
++    {
++        return LocalForwardVector;
++    }
++    if (tireID == eCarTire_Front)
++    {
++        return glm::rotate(LocalForwardVector, mSteeringAngleRadians);
++    }
++    debug_assert(false);
++    return {};
++}
++
++glm::vec2 Vehicle::GetTireLocalLateral(eCarTire tireID) const
++{
++    if (tireID == eCarTire_Rear)
++    {
++        return LocalLateralVector;
++    }
++    if (tireID == eCarTire_Front)
++    {
++        return glm::rotate(LocalLateralVector, mSteeringAngleRadians);
++    }
++    debug_assert(false);
++    return {};
++}
++
++void Vehicle::SetRemap(int remapIndex)
++{
++    mRemapIndex = remapIndex;
++    mRemapClut = (mRemapIndex == NO_REMAP) ? 0 : (mCarInfo->mRemapsBaseIndex + mRemapIndex);
++}
 diff --git a/src/Vehicle.h b/src/Vehicle.h
-index 0d3a52f..1c05673 100644
+index 0d3a52f..c1f2f2b 100644
 --- a/src/Vehicle.h
 +++ b/src/Vehicle.h
-@@ -21,6 +21,7 @@ class Vehicle final: public GameObject, public SpriteAnimListener
- {
-     friend class GameObjectsManager;
-     friend class GameCheatsWindow;
+@@ -1,186 +1,196 @@
+-#pragma once
+-
+-#include "GameDefs.h"
+-#include "PhysicsDefs.h"
+-#include "GameObject.h"
+-#include "Sprite2D.h"
+-
+-//////////////////////////////////////////////////////////////////////////
+-
+-enum eCarTire
+-{
+-    eCarTire_Front,
+-    eCarTire_Rear,
+-    eCarTire_COUNT
+-};
+-
+-//////////////////////////////////////////////////////////////////////////
+-
+-// defines vehicle instance
+-class Vehicle final: public GameObject, public SpriteAnimListener
+-{
+-    friend class GameObjectsManager;
+-    friend class GameCheatsWindow;
+-    friend class PhysicsManager;
+-
+-public:
+-    // public for convenience, should not be modified directly
+-    VehicleInfo* mCarInfo; // cannot be null
+-    std::vector<Pedestrian*> mPassengers;
+-
+-public:
+-    // @param id: Unique object identifier, constant
+-    Vehicle(GameObjectID id);
+-
+-    // override GameObject
+-    void UpdateFrame() override;
+-    void SimulationStep() override;
+-    void DebugDraw(DebugRenderer& debugRender) override;
+-    void HandleSpawn() override;
+-    void HandleDespawn() override;
+-    void HandleCollision(const Collision& collision) override;
+-    void HandleCollisionWithMap(const MapCollision& collision) override;
+-    void HandleFallsOnWater(float fallDistance) override;
+-    void HandleFallsOnGround(float fallDistance) override;
+-    bool ReceiveDamage(const DamageInfo& damageInfo) override;
+-    bool ShouldCollide(GameObject* otherObject) const override;
+-
+-    // adds or removes car passenger
+-    // @param pedestrian: Pedestrian, cannot be null
+-    // @param carSeat: Target seat, does not do check if seat is already occupied, cannot be 'any'
+-    void RegisterPassenger(Pedestrian* pedestrian, eCarSeat carSeat);
+-    void UnregisterPassenger(Pedestrian* pedestrian);
+-
+-    bool HasPassengers() const;
+-
+-    // get car passengers
+-    Pedestrian* GetCarDriver() const;
+-    Pedestrian* GetFirstPassenger(eCarSeat carSeat) const;
+-    
+-    // Repair vehicle but only if it not wrecked
+-    void Repair();
+-
+-    // doors animations
+-    void OpenDoor(int doorIndex);
+-    void CloseDoor(int doorIndex);
+-
+-    bool HasDoorAnimation(int doorIndex) const;
+-    bool IsDoorOpened(int doorIndex) const;
+-    bool IsDoorClosed(int doorIndex) const;
+-    bool IsDoorOpening(int doorIndex) const;
+-    bool IsDoorClosing(int doorIndex) const;
+-    bool HasDoorsOpened() const;
+-
+-    bool HasHardTop() const;
+-    bool CanResistElectricity() const;
+-
+-    // emergency lights animation
+-    bool HasEmergencyLightsAnimation() const;
+-    bool IsEmergencyLightsEnabled() const;
+-    void EnableEmergencyLights(bool isEnabled);
+-
+-    // get door index for specific seat
+-    // @param carSeat: Seat identifier, 'any' treated as driver
+-    int GetDoorIndexForSeat(eCarSeat carSeat) const;
+-
+-    // get position of specific door in local or world coords
+-    // local coords is relative to car center
+-    // @param doorIndex: Door
+-    // @param out: Position in meters
+-    bool GetDoorPosLocal(int doorIndex, glm::vec2& out) const;
+-    bool GetDoorPos(int doorIndex, glm::vec2& out) const;
+-
+-    // get position of specific seat in local or world coords
+-    // local coords is relative to car center
+-    // @param carSeat: Seat
+-    // @param out: Position in meters
+-    bool GetSeatPosLocal(eCarSeat carSeat, glm::vec2& out) const;
+-    bool GetSeatPos(eCarSeat carSeat, glm::vec2& out) const;
+-    
+-    bool IsSeatPresent(eCarSeat carSeat) const;
+-
+-    // Test whether vehicle is wrecked
+-    bool IsWrecked() const;
+-    bool IsBurn() const;
+-    bool IsCriticalDamageState() const;
+-
+-    // Whether vehicle is fall in water
+-    bool IsInWater() const;
+-
+-    // Get current vehicle damage level
+-    int GetCurrentDamage() const;
+-
+-    // Get current vehicle speed in meters per hour
+-    float GetCurrentSpeed() const;
+-
+-private:
+-    // override SpriteAnimListener
+-    bool OnAnimFrameAction(SpriteAnimation* animation, int frameIndex, eSpriteAnimAction actionID) override;
+-
+-    void SetWrecked();
+-    void Explode();
+-    void SetupDeltaAnimations();
+-    void UpdateDeltaAnimations();
+-    void UpdateEngineSound();
+-
+-    void SetRemap(int remapIndex);
+-    void SetBurnEffectActive(bool isActive);
+-    void UpdateBurnEffect();
+-    void UpdateDamageFromRailways();
+-
+-    SpriteDeltaBits GetSpriteDeltas() const;
+-
+-    // physics stuff
+-
+-    void GetChassisCorners(glm::vec2 corners[4]) const;
+-    void GetChassisCornersLocal(glm::vec2 corners[4]) const;
+-    void GetTireCorners(eCarTire tireID, glm::vec2 corners[4]) const;
+-
+-    struct DriveCtlState
+-    {
+-        float mSteerDirection = 0.0f;
+-        float mDriveDirection = 0.0f;
+-        bool mHandBrake = false;
+-    };
+-
+-    void UpdateSteer(const DriveCtlState& currCtlState);
+-    void UpdateFriction(const DriveCtlState& currCtlState);
+-    void UpdateDrive(const DriveCtlState& currCtlState);
+-
+-    // Get tire velocities
+-    glm::vec2 GetTireLateralVelocity(eCarTire tireID) const;
+-    glm::vec2 GetTireForwardVelocity(eCarTire tireID) const;
+-
+-    // Get tire forward direction and position in world space
+-    glm::vec2 GetTirePosition(eCarTire tireID) const;
+-    glm::vec2 GetTireForward(eCarTire tireID) const;
+-    glm::vec2 GetTireLateral(eCarTire tireID) const;
+-
+-    glm::vec2 GetTireLocalPos(eCarTire tireID) const;
+-    glm::vec2 GetTireLocalForward(eCarTire tireID) const;
+-    glm::vec2 GetTireLocalLateral(eCarTire tireID) const;
+-
+-private:
+-    SpriteAnimation mDoorsAnims[MAX_CAR_DOORS];
+-    SpriteAnimation mEmergLightsAnim;
+-    SpriteAnimation mDrivingDeltaAnim;
+-    SpriteDeltaBits mDamageDeltaBits;
+-    SpriteDeltaBits mPrevDeltaBits;
+-
+-    // active effects
+-    Decoration* mFireEffect = nullptr;
+-    float mBurnStartTime = 0.0f;
+-    float mStandingOnRailwaysTimer = 0.0f; // how long standing on tracks, seconds
+-    float mExplosionWaitTime = 0.0f;
+-
+-    int mRemapIndex = NO_REMAP;
+-    int mSpriteIndex = 0;
+-    int mCurrentDamage = 0;
+-
+-    bool mCarWrecked = false;
+-
+-    // physics params
+-    float mFrontTireOffset = 0.0f; // steer
+-    float mRearTireOffset = 0.0f; // drive
+-    float mSteeringAngleRadians = 0.0f;
++#pragma once
++
++#include "GameDefs.h"
++#include "PhysicsDefs.h"
++#include "GameObject.h"
++#include "Sprite2D.h"
++
++//////////////////////////////////////////////////////////////////////////
++
++enum eCarTire
++{
++    eCarTire_Front,
++    eCarTire_Rear,
++    eCarTire_COUNT
++};
++
++//////////////////////////////////////////////////////////////////////////
++
++// defines vehicle instance
++class Vehicle final: public GameObject, public SpriteAnimListener
++{
++    friend class GameObjectsManager;
++    friend class GameCheatsWindow;
 +    friend class AiCharacterController; // reads the chassis size for traffic gaps
-     friend class PhysicsManager;
- 
- public:
-@@ -176,6 +177,9 @@ private:
-     int mRemapIndex = NO_REMAP;
-     int mSpriteIndex = 0;
-     int mCurrentDamage = 0;
++    friend class PhysicsManager;
++
++public:
++    // public for convenience, should not be modified directly
++    VehicleInfo* mCarInfo; // cannot be null
++    std::vector<Pedestrian*> mPassengers;
++
++public:
++    // @param id: Unique object identifier, constant
++    Vehicle(GameObjectID id);
++
++    // override GameObject
++    void UpdateFrame() override;
++    void SimulationStep() override;
++    void DebugDraw(DebugRenderer& debugRender) override;
++    void HandleSpawn() override;
++    void HandleDespawn() override;
++    void HandleCollision(const Collision& collision) override;
++    void HandleCollisionWithMap(const MapCollision& collision) override;
++    void HandleFallsOnWater(float fallDistance) override;
++    void HandleFallsOnGround(float fallDistance) override;
++    bool ReceiveDamage(const DamageInfo& damageInfo) override;
++    bool ShouldCollide(GameObject* otherObject) const override;
++
++    // adds or removes car passenger
++    // @param pedestrian: Pedestrian, cannot be null
++    // @param carSeat: Target seat, does not do check if seat is already occupied, cannot be 'any'
++    void RegisterPassenger(Pedestrian* pedestrian, eCarSeat carSeat);
++    void UnregisterPassenger(Pedestrian* pedestrian);
++
++    bool HasPassengers() const;
++
++    // get car passengers
++    Pedestrian* GetCarDriver() const;
++    Pedestrian* GetFirstPassenger(eCarSeat carSeat) const;
++    
++    // Repair vehicle but only if it not wrecked
++    void Repair();
++
++    // doors animations
++    void OpenDoor(int doorIndex);
++    void CloseDoor(int doorIndex);
++
++    bool HasDoorAnimation(int doorIndex) const;
++    bool IsDoorOpened(int doorIndex) const;
++    bool IsDoorClosed(int doorIndex) const;
++    bool IsDoorOpening(int doorIndex) const;
++    bool IsDoorClosing(int doorIndex) const;
++    bool HasDoorsOpened() const;
++
++    bool HasHardTop() const;
++    bool CanResistElectricity() const;
++
++    // emergency lights animation
++    bool HasEmergencyLightsAnimation() const;
++    bool IsEmergencyLightsEnabled() const;
++    void EnableEmergencyLights(bool isEnabled);
++
++    // get door index for specific seat
++    // @param carSeat: Seat identifier, 'any' treated as driver
++    int GetDoorIndexForSeat(eCarSeat carSeat) const;
++
++    // get position of specific door in local or world coords
++    // local coords is relative to car center
++    // @param doorIndex: Door
++    // @param out: Position in meters
++    bool GetDoorPosLocal(int doorIndex, glm::vec2& out) const;
++    bool GetDoorPos(int doorIndex, glm::vec2& out) const;
++
++    // get position of specific seat in local or world coords
++    // local coords is relative to car center
++    // @param carSeat: Seat
++    // @param out: Position in meters
++    bool GetSeatPosLocal(eCarSeat carSeat, glm::vec2& out) const;
++    bool GetSeatPos(eCarSeat carSeat, glm::vec2& out) const;
++    
++    bool IsSeatPresent(eCarSeat carSeat) const;
++
++    // Test whether vehicle is wrecked
++    bool IsWrecked() const;
++    bool IsBurn() const;
++    bool IsCriticalDamageState() const;
++
++    // Whether vehicle is fall in water
++    bool IsInWater() const;
++
++    // Get current vehicle damage level
++    int GetCurrentDamage() const;
++
++    // Get current vehicle speed in meters per hour
++    float GetCurrentSpeed() const;
++    // Mission script control (PARK): ignore the driver and roll at this speed
++    void SetScriptedDrive(bool enabled, float metersPerSecond) { mScriptedDrive = enabled; mScriptedSpeed = metersPerSecond; }
++
++private:
++    // override SpriteAnimListener
++    bool OnAnimFrameAction(SpriteAnimation* animation, int frameIndex, eSpriteAnimAction actionID) override;
++
++    void SetWrecked();
++    void Explode();
++    void SetupDeltaAnimations();
++    void UpdateDeltaAnimations();
++    void UpdateEngineSound();
++
++    void SetRemap(int remapIndex);
++    void SetBurnEffectActive(bool isActive);
++    void UpdateBurnEffect();
++    void UpdateDamageFromRailways();
++
++    SpriteDeltaBits GetSpriteDeltas() const;
++
++    // physics stuff
++
++    void GetChassisCorners(glm::vec2 corners[4]) const;
++    void GetChassisCornersLocal(glm::vec2 corners[4]) const;
++    void GetTireCorners(eCarTire tireID, glm::vec2 corners[4]) const;
++
++    struct DriveCtlState
++    {
++        float mSteerDirection = 0.0f;
++        float mDriveDirection = 0.0f;
++        bool mHandBrake = false;
++    };
++
++    void UpdateSteer(const DriveCtlState& currCtlState);
++    void UpdateFriction(const DriveCtlState& currCtlState);
++    void UpdateDrive(const DriveCtlState& currCtlState);
++
++    // Get tire velocities
++    glm::vec2 GetTireLateralVelocity(eCarTire tireID) const;
++    glm::vec2 GetTireForwardVelocity(eCarTire tireID) const;
++
++    // Get tire forward direction and position in world space
++    glm::vec2 GetTirePosition(eCarTire tireID) const;
++    glm::vec2 GetTireForward(eCarTire tireID) const;
++    glm::vec2 GetTireLateral(eCarTire tireID) const;
++
++    glm::vec2 GetTireLocalPos(eCarTire tireID) const;
++    glm::vec2 GetTireLocalForward(eCarTire tireID) const;
++    glm::vec2 GetTireLocalLateral(eCarTire tireID) const;
++
++private:
++    SpriteAnimation mDoorsAnims[MAX_CAR_DOORS];
++    SpriteAnimation mEmergLightsAnim;
++    SpriteAnimation mDrivingDeltaAnim;
++    SpriteDeltaBits mDamageDeltaBits;
++    SpriteDeltaBits mPrevDeltaBits;
++
++    // active effects
++    Decoration* mFireEffect = nullptr;
++    float mBurnStartTime = 0.0f;
++    float mStandingOnRailwaysTimer = 0.0f; // how long standing on tracks, seconds
++    float mExplosionWaitTime = 0.0f;
++
++    int mRemapIndex = NO_REMAP;
++    int mSpriteIndex = 0;
++    int mCurrentDamage = 0;
 +    // collision damage counts during the impact, not for as long as the bodies stay pressed together
 +    float mCollisionContactStartTime = -1000.0f;
 +    float mCollisionContactLastTime = -1000.0f;
- 
-     bool mCarWrecked = false;
- 
++    // Mission script control (PARK): the driver's input is ignored and the
++    // car rolls along its own axis at this speed, metres per second.
++    bool mScriptedDrive = false;
++    float mScriptedSpeed = 0.0f;
++
++    bool mCarWrecked = false;
++
++    // physics params
++    float mFrontTireOffset = 0.0f; // steer
++    float mRearTireOffset = 0.0f; // drive
++    float mSteeringAngleRadians = 0.0f;
+ };
+\ No newline at end of file
 diff --git a/src/Weapon.cpp b/src/Weapon.cpp
 index c985a63..d2825fa 100644
 --- a/src/Weapon.cpp
@@ -9432,10 +12220,10 @@ index ed6bad2..8c822c2 100644
  impl_enum_strings(ePedestrianState)
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..4678f7f
+index 0000000..9c11199
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1215 @@
+@@ -0,0 +1,1290 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -9605,12 +12393,25 @@ index 0000000..4678f7f
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
++    parkCars_={}; parkRemovals_.clear();
 +    playerBindings_.clear(); carRecords_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
 +    UpdateDoors();
 +    UpdateCameras();
++    // 00401280 -> 00445580 -> 0040b660: a parked car leaves the world when
++    // its timer runs out.
++    for(auto it=parkRemovals_.begin();it!=parkRemovals_.end();) {
++        if(--it->second>0) {++it; continue;}
++        if(auto* object=gGameObjectsManager.GetGameObjectByID(it->first)) if(!object->IsMarkedForDeletion()) {
++            if(object->mClassID==eGameObjectClass_Car)
++                for(auto* occupant:static_cast<Vehicle*>(object)->mPassengers) if(occupant && !occupant->IsHumanPlayerCharacter()) occupant->MarkForDeletion();
++            object->MarkForDeletion();
++        }
++        ownedObjects_.erase(it->first); missionEntities_.erase(it->first);
++        it=parkRemovals_.erase(it);
++    }
 +    // MissionSession dispatches this at25Hz. 00464880 decrements once/update.
 +    for(int owner=0;owner<4;++owner) if(auto* h=player(owner)) if(auto* ped=h->mCharacter)
 +        if(ped->mOriginalWeaponsEnabled) {
@@ -10253,14 +13054,76 @@ index 0000000..4678f7f
 +        AnimateDoor(at->second,false); return WorldResult::Done;
 +    }
 +    if(token=="PARK") {
-+        // 004407c0's first call returns without progressing unless mode0 has
-+        // an associated car. Its vehicle AI99, acceleration/braking, predicted
-+        // box, forced participant walk and cleanup mappings are not proved.
++        // 004407c0 (SPEC_PARK): state1 takes the car over at speed 5, state2
++        // waits for the approach position, puts the participant out at the
++        // exit point, state3 stops the car, shuts the door and queues the
++        // car's removal ten updates later. Speed unit: pixels per update.
 +        auto* human=player(r.owner); auto* ped=human?human->mCharacter:nullptr;
-+        if(!ped || !entity || entity->declaration.token!="DOOR" || !doors_.count(i.A)) return WorldResult::Unresolved;
-+        if(!ped->mCurrentCar && (ped->IsStanding() || ped->IsWalking())) return WorldResult::Hold;
-+        Once("park-control","Unresolved PARK004407c0: original AI99, vehicle control/predicted box and forced participant movement/cleanup mappings; E is not awarded");
-+        return WorldResult::Unresolved;
++        auto door=doors_.find(i.A);
++        if(!ped || !entity || entity->type!=9 || door==doors_.end()) return WorldResult::Unresolved;
++        auto& state=r.process.state; auto& cached=parkCars_[r.owner];
++        Vehicle* car=nullptr;
++        if(!cached) {
++            if(ped->IsEnteringOrExitingCar() || !ped->mCurrentCar || !ped->IsCarDriver() ||
++               ped->mCurrentCar->GetCarDriver()!=ped) return WorldResult::Hold;
++            car=ped->mCurrentCar; cached=car->mObjectID;
++        } else {
++            auto* object=gGameObjectsManager.GetGameObjectByID(cached);
++            if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Car) {
++                cached=0; Once("park-lost","PARK car slot vanished; original would reuse the slot"); return WorldResult::Unresolved;
++            }
++            car=static_cast<Vehicle*>(object);
++            if(state<3 && ped->mCurrentCar!=car) return WorldResult::Hold;
++        }
++        auto target=OriginalPosition(*entity,i.A); if(!target) return WorldResult::Unresolved;
++        const int X=(*target)[0],Y=(*target)[1];
++        const auto& at=car->mTransform.mPosition;
++        const int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x)*64));
++        const int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z)*64));
++        const int tx=x>>6,ty=y>>6;
++        auto roll=[&](int speed) {
++            car->SetScriptedDrive(true,Convert::MapUnitsToMeters(speed*25/64.0f));
++        };
++        if(state==1) {
++            roll(5); state=2;
++            Once("park-camera","PARK: the original camera hold (00462cb0/0043cac0) is not applied to the engine view");
++            return WorldResult::Hold;
++        }
++        const int D=i.D;
++        if(state==2) {
++            if(D<0 || D>3) return WorldResult::Hold;
++            const int L=Convert::MetersToPixels(car->mCarInfo->mDimensions.z)>64?128:64;
++            bool ready=false;
++            if(D==0) ready=y<Y-L/2+64 && ty>(Y>>6)-3 && X-64<=x && x<=X+64;
++            if(D==1) ready=x>X+L/2 && tx<(X>>6)+3 && Y-64<=y && y<=Y+64;
++            if(D==2) ready=y>Y+L/2 && ty<(Y>>6)+3 && X-64<=x && x<=X+64;
++            if(D==3) ready=x<X-L/2+64 && tx>(X>>6)-3 && Y-64<=y && y<=Y+64;
++            if(!ready) return WorldResult::Hold;
++            // 00476500 facing sector of the car's original angle.
++            const int a=static_cast<int>(std::lround((90-car->mTransform.mOrientation.to_degrees())*1024/360))&1023;
++            const int facing=(a<0x80 || a>0x37f)?2:a>0x27f?4:a<0x180?8:1;
++            static const int reverse[4]={2,4,1,8};
++            static const int offsetX[4]={32,-10,32,74},offsetY[4]={74,32,-10,32},angle[4]={0,0x300,0x200,0x100};
++            roll(facing==reverse[D]?-5:5);
++            // 00463be0 -> 0045fc60: the participant is put on foot at the exit point.
++            if(car->GetCarDriver()==ped) {
++                const int z=static_cast<int>(std::lround(MAP_LAYERS_COUNT*64-1-Convert::MetersToMapUnits(at.y)*64));
++                if(auto exit=EnginePosition(X+offsetX[D],Y+offsetY[D],z)) {
++                    ped->PutOnFoot();
++                    ped->SetTransform(*exit,-Convert::Fix16ToAngle(static_cast<unsigned short>(angle[D])));
++                }
++            } else if(D==1) return WorldResult::Hold;
++            state=3; return WorldResult::Hold;
++        }
++        if(state!=3) return WorldResult::Hold;
++        if(ped->mCurrentCar==car) return WorldResult::Hold; // ped state 7: still seated
++        // 00474670 starts the door's state3 animation.
++        AnimateDoor(door->second,false);
++        roll(0);
++        carRecords_.erase(car->mObjectID); // car+0x134 = -1
++        parkRemovals_.emplace_back(car->mObjectID,10);
++        cached=0;
++        return WorldResult::Success;
 +    }
 +    // Guarded effects with known VM failure contracts; do not guess engine health.
 +    if((token=="KILL_DROP" || token=="REMAP_PED" || token=="CLOSE_DOOR") &&
@@ -10653,10 +13516,10 @@ index 0000000..4678f7f
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..eb18ec1
+index 0000000..1b151ab
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,92 @@
+@@ -0,0 +1,96 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -10747,6 +13610,10 @@ index 0000000..eb18ec1
 +    // Mission car object -> declaring record ID (original car+0x134).
 +    std::map<unsigned int,int> carRecords_;
 +    std::array<std::string,4> briefKeys_;
++    // PARK 004407c0: the participant's cached car (005fdfe8) and cars queued
++    // for the timed removal 00401050(10,0,car+200).
++    std::array<unsigned int,4> parkCars_{};
++    std::vector<std::pair<unsigned int,int>> parkRemovals_;
 +};
 +}
 diff --git a/src/mission/ChapterProgress.h b/src/mission/ChapterProgress.h

@@ -20,7 +20,7 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
   The script's parked cars (PARKED) are created when the chapter loads.
 - The opening script runs: target arrow, pager briefing, phones enabled, the pickups around the city appear.
 - Walking to the ringing phones and answering starts the mission; its car appears where the script says, the
-  arrow points at it, and the mission waits for you to get in.
+  arrow points at it; getting in pays the reward, and driving it to the garage parks it (PARK): the car rolls in, you are put out, the door shuts and the mission pays out.
 - Starting a new phone mission or a RESET clears leftover mission cars and objects the way the original does:
   they stay only while the original screen would still show them.
 
@@ -41,7 +41,7 @@ Nothing is invented: a command that isn't recovered yet stops its mission step a
   help messages work; the speed pickups (types 6-8) are placed but not collectable yet.
 
 ## Not yet working
-- PARK (the car drives itself into the garage and you are put out) - the first mission stops there.
+- Results screens and what follows the first mission are not checked yet.
 - Mission pedestrians (PED_ON and everything that needs them), cranes, car bombs, remaining trigger types
   (gun, damage, car-destroyed, moving, bomb shop, respray).
 - Police (`src/police/`): wanted thresholds per section, response levels, arrest-vs-death penalties, lives and
