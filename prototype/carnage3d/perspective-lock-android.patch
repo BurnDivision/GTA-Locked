@@ -2998,10 +2998,10 @@ index a68fe52..3b05e55 100644
  
              GuiContext uiContext ( mCamera2D, mSpriteBatch );
 diff --git a/src/HUD.cpp b/src/HUD.cpp
-index da5e832..4b83515 100644
+index da5e832..23ebd44 100644
 --- a/src/HUD.cpp
 +++ b/src/HUD.cpp
-@@ -1,1041 +1,1077 @@
+@@ -1,1041 +1,1163 @@
 -#include "stdafx.h"
 -#include "HUD.h"
 -#include "SpriteBatch.h"
@@ -4713,19 +4713,29 @@ index da5e832..4b83515 100644
 +
 +//////////////////////////////////////////////////////////////////////////
 +
-+void HUDPagerMessage::SetTextScrolling(bool isScrolling)
++void HUDPagerMessage::PushMessage(const std::string& text)
 +{
-+    if (isScrolling)
-+    {
-+        mScrollTimeDelta = 0.0f;
-+        mScrollTextValue = 0;
-+    }
-+    mScrollingText = isScrolling;
++    if (!mMessageFont || text.empty()) return;
++    Point size;
++    mMessageFont->MeasureString(hud::pagerText(text), size);
++    mMessages.push(text, mMessageContainer.mMaxSize.x + size.x);
++    SetVisible(mMessages.current() != nullptr);
++    UpdateTextScroll(0.0f);
 +}
 +
-+bool HUDPagerMessage::IsTextScrolling() const
++void HUDPagerMessage::CancelMessage(const std::string& text)
 +{
-+    return mScrollingText;
++    mMessages.cancel(text);
++    UpdateTextScroll(0.0f);
++}
++
++void HUDPagerMessage::ClearMessages()
++{
++    mMessages.clear();
++    mMessageText.SetText("");
++    mFlashTimeDelta = 0.0f;
++    mFlash.SetVisible(false);
++    SetVisible(false);
 +}
 +
 +void HUDPagerMessage::Self_SetupHUD()
@@ -4755,13 +4765,12 @@ index da5e832..4b83515 100644
 +    mMessageContainer.SetClipChildren(true);
 +    AttachPanel(&mMessageContainer);
 +
-+    Font* messageFont = gFontManager.GetFont("PAGER1.FON");
-+    debug_assert(messageFont);
-+    mMessageText.SetTextFont(messageFont, FontRemap_Default);
-+    mMessageText.SetText("HELLO, WORLD! THIS IS LONG PAGER MESSAGE!");
++    mMessageFont = gFontManager.GetFont("PAGER2.FON");
++    debug_assert(mMessageFont);
++    mMessageText.SetTextFont(mMessageFont, FontRemap_Default);
 +    mMessageContainer.AttachPanel(&mMessageText);
 +
-+    SetTextScrolling(true);
++    ClearMessages();
 +}
 +
 +void HUDPagerMessage::Self_UpdateFrame()
@@ -4772,33 +4781,14 @@ index da5e832..4b83515 100644
 +
 +void HUDPagerMessage::UpdateTextScroll(float dt)
 +{
-+    const float TextScrollSpeed = 25.0f * frontend::textPixelsPerTick(gCvarTextSpeed.mValue); // pixels per second
-+    const float SinglePixelScrollTime = 1.0f / TextScrollSpeed;
-+
-+    if (IsTextScrolling())
-+    {
-+        mScrollTimeDelta += dt;
-+        int pixelsToScroll = (int)(mScrollTimeDelta / SinglePixelScrollTime);
-+        if (pixelsToScroll > 0)
-+        {
-+            mScrollTimeDelta -= (pixelsToScroll * SinglePixelScrollTime);
-+            mScrollTextValue += pixelsToScroll;
-+        }
-+    }
-+
-+    if (mScrollTextValue)
-+    {
-+        int x_position = mMessageContainer.mMaxSize.x - mScrollTextValue;
-+        mMessageText.SetPosition(Point(x_position, mMessageText.mLocalPosition.y));
-+    }
-+
-+    if (IsTextScrolling())
-+    {
-+        if (mScrollTextValue > (mMessageText.mSize.x + mMessageContainer.mSize.x))
-+        {
-+            SetTextScrolling(true);
-+        }  
-+    }
++    // Original 00486430: one, two or three pixels per 25 Hz update.
++    const float speed = 25.0f * frontend::textPixelsPerTick(gCvarTextSpeed.mValue);
++    mMessages.advance(dt * speed);
++    const auto* entry = mMessages.current();
++    SetVisible(entry != nullptr);
++    mMessageText.SetText(entry ? hud::pagerText(entry->text) : "");
++    mMessageText.SetPosition(Point(entry ? mMessageContainer.mMaxSize.x -
++        static_cast<int>(entry->elapsed) : mMessageContainer.mMaxSize.x, 0));
 +}
 +
 +void HUDPagerMessage::UpdatePagerFlash(float dt)
@@ -4809,6 +4799,76 @@ index da5e832..4b83515 100644
 +    {
 +        mFlashTimeDelta = 0.0f;
 +        mFlash.SetVisible(!mFlash.IsVisible());
++    }
++}
++
++//////////////////////////////////////////////////////////////////////////
++
++void HUDSubtitleMessage::PushMessage(const std::string& text)
++{
++    mMessages.push(text, hud::readableSeconds(text.size(), gCvarTextSpeed.mValue));
++    SetVisible(mMessages.current() != nullptr);
++}
++
++void HUDSubtitleMessage::CancelMessage(const std::string& text)
++{
++    mMessages.cancel(text);
++    SetVisible(mMessages.current() != nullptr);
++}
++
++void HUDSubtitleMessage::ClearMessages()
++{
++    mMessages.clear();
++    mLayout = {};
++    mLayoutText.clear();
++    mLayoutWidth = mLayoutLines = mLayoutSpeed = -1;
++    SetVisible(false);
++}
++
++void HUDSubtitleMessage::Self_SetupHUD()
++{
++    // 00481030 loads SUB{1,2}.FON; 004857a0 uses that font for bottom captions.
++    mFont = gFontManager.GetFont("SUB2.FON");
++    ClearMessages();
++}
++
++void HUDSubtitleMessage::Self_UpdateFrame()
++{
++    mMessages.advance(gTimeManager.mUiFrameDelta);
++    SetVisible(mMessages.current() != nullptr);
++}
++
++void HUDSubtitleMessage::Self_DrawFrame(GuiContext& context)
++{
++    auto* entry = mMessages.current();
++    if (!entry || !mFont) return;
++    const int height = mFont->GetLineHeight();
++    if (height <= 0) return;
++    const int margin = std::min(12, context.GetScreenSizex() / 10);
++    const int width = std::max(1, context.GetScreenSizex() - margin * 2);
++    const int lines = std::max(1, (context.GetScreenSizey() / 3) / height);
++    const int speed = gCvarTextSpeed.mValue;
++    if (entry->text != mLayoutText || width != mLayoutWidth ||
++        lines != mLayoutLines || speed != mLayoutSpeed)
++    {
++        mLayout = hud::layoutSubtitle(entry->text, width, lines, speed,
++            [&](const std::string& text) { Point size; mFont->MeasureString(text, size); return size.x; });
++        mLayoutText = entry->text;
++        mLayoutWidth = width;
++        mLayoutLines = lines;
++        mLayoutSpeed = speed;
++    }
++    entry->duration = std::max(entry->duration, mLayout.duration);
++    if (mLayout.pages.empty()) return;
++    const auto& page = mLayout.pages[mLayout.pageAt(entry->elapsed)];
++    Point size;
++    mFont->MeasureString(page, size);
++    const Point at(margin, std::max(0, context.GetScreenSizey() - size.y - margin));
++    // Clip against this local logical viewport, including split-screen and g_uiScale.
++    if (context.EnterChildClipArea(Rect{0, 0, context.GetScreenSizex(), context.GetScreenSizey()}))
++    {
++        mFont->DrawString(context, page, at, gGameMap.mStyleData.GetFontPaletteIndex(FontRemap_Default));
++        context.LeaveChildClipArea();
 +    }
 +}
 +
@@ -4840,6 +4900,7 @@ index da5e832..4b83515 100644
 +    mPanelsContainer.AttachPanel(&mTopMiddleContainer);
 +    mPanelsContainer.AttachPanel(&mTopRightContainer);
 +    mPanelsContainer.AttachPanel(&mBigFontMessage);
++    mPanelsContainer.AttachPanel(&mSubtitlePanel);
 +
 +    mPanelsContainer.SetupHUD();
 +
@@ -4854,24 +4915,31 @@ index da5e832..4b83515 100644
 +{
 +    mAutoHidePanels.clear();
 +    mTextMessagesQueue.clear();
++    mSubtitlePanel.ClearMessages();
++    mPagerPanel.ClearMessages();
++    mMissionText.clear();
++    mBigFontMessage.SetVisible(false);
 +    gGuiManager.DetachScreen(this);
 +}
 +
-+void HUD::PushPagerMessage()
++void HUD::PushPagerMessage(const std::string& text)
 +{
-+    // todo
++    mPagerPanel.PushMessage(text);
 +}
 +
-+void HUD::PushHelpMessage()
++void HUD::PushHelpMessage(const std::string& text)
 +{
-+    // todo
++    mSubtitlePanel.PushMessage(text);
 +}
 +
 +void HUD::ClearMissionText(const std::string& text)
 +{
++    mSubtitlePanel.CancelMessage(text);
++    mPagerPanel.CancelMessage(text);
 +    if (mMissionText.empty() || mMissionText != text)
 +        return;
 +    mMissionText.clear();
++    mBigFontMessage.SetVisible(false);
 +    for (AutoHidePanel& currElement: mAutoHidePanels)
 +    {
 +        if (currElement.mPointer == &mBigFontMessage)
@@ -4881,8 +4949,11 @@ index da5e832..4b83515 100644
 +    }
 +}
 +
-+void HUD::ShowMissionText(const std::string& text)
++void HUD::ShowMissionText(const std::string& text, hud::TextArea area)
 +{
++    if (text.empty()) return;
++    if (area == hud::TextArea::Pager) { PushPagerMessage(text); return; }
++    if (area == hud::TextArea::Subtitle) { mSubtitlePanel.PushMessage(text); return; }
 +    mMissionText = text;
 +    mBigFontMessage.SetText(text);
 +    ShowAutoHidePanel(&mBigFontMessage, frontend::messageSeconds(text.size(),gCvarTextSpeed.mValue));
@@ -5010,11 +5081,26 @@ index da5e832..4b83515 100644
 +        if (auto target = session->World().Arrow(owner))
 +        {
 +            Sprite2D arrow;
-+            gSpriteManager.GetSpriteTexture(GAMEOBJECT_ID_NULL, eSpriteID_Arrow_Pointer, 0, arrow);
++            const int spriteIndex = gGameMap.mStyleData.GetSpriteIndex(eSpriteType_Arrow, eSpriteID_Arrow_Pointer);
++            gSpriteManager.GetSpriteTexture(GAMEOBJECT_ID_NULL, spriteIndex, 0, arrow);
 +            arrow.mScale = HUD_SPRITE_SCALE;
 +            arrow.mDrawOrder = eSpriteDrawOrder_HUD_Arrow;
-+            mHumanPlayer->mViewCamera.ProjectPointToScreen(*target, arrow.mPosition);
-+            context.mSpriteBatch.DrawSprite(arrow);
++            // 004817e0 -> 00461710, table 004b21dc: font remaps 4,5,6,7.
++            // The single-player mission pointer is yellow, not the separate red arrow.
++            arrow.mPaletteIndex = gGameMap.mStyleData.GetFontPaletteIndex(4 + glm::clamp(owner, 0, 3));
++            const auto& camera = mHumanPlayer->mViewCamera;
++            const glm::vec4 clip = camera.mViewProjectionMatrix * glm::vec4(*target, 1.0f);
++            // Half-diagonal keeps every rotated corner inside the viewport.
++            const float inset = glm::length(arrow.GetSpriteSize()) * 0.5f + 4.0f;
++            const auto marker = hud::targetMarker(clip, viewportRect.w, viewportRect.h, inset);
++            if (marker.valid)
++            {
++                arrow.mPosition = marker.position;
++                if (marker.edge)
++                    arrow.mRotateAngle = cxx::angle_t::from_radians(marker.radians) +
++                        cxx::angle_t::from_degrees(SPRITE_ZERO_ANGLE);
++                context.mSpriteBatch.DrawSprite(arrow);
++            }
 +        }
 +    }
 +
@@ -5121,10 +5207,10 @@ index da5e832..4b83515 100644
 +    guiContext.mSpriteBatch.DrawSprite(arrowSprite);
 +}
 diff --git a/src/HUD.h b/src/HUD.h
-index 7eb198f..4764ca5 100644
+index 7eb198f..06ea9fa 100644
 --- a/src/HUD.h
 +++ b/src/HUD.h
-@@ -1,318 +1,322 @@
+@@ -1,318 +1,344 @@
 -#pragma once
 -
 -#include "GuiDefs.h"
@@ -5442,11 +5528,14 @@ index 7eb198f..4764ca5 100644
 -    HUDScoresPanel mScoresPanel;
 -    HUDBonusPanel mBonusPanel;
 -    HUDPagerMessage mPagerPanel;
+-};
+\ No newline at end of file
 +#pragma once
 +
 +#include "GuiDefs.h"
 +#include "GameDefs.h"
 +#include "GuiScreen.h"
++#include "HUDPresentation.h"
 +
 +//////////////////////////////////////////////////////////////////////////
 +
@@ -5675,8 +5764,9 @@ index 7eb198f..4764ca5 100644
 +class HUDPagerMessage: public HUDPanel
 +{
 +public:
-+    void SetTextScrolling(bool isScrolling);
-+    bool IsTextScrolling() const;
++    void PushMessage(const std::string& text);
++    void CancelMessage(const std::string& text);
++    void ClearMessages();
 +protected:
 +    // override HUDPanel
 +    void Self_SetupHUD() override;
@@ -5690,9 +5780,28 @@ index 7eb198f..4764ca5 100644
 +    HUDText mMessageText;
 +    HUDPanel mMessageContainer;
 +    float mFlashTimeDelta = 0.0; // seconds since last flash state change
-+    float mScrollTimeDelta = 0.0; // seconds since last text scroll
-+    int mScrollTextValue = 0;
-+    bool mScrollingText = false;
++    Font* mMessageFont = nullptr;
++    hud::TextQueue mMessages; // lifetimes in pixels, at 25/50/75 pixels per second
++};
++
++//////////////////////////////////////////////////////////////////////////
++
++class HUDSubtitleMessage: public HUDPanel
++{
++public:
++    void PushMessage(const std::string& text);
++    void CancelMessage(const std::string& text);
++    void ClearMessages();
++protected:
++    void Self_SetupHUD() override;
++    void Self_UpdateFrame() override;
++    void Self_DrawFrame(GuiContext& context) override;
++private:
++    Font* mFont = nullptr;
++    hud::TextQueue mMessages;
++    hud::SubtitleLayout mLayout;
++    std::string mLayoutText;
++    int mLayoutWidth = -1, mLayoutLines = -1, mLayoutSpeed = -1;
 +};
 +
 +//////////////////////////////////////////////////////////////////////////
@@ -5706,10 +5815,10 @@ index 7eb198f..4764ca5 100644
 +    void DeinitHUD();
 +    
 +    // Show messages
-+    void PushPagerMessage();
-+    void PushHelpMessage();
++    void PushPagerMessage(const std::string& text);
++    void PushHelpMessage(const std::string& text);
 +    void PushMissionMessage();
-+    void ShowMissionText(const std::string& text);
++    void ShowMissionText(const std::string& text, hud::TextArea area = hud::TextArea::Subtitle);
 +    // Withdraw a mission text that is still on screen (CANCEL_BRIEFING).
 +    void ClearMissionText(const std::string& text);
 +    void PushBombCostMessage();
@@ -5763,8 +5872,185 @@ index 7eb198f..4764ca5 100644
 +    HUDScoresPanel mScoresPanel;
 +    HUDBonusPanel mBonusPanel;
 +    HUDPagerMessage mPagerPanel;
- };
-\ No newline at end of file
++    HUDSubtitleMessage mSubtitlePanel;
++};
+diff --git a/src/HUDPresentation.h b/src/HUDPresentation.h
+new file mode 100755
+index 0000000..c5466fa
+--- /dev/null
++++ b/src/HUDPresentation.h
+@@ -0,0 +1,171 @@
++#pragma once
++
++#include "FrontendProfile.h"
++#include <algorithm>
++#include <cmath>
++#include <deque>
++#include <string>
++#include <vector>
++#include <glm/vec2.hpp>
++#include <glm/vec4.hpp>
++
++namespace hud {
++enum class TextArea { Subtitle, Pager, Big };
++
++// gta.exe 004821c0: P_BRIEF modes 0/2 use the pager; MOBILE is
++// mode 3 -> 00481d40(2), a SUB-font bottom caption, not the pager.
++inline TextArea briefingArea(const std::string& opcode) {
++    if (opcode == "MESSAGE_BRIEF") return TextArea::Big;
++    if (opcode == "P_BRIEF" || opcode == "P_BRIEF_TIMED") return TextArea::Pager;
++    return TextArea::Subtitle;
++}
++
++// 004824a0 -> 00486760 -> 0047dab0: English pager text is uppercased.
++// PAGER fonts have no lowercase ink. Keep subtitles in their original case.
++inline std::string pagerText(std::string text) {
++    for (char& c : text) if (c >= 'a' && c <= 'z') c -= 'a' - 'A';
++    return text;
++}
++
++// The original length/text-speed timer is retained as a lower bound. This
++// reading-time floor is a presentation approximation, not recovered speech timing.
++inline double readableSeconds(std::size_t length, int speed) {
++    return std::max<double>(frontend::messageSeconds(length, speed),
++                            3.0 + static_cast<double>(length) / 14.0);
++}
++
++// Each entry gets its entire lifetime after the preceding entry finishes.
++// Units are seconds for captions and pixels travelled for the pager.
++class TextQueue {
++public:
++    struct Entry { std::string text; double duration; double elapsed = 0.0; };
++    void push(const std::string& text, double duration) {
++        if (!text.empty() && std::isfinite(duration) && duration > 0.0)
++            entries.push_back({text, duration});
++    }
++    Entry* current() { return entries.empty() ? nullptr : &entries.front(); }
++    const Entry* current() const { return entries.empty() ? nullptr : &entries.front(); }
++    void advance(double delta) {
++        if (!std::isfinite(delta) || delta <= 0.0) return;
++        while (!entries.empty()) {
++            auto& entry = entries.front();
++            const double remaining = std::max(0.0, entry.duration - entry.elapsed);
++            if (delta < remaining) { entry.elapsed += delta; break; }
++            delta -= remaining;
++            entries.pop_front();
++        }
++    }
++    void cancel(const std::string& text) {
++        entries.erase(std::remove_if(entries.begin(), entries.end(),
++            [&](const Entry& entry) { return entry.text == text; }), entries.end());
++    }
++    void clear() { entries.clear(); }
++private:
++    std::deque<Entry> entries;
++};
++
++// FXT strings use single-byte ANSI characters. Measure using the rendering font
++// rather than a character-count estimate; preserve explicit paragraph breaks.
++template<class Measure>
++std::vector<std::string> wrapText(const std::string& text, int width, Measure measure) {
++    std::vector<std::string> lines;
++    std::string line;
++    const auto flush = [&]() { lines.push_back(line); line.clear(); };
++    width = std::max(1, width);
++    for (std::size_t pos = 0; pos < text.size();) {
++        const char ch = text[pos];
++        if (ch == '\n') { flush(); ++pos; continue; }
++        if (ch == ' ' || ch == '\t' || ch == '\r') { ++pos; continue; }
++        const auto end = text.find_first_of(" \t\r\n", pos);
++        const auto count = (end == std::string::npos ? text.size() : end) - pos;
++        const std::string word = text.substr(pos, count);
++        pos += count;
++        if (!line.empty() && measure(line + " " + word) <= width) {
++            line += " " + word;
++            continue;
++        }
++        if (!line.empty()) flush();
++        for (char letter : word) {
++            if (!line.empty() && measure(line + letter) > width) flush();
++            line += letter;
++        }
++    }
++    if (!line.empty()) flush();
++    return lines;
++}
++
++struct SubtitleLayout {
++    std::vector<std::string> pages;
++    std::vector<double> seconds;
++    double duration = 0.0;
++    std::size_t pageAt(double elapsed) const {
++        std::size_t page = 0;
++        while (page + 1 < pages.size() && elapsed >= seconds[page]) {
++            elapsed -= seconds[page++];
++        }
++        return page;
++    }
++};
++
++template<class Measure>
++SubtitleLayout layoutSubtitle(const std::string& text, int width, int maxLines,
++                              int speed, Measure measure) {
++    SubtitleLayout result;
++    const auto lines = wrapText(text, width, measure);
++    maxLines = std::max(1, maxLines);
++    for (std::size_t first = 0; first < lines.size(); first += maxLines) {
++        std::string page;
++        const auto end = std::min(lines.size(), first + maxLines);
++        for (auto i = first; i < end; ++i) {
++            if (i != first) page += '\n';
++            page += lines[i];
++        }
++        result.pages.push_back(page);
++        result.seconds.push_back(readableSeconds(page.size(), speed));
++        result.duration += result.seconds.back();
++    }
++    return result;
++}
++
++struct TargetMarker {
++    glm::vec2 position{0.0f};
++    float radians = 0.0f; // screen-space direction: zero points right
++    bool edge = false;
++    bool valid = false;
++};
++
++// Work in the HUD's LOCAL LOGICAL viewport. Homogeneous X/Y retain the bearing
++// behind the camera, where dividing by negative W would reverse the pointer.
++// Rectangular edge intersection is an adaptation to this perspective camera;
++// gta.exe 00486220 instead positions its arrow along the player-target bearing.
++inline TargetMarker targetMarker(const glm::vec4& clip, float width, float height,
++                                 float inset) {
++    TargetMarker result;
++    if (!std::isfinite(width) || !std::isfinite(height) || width <= 0 || height <= 0 ||
++        !std::isfinite(inset) || !std::isfinite(clip.x) || !std::isfinite(clip.y) ||
++        !std::isfinite(clip.z) || !std::isfinite(clip.w)) return result;
++    const glm::vec2 center(width * 0.5f, height * 0.5f);
++    const glm::vec2 limits(std::max(0.0f, center.x - std::max(0.0f, inset)),
++                           std::max(0.0f, center.y - std::max(0.0f, inset)));
++    glm::dvec2 bearing(static_cast<double>(clip.x) * center.x,
++                       -static_cast<double>(clip.y) * center.y);
++    result.valid = true;
++    if (clip.w > 0.00001f) {
++        const glm::dvec2 offset = bearing / static_cast<double>(clip.w);
++        if (clip.z >= -clip.w && clip.z <= clip.w &&
++            std::abs(offset.x) <= limits.x && std::abs(offset.y) <= limits.y) {
++            result.position = center + glm::vec2(offset);
++            return result;
++        }
++    }
++    result.edge = true;
++    const double magnitude = std::max(std::abs(bearing.x), std::abs(bearing.y));
++    if (magnitude > 0.00001f) bearing /= magnitude;
++    else bearing = glm::dvec2(0.0, 1.0);
++    result.radians = std::atan2(bearing.y, bearing.x);
++    const double tx = bearing.x == 0 ? 1e300 : limits.x / std::abs(bearing.x);
++    const double ty = bearing.y == 0 ? 1e300 : limits.y / std::abs(bearing.y);
++    result.position = center + glm::vec2(bearing * std::min(tx, ty));
++    return result;
++}
++}
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
 index a13af22..ff45167 100644
 --- a/src/HumanPlayer.cpp
@@ -13341,10 +13627,10 @@ index ed6bad2..8c822c2 100644
  impl_enum_strings(ePedestrianState)
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..218d84c
+index 0000000..22cf2b7
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1349 @@
+@@ -0,0 +1,1353 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -13749,7 +14035,10 @@ index 0000000..218d84c
 +                Once("pickup-speed","Unresolved speed pickup effect; object retained"); continue;
 +            default: break; // 0046a560: every other type is only removed, with its sound
 +            }
-+            if(!key.empty()) human->mHUD.ShowMissionText(gGameTexts.GetText(key));
++            if(!key.empty()) {
++                if(entry.type==14) human->mHUD.PushHelpMessage(gGameTexts.GetText(key));
++                else human->mHUD.ShowMissionText(gGameTexts.GetText(key));
++            }
 +            // 0046a560: odd nonweapon types use3, even types use4.
 +            gAudioManager.StartSound(eSfxSampleType_Level,(entry.type>=1 && entry.type<=4)?2:((entry.type&1)?3:4),SfxFlags_None,object->mTransform.mPosition);
 +            object->MarkForDeletion();
@@ -13986,11 +14275,12 @@ index 0000000..218d84c
 +           static_cast<std::int16_t>(i.E)<1000)
 +            return token=="FRENZY_BRIEF"?WorldResult::Success:WorldResult::Done;
 +        std::string key=token=="ARMEDMESS"?"bomb_on":token=="DISARMMESS"?"bomb_off":std::to_string(i.E);
-+        if(auto* p=player(r.owner)) p->mHUD.ShowMissionText(gGameTexts.GetText(key));
++        if(auto* p=player(r.owner)) p->mHUD.ShowMissionText(gGameTexts.GetText(key), hud::briefingArea(token));
 +        briefKeys_[r.owner]=key;
-+        // Presentation only. Voice playback, original duration and briefing globals
-+        // do not exist in this engine; no invented seconds conversion.
-+        Once("brief-presentation","Mission text uses HUD big-font presentation; speech and briefing duration unsupported");
++        // 004821c0 / 004857a0: P_BRIEF uses the pager; BRIEF, MOBILE and
++        // SPEECH use bottom SUB-font captions. MESSAGE_BRIEF alone uses BIG.
++        // Voice, exact priority policy and P_BRIEF_TIMED's countdown are not implemented.
++        Once("brief-presentation","Mission text routes to subtitles/pager/BIG; speech and exact briefing timing unsupported");
 +        return token=="FRENZY_BRIEF"?WorldResult::Success:WorldResult::Done;
 +    }
 +    if(token=="ARROW_OFF" || token=="RED_ARROW_OFF") {arrows_[r.owner].reset(); return WorldResult::Done;}
@@ -14008,7 +14298,7 @@ index 0000000..218d84c
 +        }
 +        if(!position) {Once("arrow-location","Mission arrow location unresolved"); return WorldResult::Unresolved;}
 +        arrows_[r.owner]=position;
-+        Once("arrow-render","Mission target uses projected HUD pointer; offscreen compass/red palette unsupported");
++        Once("arrow-render","Mission target uses an edge-clamped HUD pointer; original radial placement is approximated");
 +        return WorldResult::Done;
 +    }
 +    if(token=="MAKEOBJ") {
@@ -14052,10 +14342,10 @@ index 0000000..218d84c
 +        auto label=r.labels.find(i.A);
 +        if(label==r.labels.end() || label->second>=r.instructions.size()) return WorldResult::Unresolved;
 +        const std::string key=std::to_string(r.instructions[label->second].E);
-+        if(!briefKeys_[r.owner].empty() && briefKeys_[r.owner]==key) {
-+            if(auto* p=player(r.owner)) p->mHUD.ClearMissionText(gGameTexts.GetText(key));
-+            briefKeys_[r.owner].clear();
-+        }
++        // A newer briefing must not protect an older queued pager entry from
++        // cancellation. 00482710 searches all matching timed message slots.
++        if(auto* p=player(r.owner)) p->mHUD.ClearMissionText(gGameTexts.GetText(key));
++        if(briefKeys_[r.owner]==key) briefKeys_[r.owner].clear();
 +        return WorldResult::Done;
 +    }
 +    if(token=="RED_ARROW" || token=="ARROWCAR" || token=="ARROWPED") {
@@ -14067,7 +14357,7 @@ index 0000000..218d84c
 +                position->x+=Convert::MapUnitsToMeters(0.5f); position->z+=Convert::MapUnitsToMeters(0.5f);
 +            }
 +            arrows_[r.owner]=position;
-+            Once("arrow-render","Mission target uses projected HUD pointer; offscreen compass/red palette unsupported");
++            Once("arrow-render","Mission target uses an edge-clamped HUD pointer; original radial placement is approximated");
 +            return WorldResult::Done;
 +        }
 +        // Original ARROWCAR/PED skip invalid handles and still succeed.
