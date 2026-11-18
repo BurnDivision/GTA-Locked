@@ -1432,16 +1432,17 @@ index 0000000..8e10ec9
 +}
 diff --git a/src/FrontendProfile.h b/src/FrontendProfile.h
 new file mode 100755
-index 0000000..eaa0127
+index 0000000..62f8076
 --- /dev/null
 +++ b/src/FrontendProfile.h
-@@ -0,0 +1,110 @@
+@@ -0,0 +1,150 @@
 +#pragma once
 +#include <algorithm>
 +#include <array>
 +#include <cstdint>
 +#include <iomanip>
 +#include <istream>
++#include <ostream>
 +#include <sstream>
 +#include <string>
 +namespace frontend {
@@ -1451,6 +1452,9 @@ index 0000000..eaa0127
 +struct HighScore {int score=0;std::string name;};
 +struct Profiles {
 + std::array<std::array<HighScore,3>,6> highScores;
++ // Preserve settings and still-unmapped original fields on import/export.
++ std::array<unsigned char,0x414> originalBytes{};
++ bool hasOriginalBytes=false;
 + int selected=1;
 + std::array<Profile,8> players;
 + Profiles() {
@@ -1471,10 +1475,11 @@ index 0000000..eaa0127
 + }
 + // Call only after a verified single-player chapter-complete outcome, never
 + // MISSION_END (which ends an individual phone job). 00427030 state 13.
-+ bool complete(int chapter,int score) {
++ bool complete(int chapter,int score) {return recordResult(chapter,score,true);}
++ bool recordResult(int chapter,int score,bool success) {
 +  if(!unlocked(chapter) || score<0)return false;
 +  auto& s=players[selected].scores;s[chapter]=std::max(s[chapter],score);
-+  if(chapter<5 && s[chapter+1]==-1)s[chapter+1]=0;
++  if(success && chapter<5 && s[chapter+1]==-1)s[chapter+1]=0;
 +  auto& table=highScores[chapter];
 +  for(int i=2;i>=0;--i)if(score>table[i].score) {
 +   for(int j=0;j<i;++j)table[j]=table[j+1];
@@ -1486,7 +1491,12 @@ index 0000000..eaa0127
 +  if(!validName(name))return false;
 +  players[selected].name=name;return true;
 + }
-+ void reset() {players[selected]=Profile{};players[selected].name=defaultName(selected);}
++ void reset() {
++  players[selected]=Profile{};players[selected].name=defaultName(selected);
++  // 0042b260: four remembered menu integers and six cutscene flags.
++  const int o=0x180+selected*0x50;
++  std::fill(originalBytes.begin()+o+40,originalBytes.begin()+o+80,0);
++ }
 + std::string encode() const {
 +  std::ostringstream out;out<<"C3DPROFILES1 "<<selected;
 +  for(const auto& p:players) {out<<' '<<std::quoted(p.name);for(int s:p.scores)out<<' '<<s;}
@@ -1507,7 +1517,36 @@ index 0000000..eaa0127
 +  in>>std::ws;if(!in.eof())return false;
 +  *this=next;return true;
 + }
-+ // Import only; the original PLAYER_A.DAT is never rewritten by this port.
++ // 0042b4a0/00427030: raw 0x414-byte little-endian PLAYER_A.DAT.
++ // Only recovered profile fields are changed; imported opaque bytes survive.
++ bool exportOriginal(std::ostream& out) const {
++  Profiles checked;if(!checked.decode(encode()))return false;
++  auto bytes=originalBytes;
++  auto integer=[&](int o,std::int32_t value) {
++   auto n=static_cast<std::uint32_t>(value);
++   for(int j=0;j<4;++j)bytes[o+j]=static_cast<unsigned char>(n>>(j*8));
++  };
++  auto name=[&](int o,const std::string& value) {
++   // Keep bytes beyond the terminating NUL, as the original strcpy does.
++   std::copy(value.begin(),value.end(),bytes.begin()+o);bytes[o+value.size()]=0;
++  };
++  if(!hasOriginalBytes) {
++   bytes[0]=4;bytes[1]=6;bytes[2]=2;bytes[7]=1;
++   integer(0xc,100000);integer(0x10,10);integer(0x14,-1);
++   name(0x401,"GTA Game");
++  }
++  bytes[0x400]=static_cast<unsigned char>(selected);
++  for(int i=0;i<8;++i) {
++   const int o=0x180+i*0x50;name(o,players[i].name);
++   for(int j=0;j<6;++j)integer(o+16+j*4,players[i].scores[j]);
++  }
++  for(int c=0;c<6;++c)for(int r=0;r<3;++r) {
++   const int o=0x18+c*60+r*20;
++   integer(o,highScores[c][r].score);name(o+4,highScores[c][r].name);
++  }
++  out.write(reinterpret_cast<const char*>(bytes.data()),bytes.size());
++  return bool(out);
++ }
 + bool importOriginal(std::istream& in) {
 +  std::array<unsigned char,0x414> bytes{};
 +  if(!in.read(reinterpret_cast<char*>(bytes.data()),bytes.size()))return false;
@@ -1535,6 +1574,7 @@ index 0000000..eaa0127
 +   if(!validName(name))return false;
 +   h.name=name;
 +  }
++  next.originalBytes=bytes;next.hasOriginalBytes=true;
 +  *this=next;return true;
 + }
 +};
@@ -1781,10 +1821,10 @@ index 8cfa15c..450821d 100644
      int mBaseTilesData[MAP_DIMENSIONS][MAP_DIMENSIONS]; // y x
  
 diff --git a/src/GameplayGamestate.cpp b/src/GameplayGamestate.cpp
-index fc6c789..b7af869 100644
+index fc6c789..d4f43be 100644
 --- a/src/GameplayGamestate.cpp
 +++ b/src/GameplayGamestate.cpp
-@@ -10,76 +10,81 @@
+@@ -10,76 +10,89 @@
  #include "ParticleEffectsManager.h"
  #include "TrafficManager.h"
  #include "AiManager.h"
@@ -1829,6 +1869,14 @@ index fc6c789..b7af869 100644
 +    gAiManager.UpdateFrame();
      gBroadcastEvents.UpdateFrame();
 +    mMissionSession.Update(deltaTime);
++    const auto outcome=mMissionSession.Outcome();
++    if(outcome!=mission::ChapterOutcome::Playing) {
++        gCarnageGame.mMainMenuGamestate.QueueChapterResult(mMissionSession.Chapter(),
++            mMissionSession.ResultScore(),outcome==mission::ChapterOutcome::Complete);
++        gCarnageGame.ShutdownCurrentScenario();
++        gCarnageGame.SetCurrentGamestate(&gCarnageGame.mMainMenuGamestate);
++        return;
++    }
 +}
 +
 +void GameplayGamestate::OnGamestateInputEvent(KeyInputEvent& inputEvent)
@@ -1922,7 +1970,7 @@ index fc6c789..b7af869 100644
  void GameplayGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
  {
      // do nothing
-@@ -87,23 +92,23 @@ void GameplayGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
+@@ -87,23 +100,23 @@ void GameplayGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
  
  void GameplayGamestate::OnGamestateInputEvent(GamepadInputEvent& inputEvent)
  {
@@ -1958,7 +2006,7 @@ index fc6c789..b7af869 100644
      }
  }
  
-@@ -143,8 +148,8 @@ void GameplayGamestate::OnHumanPlayerDie(int playerIndex)
+@@ -143,8 +156,8 @@ void GameplayGamestate::OnHumanPlayerDie(int playerIndex)
  
      humanPlayer->mCharacter->StartGameObjectSound(ePedSfxChannelIndex_Voice, eSfxSampleType_Voice, SfxVoice_PlayerDies, SfxFlags_None);
  
@@ -2908,10 +2956,10 @@ index 068fae5..435924d 100644
  int main(int argc, char *argv[])
  {
 diff --git a/src/MainMenuGamestate.cpp b/src/MainMenuGamestate.cpp
-index 9089238..f0db740 100644
+index 9089238..e3a925f 100644
 --- a/src/MainMenuGamestate.cpp
 +++ b/src/MainMenuGamestate.cpp
-@@ -1,42 +1,298 @@
+@@ -1,42 +1,318 @@
 -#include "stdafx.h"
 -#include "MainMenuGamestate.h"
 -
@@ -2933,6 +2981,7 @@ index 9089238..f0db740 100644
 +#include "stdafx.h"
 +#include "imgui.h"
 +#include "FrontendCredits.h"
++#include "ProfileStore.h"
 +#include "MainMenuGamestate.h"
 +#include "CarnageGame.h"
 +#include "GameTextsManager.h"
@@ -3023,12 +3072,25 @@ index 9089238..f0db740 100644
 +void MainMenuGamestate::OnGamestateEnter() {
 +    mMenu=frontend::Menu{};mElapsed=0;mStartPending=mQuitPending=false;
 +    mMenu.options[0]=gCvarSoundsVolume.mValue;mMenu.options[1]=gCvarMusicVolume.mValue;
-+    if(gCvarFrontendProfiles.mValue.empty()) {
-+        std::ifstream original;
-+        if(gFiles.OpenBinaryFile("PLAYER_A.DAT",original) && !mMenu.profiles.importOriginal(original))
-+            gConsole.LogMessage(eLogMessage_Warning,"Original player save rejected; using fresh profiles");
-+    } else if(!mMenu.profiles.decode(gCvarFrontendProfiles.mValue))
-+        gConsole.LogMessage(eLogMessage_Warning,"Archived player profiles rejected; using fresh profiles");
++    const auto stored=frontend::loadProfiles(gFiles.mWorkingDirectoryPath+"/PLAYER_A.DAT",mMenu.profiles);
++    mProfileWritable=stored!=frontend::ProfileLoad::Invalid;
++    if(stored==frontend::ProfileLoad::Invalid)
++        gConsole.LogMessage(eLogMessage_Warning,"App player save rejected; preserving file");
++    if(stored==frontend::ProfileLoad::Missing) {
++        if(!gCvarFrontendProfiles.mValue.empty()) {
++            if(!mMenu.profiles.decode(gCvarFrontendProfiles.mValue))
++                gConsole.LogMessage(eLogMessage_Warning,"Archived player profiles rejected");
++        } else {
++            std::ifstream original;
++            if(gFiles.OpenBinaryFile("PLAYER_A.DAT",original) && !mMenu.profiles.importOriginal(original))
++                gConsole.LogMessage(eLogMessage_Warning,"Imported player save rejected");
++        }
++    }
++    if(mPendingChapter>=0) {
++        mMenu.profiles.selected=mPendingPlayer;
++        if(mMenu.profiles.recordResult(mPendingChapter,mPendingScore,mPendingSuccess))SaveProfiles();
++        mPendingChapter=-1;
++    }
 +    mMenu.options[2]=gCvarTextSpeed.mValue;
 +    mMenu.options[4]=gCvarTransparencyEffects.mValue;
 +    mMenu.options[3]=gCvarGameMusicMode.mValue==eGameMusicMode_Constant;
@@ -3043,9 +3105,15 @@ index 9089238..f0db740 100644
 +    if(mTexture)gGraphicsDevice.DestroyTexture(mTexture);
 +    mTexture=nullptr;mReady=false;
 +}
++void MainMenuGamestate::QueueChapterResult(int chapter,int score,bool success) {
++    mPendingPlayer=mMenu.profiles.selected;
++    mPendingChapter=chapter;mPendingScore=score;mPendingSuccess=success;
++}
 +void MainMenuGamestate::SaveProfiles() {
 +    gCvarFrontendProfiles.mValue=mMenu.profiles.encode();
-+    if(!gSystem.SaveConfiguration())gConsole.LogMessage(eLogMessage_Warning,"Could not save player profiles");
++    if(!mProfileWritable || !frontend::saveProfiles(gFiles.mWorkingDirectoryPath+"/PLAYER_A.DAT",mMenu.profiles))
++        gConsole.LogMessage(eLogMessage_Warning,"Could not save player profiles; prior file preserved");
++    if(!gSystem.SaveConfiguration())gConsole.LogMessage(eLogMessage_Warning,"Could not save profile preferences");
 +}
 +void MainMenuGamestate::Act(frontend::Action a) {
 +    if(!mReady)return;
@@ -3249,10 +3317,10 @@ index 9089238..f0db740 100644
 +}
 +void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;}
 diff --git a/src/MainMenuGamestate.h b/src/MainMenuGamestate.h
-index 38eedcd..8ee5098 100644
+index 38eedcd..81cba96 100644
 --- a/src/MainMenuGamestate.h
 +++ b/src/MainMenuGamestate.h
-@@ -1,24 +1,29 @@
+@@ -1,24 +1,32 @@
 -#pragma once
 -
 -#include "GenericGamestate.h"
@@ -3283,6 +3351,7 @@ index 38eedcd..8ee5098 100644
 +class GpuTexture2D;
 +class MainMenuGamestate: public GenericGamestate {
 +public:
++    void QueueChapterResult(int chapter,int score,bool success);
 +    void OnGamestateEnter() override;
 +    void OnGamestateLeave() override;
 +    void OnGamestateFrame() override;
@@ -3298,6 +3367,8 @@ index 38eedcd..8ee5098 100644
 +    void Tap(int,int);
 +    bool LoadAssets();
 +    void SaveProfiles();
++    int mPendingChapter=-1,mPendingScore=0,mPendingPlayer=1;
++    bool mPendingSuccess=false,mProfileWritable=true;
 +    frontend::Menu mMenu;
 +    frontend::Image mFrame, mLower[2], mLogos[8],mPortraits[8],mNamePanel,mBadges[2];
 +    frontend::Font mHead,mText,mMiss,mKey,mCity[3];
@@ -3884,6 +3955,37 @@ index fde54f2..20c74a4 100644
      b2Body* mBox2MapBody;
      b2World* mBox2World;
  
+diff --git a/src/ProfileStore.h b/src/ProfileStore.h
+new file mode 100755
+index 0000000..51c8d82
+--- /dev/null
++++ b/src/ProfileStore.h
+@@ -0,0 +1,25 @@
++#pragma once
++#include "FrontendProfile.h"
++#include <fstream>
++#include <cstdio>
++#include <cerrno>
++namespace frontend {
++enum class ProfileLoad {Missing,Invalid,Loaded};
++inline ProfileLoad loadProfiles(const std::string& path,Profiles& profiles) {
++ errno=0;std::ifstream in(path,std::ios::binary);
++ if(!in)return errno==ENOENT?ProfileLoad::Missing:ProfileLoad::Invalid;
++ return profiles.importOriginal(in)?ProfileLoad::Loaded:ProfileLoad::Invalid;
++}
++// Rename only after a complete, closed write: failure keeps the prior save.
++// The app has one profile writer on its game thread.
++inline bool saveProfiles(const std::string& path,const Profiles& profiles) {
++ const auto temp=path+".tmp";
++ std::ofstream out(temp,std::ios::binary|std::ios::trunc);
++ if(!out || !profiles.exportOriginal(out)) {out.close();std::remove(temp.c_str());return false;}
++ out.flush();const bool good=bool(out);out.close();
++ if(!good || !out || std::rename(temp.c_str(),path.c_str())!=0) {
++  std::remove(temp.c_str());return false;
++ }
++ return true;
++}
++}
 diff --git a/src/RenderingManager.cpp b/src/RenderingManager.cpp
 index c626ef7..62d6bc6 100644
 --- a/src/RenderingManager.cpp
@@ -6176,6 +6278,44 @@ index 0000000..2f6bb17
 +    std::optional<glm::vec3> ResolvePosition(const Entity&) const;
 +};
 +}
+diff --git a/src/mission/ChapterProgress.h b/src/mission/ChapterProgress.h
+new file mode 100755
+index 0000000..657622a
+--- /dev/null
++++ b/src/mission/ChapterProgress.h
+@@ -0,0 +1,32 @@
++#pragma once
++#include "MissionVM.h"
++#include <optional>
++#include <limits>
++namespace mission {
++inline int chapterIndex(const std::string& section) {
++ const char* sections[]={"1","2","102","103","202","203"};
++ for(int i=0;i<6;++i)if(section==sections[i])return i;
++ return -1;
++}
++// TARGET_SCORE is a declaration, not the MISSION.INI metadata line.
++inline std::optional<int> chapterTarget(const Section& section) {
++ std::optional<int> target;
++ for(const auto& r:section.declarations)if(r.token=="TARGET_SCORE") {
++  if(target || r.operands.size()!=2)return {};
++  try {
++   std::size_t end=0;auto n=std::stoll(r.operands[0],&end);
++   if(end!=r.operands[0].size() || n<=0 || n>std::numeric_limits<int>::max())return {};
++   target=static_cast<int>(n);
++  }catch(...) {return {};}
++ }
++ return target;
++}
++enum class ChapterOutcome {Playing,Complete,GameOver};
++// 00446fe0 waits for root processes to stop. END 1 is success; score alone
++// starts the mission-authored finale and must not skip that script.
++inline ChapterOutcome chapterOutcome(const Process& root,bool gameOver) {
++ if(gameOver)return ChapterOutcome::GameOver;
++ if(!root.active && root.outcome==1)return ChapterOutcome::Complete;
++ return ChapterOutcome::Playing;
++}
++}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
 index 0000000..a40d50d
@@ -6788,10 +6928,10 @@ index 0000000..6c8003b
 +}
 diff --git a/src/mission/MissionSession.cpp b/src/mission/MissionSession.cpp
 new file mode 100755
-index 0000000..741fb81
+index 0000000..de79a28
 --- /dev/null
 +++ b/src/mission/MissionSession.cpp
-@@ -0,0 +1,70 @@
+@@ -0,0 +1,81 @@
 +#include "../stdafx.h"
 +#include "MissionSession.h"
 +#include "../FileSystem.h"
@@ -6815,7 +6955,7 @@ index 0000000..741fb81
 +}
 +MissionSession* MissionSession::Current() {return current;}
 +void MissionSession::SetCurrent(MissionSession* p) {current=p;}
-+void MissionSession::Stop() {loaded_=false; clock_=MissionClock{}; world_.Reset();}
++void MissionSession::Stop() {loaded_=false; outcome_=ChapterOutcome::Playing; chapter_=-1; target_.reset(); resultScore_=0; clock_=MissionClock{}; world_.Reset();}
 +bool MissionSession::LoadSection(int section) {
 +    Stop(); economy_=gta::GameEconomy(4); police_.reset(section); script_={};
 +    std::ifstream input;
@@ -6828,6 +6968,7 @@ index 0000000..741fb81
 +        world_.diagnostic({"parser-unparsed",line.raw,line.line,-1});
 +    auto it=std::find_if(script_.sections.begin(),script_.sections.end(),[&](const Section& s){return s.name==std::to_string(section);});
 +    if(it==script_.sections.end()) {world_.diagnostic({"load","Section not found",0,-1}); return false;}
++    chapter_=chapterIndex(it->name);target_=chapterTarget(*it);
 +    bool mapMatches=false;
 +    for(const auto& m:it->metadata) {
 +        auto first=m.raw.find(','); if(first==std::string::npos) continue;
@@ -6845,15 +6986,25 @@ index 0000000..741fb81
 +    return loaded_;
 +}
 +void MissionSession::Update(float dt) {
-+    if(!std::isfinite(dt) || dt<0) return;
++    if(!loaded_ || !std::isfinite(dt) || dt<0) return;
 +    for(int steps=clock_.advance(dt); steps>0; --steps) {
 +        police_.update();
 +        bool any=false,allTerminal=true;
 +        for(int owner=0;owner<4;++owner) if(gCarnageGame.mHumanPlayers[owner]) {
 +            any=true; allTerminal=allTerminal && police_.system().gameOver(owner);
 +        }
-+        if(any && allTerminal) loaded_=false;
++
 +        if(loaded_) {world_.Update(1.0f/25); vm_.tick();}
++        // Front-end progression is single player only. Four-participant/network
++        // result ordering is intentionally not inferred from this adapter.
++        if(any && gCarnageGame.GetHumanPlayersCount()==1 && chapter_>=0) {
++            for(int owner=0;owner<4;++owner)if(gCarnageGame.mHumanPlayers[owner]) {
++                outcome_=chapterOutcome(vm_.processes()[owner],allTerminal);
++                if(outcome_!=ChapterOutcome::Playing) {
++                    resultScore_=economy_.score(owner);loaded_=false;return;
++                }
++            }
++        }
 +    }
 +}
 +MissionSession::HUDNumbers MissionSession::Numbers(int owner) const {
@@ -6864,13 +7015,14 @@ index 0000000..741fb81
 +}
 diff --git a/src/mission/MissionSession.h b/src/mission/MissionSession.h
 new file mode 100755
-index 0000000..a134cf6
+index 0000000..8a8b42a
 --- /dev/null
 +++ b/src/mission/MissionSession.h
-@@ -0,0 +1,30 @@
+@@ -0,0 +1,38 @@
 +#pragma once
 +#include "CarnageMissionWorld.h"
 +#include "PhoneRules.h"
++#include "ChapterProgress.h"
 +#include "../police/PoliceRuntime.h"
 +namespace mission {
 +class MissionSession final {
@@ -6885,6 +7037,10 @@ index 0000000..a134cf6
 +    const MissionVM& VM() const {return vm_;}
 +    const CarnageMissionWorld& World() const {return world_;}
 +    bool Loaded() const {return loaded_;}
++    ChapterOutcome Outcome() const {return outcome_;}
++    int Chapter() const {return chapter_;}
++    int ResultScore() const {return resultScore_;}
++    std::optional<int> Target() const {return target_;}
 +    // Hooks expose one current session without a global constructor/destructor.
 +    static MissionSession* Current();
 +    static void SetCurrent(MissionSession*);
@@ -6895,6 +7051,9 @@ index 0000000..a134cf6
 +    MissionVM vm_;
 +    MissionScript script_;
 +    bool loaded_=false;
++    ChapterOutcome outcome_=ChapterOutcome::Playing;
++    int chapter_=-1,resultScore_=0;
++    std::optional<int> target_;
 +    MissionClock clock_;
 +};
 +}
