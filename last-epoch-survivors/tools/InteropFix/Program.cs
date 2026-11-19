@@ -53,6 +53,17 @@ foreach (var path in Directory.GetFiles(dir, "*.dll"))
     }
     Scan(module.Types, "<module>");
 
+    // Unity 6000.4: the CLR rejects multiple '<>O' (compiler delegate-cache) types even when they
+    // are nested in different parents. Il2CppInterop emits them as empty stubs, so give each a
+    // unique name. Safe: they have no members, and nothing can reference an empty stub by member.
+    foreach (var t in AllTypes(module.Types).Where(t => t.Name == "<>O").ToList())
+    {
+        var newName = $"<>O_{t.MetadataToken.ToUInt32():X8}";
+        Console.WriteLine($"  {Path.GetFileName(path)}: {t.DeclaringType?.FullName} :: <>O -> {newName} (fields={t.Fields.Count}, methods={t.Methods.Count})");
+        t.Name = newName;
+        fixedHere++;
+    }
+
     if (fixedHere > 0)
     {
         totalFixed += fixedHere;
