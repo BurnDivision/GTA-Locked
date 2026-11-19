@@ -1,8 +1,8 @@
 diff --git a/cmake/Carnage3D.cmake b/cmake/Carnage3D.cmake
-index 37ad0d1..73b1a1a 100644
+index 37ad0d1..c6293c5 100644
 --- a/cmake/Carnage3D.cmake
 +++ b/cmake/Carnage3D.cmake
-@@ -9,7 +9,23 @@ target_precompile_headers(carnage3d PUBLIC src/stdafx.h)
+@@ -9,7 +9,26 @@ target_precompile_headers(carnage3d PUBLIC src/stdafx.h)
  if(APPLE)
      add_definitions(-D"GL_SILENCE_DEPRECATION")
  endif()
@@ -16,6 +16,9 @@ index 37ad0d1..73b1a1a 100644
 +    set(WINDOWS_FILE_VERSION "${CMAKE_MATCH_1},${CMAKE_MATCH_2},${CMAKE_MATCH_3},0")
 +    configure_file(src/windows.rc.in "${CMAKE_CURRENT_BINARY_DIR}/windows.rc" @ONLY)
 +    target_sources(carnage3d PRIVATE "${CMAKE_CURRENT_BINARY_DIR}/windows.rc")
++    target_include_directories(carnage3d PRIVATE "${WINDOWS_DEPS}/sdl2/include/SDL2")
++    target_link_libraries(carnage3d "${WINDOWS_DEPS}/sdl2/lib/libSDL2.dll.a")
++    target_compile_definitions(carnage3d PRIVATE SDL_MAIN_HANDLED GAMEPAD_SDL)
 +    add_library(glew_static STATIC "${WINDOWS_DEPS}/glew/src/glew.c")
 +    target_compile_definitions(glew_static PUBLIC GLEW_STATIC)
 +    target_include_directories(glew_static PUBLIC "${WINDOWS_DEPS}/glew/include")
@@ -27,7 +30,7 @@ index 37ad0d1..73b1a1a 100644
  
  if(WITH_BOX2D)
      set(BOX2D_BUILD_UNIT_TESTS OFF CACHE BOOL "Skip tests")
-@@ -27,6 +43,7 @@ else()
+@@ -27,6 +46,7 @@ else()
      target_link_libraries(carnage3d ${BOX2D_LIBRARY})
  endif()
  
@@ -35,56 +38,102 @@ index 37ad0d1..73b1a1a 100644
  find_package(OpenGL REQUIRED)
  find_package(GLEW REQUIRED)
  find_package(glfw3 REQUIRED)
-@@ -38,3 +55,5 @@ endif()
+@@ -38,3 +58,5 @@ endif()
  
  target_include_directories(carnage3d PUBLIC ${OPENAL_INCLUDE_DIR} ${OPENGL_INCLUDE_DIR} ${GLEW_INCLUDE_DIR})
  target_link_libraries(carnage3d glfw ${GLEW_LIBRARY} ${OPENAL_LIBRARY} ${OPENGL_LIBRARY} ${CMAKE_THREAD_LIBS_INIT})
 +
 +endif()
 diff --git a/gamedata/config/inputs.json.default b/gamedata/config/inputs.json.default
-index db6ae85..ce04c62 100644
+index db6ae85..e87b08a 100644
 --- a/gamedata/config/inputs.json.default
 +++ b/gamedata/config/inputs.json.default
-@@ -5,26 +5,27 @@
-         "actions":
-         [
-             // common
+@@ -1,42 +1,43 @@
+-{
+-    "player1":
+-    {
+-        "gamepad_id": "Gamepad1",
+-        "actions":
+-        [
+-            // common
 -            {"action":"NextWeapon", "keycode":"x", "gpbutton":"LeftBumper"},
 -            {"action":"PrevWeapon", "keycode":"z", "gpbutton":"RightBumper"},
 -            // on foot
-+            {"action":"NextWeapon", "keycode":"x", "gpbutton":"RightBumper"},
-+            {"action":"PrevWeapon", "keycode":"z", "gpbutton":"LeftBumper"},
-+            // on foot. With a gamepad: left stick / d-pad moves, right stick aims and fires
-             {"action":"TurnLeft", "keycode":"Left", "gpbutton":"Left"},
-             {"action":"TurnRight", "keycode":"Right", "gpbutton":"Right"},
+-            {"action":"TurnLeft", "keycode":"Left", "gpbutton":"Left"},
+-            {"action":"TurnRight", "keycode":"Right", "gpbutton":"Right"},
 -            {"action":"Jump", "keycode":"Space", "gpbutton":"LeftTrigger"},
-+            {"action":"Jump", "keycode":"Space", "gpbutton":"A"},
-             {"action":"WalkBackward", "keycode":"Down", "gpbutton":"Down"},
-             {"action":"Run", "keycode":"Up", "gpbutton":"Up"},
+-            {"action":"WalkBackward", "keycode":"Down", "gpbutton":"Down"},
+-            {"action":"Run", "keycode":"Up", "gpbutton":"Up"},
 -            {"action":"Shoot", "keycode":"LCtrl", "gpbutton":"B"},
 -            {"action":"EnterCar", "keycode":"Enter", "gpbutton":"X"},
 -            {"action":"EnterCarAsPassenger", "keycode":"f", "gpbutton":"A"},
 -            {"action":"Special", "keycode":"Tab"},
 -            // in car
 -            {"action":"HandBrake", "keycode":"Space", "gpbutton":"Y"},
-+            {"action":"Shoot", "keycode":"LCtrl", "gpbutton":"RightTrigger"},
-+            {"action":"EnterCar", "keycode":"Enter", "gpbutton":"Y"},
-+            {"action":"EnterCarAsPassenger", "keycode":"f", "gpbutton":"X"},
-+            {"action":"Special", "keycode":"Tab", "gpbutton":"B"},
-+            // in car. Also: left stick steers (analog), right trigger = gas, left trigger = brake / reverse
-+            {"action":"HandBrake", "keycode":"Space", "gpbutton":"A"},
-             {"action":"Accelerate", "keycode":"Up", "gpbutton":"Up"},
-             {"action":"Reverse", "keycode":"Down", "gpbutton":"Down"},
-             {"action":"SteerLeft", "keycode":"Left", "gpbutton":"Left"},
-             {"action":"SteerRight", "keycode":"Right", "gpbutton":"Right"},
+-            {"action":"Accelerate", "keycode":"Up", "gpbutton":"Up"},
+-            {"action":"Reverse", "keycode":"Down", "gpbutton":"Down"},
+-            {"action":"SteerLeft", "keycode":"Left", "gpbutton":"Left"},
+-            {"action":"SteerRight", "keycode":"Right", "gpbutton":"Right"},
 -            {"action":"Horn", "keycode":"Tab", "gpbutton":"A"},
 -            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"X"}
-+            {"action":"Horn", "keycode":"Tab", "gpbutton":"B"},
+-        ]
+-    },
+-    "player2":
+-    {
+-        "gamepad_id": "Gamepad2"
+-    },
+-    "player3":
+-    {
+-        "gamepad_id": "Gamepad3"
+-    },
+-    "player4":
+-    {
+-        "gamepad_id": "Gamepad4"
+-    }
++{
++    "player1":
++    {
++        "gamepad_id": "Gamepad1",
++        "actions":
++        [
++            // common
++            {"action":"NextWeapon", "keycode":"x", "gpbutton":"Down"},
++            {"action":"PrevWeapon", "keycode":"z", "gpbutton":"Up"},
++            // on foot. With a gamepad: left stick / d-pad moves, right stick aims and fires
++            {"action":"TurnLeft", "keycode":"Left", "gpbutton":"LeftBumper"},
++            {"action":"TurnRight", "keycode":"Right", "gpbutton":"RightBumper"},
++            {"action":"Jump", "keycode":"Space", "gpbutton":"RightTrigger"},
++            {"action":"WalkBackward", "keycode":"Down", "gpbutton":"Y"},
++            {"action":"Run", "keycode":"Up", "gpbutton":"A"},
++            {"action":"Shoot", "keycode":"LCtrl", "gpbutton":"LeftTrigger"},
++            {"action":"EnterCar", "keycode":"Enter", "gpbutton":"X"},
++            {"action":"EnterCarAsPassenger", "keycode":"f", "gpbutton":"RightThumb"},
++            {"action":"Special", "keycode":"Tab", "gpbutton":"Left"},
++            // in car. Also: left stick steers (analog), right trigger = gas, left trigger = brake / reverse
++            {"action":"HandBrake", "keycode":"Space", "gpbutton":"RightTrigger"},
++            {"action":"Accelerate", "keycode":"Up", "gpbutton":"A"},
++            {"action":"Reverse", "keycode":"Down", "gpbutton":"Y"},
++            {"action":"SteerLeft", "keycode":"Left", "gpbutton":"LeftBumper"},
++            {"action":"SteerRight", "keycode":"Right", "gpbutton":"RightBumper"},
++            {"action":"Horn", "keycode":"Tab", "gpbutton":"Left"},
 +            {"action":"NextRadioStation", "keycode":"r", "gpbutton":"LeftThumb"},
-+            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"Y"}
-         ]
-     },
-     "player2":
++            {"action":"LeaveCar", "keycode":"Enter", "gpbutton":"X"}
++        ]
++    },
++    "player2":
++    {
++        "gamepad_id": "Gamepad2"
++    },
++    "player3":
++    {
++        "gamepad_id": "Gamepad3"
++    },
++    "player4":
++    {
++        "gamepad_id": "Gamepad4"
++    }
+ }
+\ No newline at end of file
 diff --git a/src/AiCharacterController.cpp b/src/AiCharacterController.cpp
 index 36bc041..bd0e112 100644
 --- a/src/AiCharacterController.cpp
@@ -1130,6 +1179,51 @@ index 0000000..65d5302
 +{
 +    CvarsRegisterGlobal();
 +}
+diff --git a/src/ControlsRules.h b/src/ControlsRules.h
+new file mode 100755
+index 0000000..ea0a478
+--- /dev/null
++++ b/src/ControlsRules.h
+@@ -0,0 +1,39 @@
++#pragma once
++#include <array>
++#include <cstddef>
++#include <vector>
++
++// Platform-free gamepad rules. Button{} means unassigned; groups are independent.
++namespace controls {
++template<class Button,class Group,std::size_t N>
++bool assign(std::array<Button,N>& buttons,const std::array<Group,N>& groups,
++            std::size_t action,Button button) {
++    if(action>=N || button==Button{} || buttons[action]==button)return false;
++    const Button old=buttons[action];
++    for(std::size_t i=0;i<N;++i)
++        if(i!=action && groups[i]==groups[action] && buttons[i]==button)
++            buttons[i]=old;
++    buttons[action]=button;
++    return true;
++}
++template<class Button,std::size_t N>
++void restore(std::array<Button,N>& buttons,const std::array<Button,N>& defaults) {
++    buttons=defaults;
++}
++struct Capture {
++    bool active=false;
++    int gamepad=0;
++    std::vector<bool> blocked;
++    template<std::size_t N> void begin(int pad,const std::array<bool,N>& held) {
++        gamepad=pad;blocked.assign(held.begin(),held.end());active=true;
++    }
++    void cancel() {active=false;}
++    void release(int pad,int button) {
++        if(pad==gamepad && button>0 && button<int(blocked.size()))blocked[button]=false;
++    }
++    bool press(int pad,int button) {
++        if(!active || pad!=gamepad || button<=0 || button>=int(blocked.size()) || blocked[button])return false;
++        active=false;return true;
++    }
++};
++}
 diff --git a/src/Decoration.cpp b/src/Decoration.cpp
 index c4c8ad1..c87247a 100644
 --- a/src/Decoration.cpp
@@ -1745,10 +1839,10 @@ index 8640d19..36e7307 100644
 +};
 diff --git a/src/Frontend.h b/src/Frontend.h
 new file mode 100755
-index 0000000..1739e1b
+index 0000000..b289e63
 --- /dev/null
 +++ b/src/Frontend.h
-@@ -0,0 +1,150 @@
+@@ -0,0 +1,153 @@
 +#pragma once
 +#include <algorithm>
 +#include "FrontendProfile.h"
@@ -1769,7 +1863,7 @@ index 0000000..1739e1b
 +    const auto first=name.find_first_not_of(" \t\r\n"),last=name.find_last_not_of(" \t\r\n");
 +    return first==std::string::npos?std::string{}:name.substr(first,last-first+1);
 +}
-+enum class Page {Main,Profiles,Name,Reset,Cities,Options,Quit};
++enum class Page {Main,Profiles,Name,Reset,Cities,Options,Controls,Quit};
 +enum class Action {Up,Down,Left,Right,Accept,Back,Rename,Reset,Erase};
 +struct Menu {
 +    bool exitRequested=false;
@@ -1810,16 +1904,19 @@ index 0000000..1739e1b
 +            if(a==Action::Up || a==Action::Down) chapter=(chapter+lastChapter()+1+d)%(lastChapter()+1);
 +            if(a==Action::Back) {page=Page::Profiles;row=0;}
 +        } else if(page==Page::Options) {
-+            if(a==Action::Up || a==Action::Down) row=(row+5+d)%5;
-+            if(a==Action::Left || a==Action::Right) {
++            if(a==Action::Up || a==Action::Down) row=(row+6+d)%6;
++            if((a==Action::Left || a==Action::Right) && row<5) {
 +                if(row<2) options[row]=std::max(0,std::min(7,options[row]+d));
 +                else if(row==2) options[row]=1+(options[row]-1+3+d)%3;
 +                else options[row]=!options[row];
 +            }
++            if(a==Action::Accept && row==5) {page=Page::Controls;row=0;return;}
 +            if(a==Action::Back || a==Action::Accept) {
 +                if(a==Action::Back) options=saved;
 +                page=Page::Main;row=1;
 +            }
++        } else if(page==Page::Controls) {
++            if(a==Action::Back) {page=Page::Options;row=5;}
 +        } else if(a==Action::Back || a==Action::Accept) exitRequested=true;
 +    }
 +    int section() const {const int ids[3][2]={{1,2},{102,103},{202,203}};return ids[city][chapter];}
@@ -2742,10 +2839,17 @@ index cae3819..1ac82a5 100644
      "#version 300 es\n"
      "precision highp float;\n"
 diff --git a/src/GraphicsDevice.cpp b/src/GraphicsDevice.cpp
-index 2329731..832cf2f 100644
+index 2329731..864f554 100644
 --- a/src/GraphicsDevice.cpp
 +++ b/src/GraphicsDevice.cpp
-@@ -6,6 +6,9 @@
+@@ -1,4 +1,6 @@
+ #include "stdafx.h"
++#include <fstream>
++#include <sstream>
+ #include "GraphicsDevice.h"
+ #include "OpenGLDefs.h"
+ #include "GpuProgram.h"
+@@ -6,6 +8,9 @@
  #include "GpuTexture2D.h"
  #include "GpuTextureArray2D.h"
  #include "cvars.h"
@@ -2755,7 +2859,412 @@ index 2329731..832cf2f 100644
  
  GraphicsDevice gGraphicsDevice;
  
-@@ -178,6 +181,14 @@ bool GraphicsDevice::Initialize()
+@@ -45,31 +50,31 @@ static eKeycode GlfwKeycodeToNative(int keycode)
+         case GLFW_KEY_F11: return eKeycode_F11;
+         case GLFW_KEY_F12: return eKeycode_F12;
+ 
+-        case GLFW_KEY_A: return eKeycode_A;
+-        case GLFW_KEY_B: return eKeycode_B;
+-        case GLFW_KEY_C: return eKeycode_C;
+-        case GLFW_KEY_D: return eKeycode_D;
+-        case GLFW_KEY_E: return eKeycode_E;
+-        case GLFW_KEY_F: return eKeycode_F;
+-        case GLFW_KEY_G: return eKeycode_G;
+-        case GLFW_KEY_H: return eKeycode_H;
+-        case GLFW_KEY_I: return eKeycode_I;
+-        case GLFW_KEY_J: return eKeycode_J;
+-        case GLFW_KEY_K: return eKeycode_K;
+-        case GLFW_KEY_L: return eKeycode_L;
+-        case GLFW_KEY_M: return eKeycode_M;
+-        case GLFW_KEY_N: return eKeycode_N;
+-        case GLFW_KEY_O: return eKeycode_O;
+-        case GLFW_KEY_P: return eKeycode_P;
+-        case GLFW_KEY_Q: return eKeycode_Q;
+-        case GLFW_KEY_R: return eKeycode_R;
+-        case GLFW_KEY_S: return eKeycode_S;
+-        case GLFW_KEY_T: return eKeycode_T;
+-        case GLFW_KEY_U: return eKeycode_U;
+-        case GLFW_KEY_V: return eKeycode_V;
+-        case GLFW_KEY_W: return eKeycode_W;
+-        case GLFW_KEY_X: return eKeycode_X;
+-        case GLFW_KEY_Y: return eKeycode_Y;
++        case GLFW_KEY_A: return eKeycode_A;
++        case GLFW_KEY_B: return eKeycode_B;
++        case GLFW_KEY_C: return eKeycode_C;
++        case GLFW_KEY_D: return eKeycode_D;
++        case GLFW_KEY_E: return eKeycode_E;
++        case GLFW_KEY_F: return eKeycode_F;
++        case GLFW_KEY_G: return eKeycode_G;
++        case GLFW_KEY_H: return eKeycode_H;
++        case GLFW_KEY_I: return eKeycode_I;
++        case GLFW_KEY_J: return eKeycode_J;
++        case GLFW_KEY_K: return eKeycode_K;
++        case GLFW_KEY_L: return eKeycode_L;
++        case GLFW_KEY_M: return eKeycode_M;
++        case GLFW_KEY_N: return eKeycode_N;
++        case GLFW_KEY_O: return eKeycode_O;
++        case GLFW_KEY_P: return eKeycode_P;
++        case GLFW_KEY_Q: return eKeycode_Q;
++        case GLFW_KEY_R: return eKeycode_R;
++        case GLFW_KEY_S: return eKeycode_S;
++        case GLFW_KEY_T: return eKeycode_T;
++        case GLFW_KEY_U: return eKeycode_U;
++        case GLFW_KEY_V: return eKeycode_V;
++        case GLFW_KEY_W: return eKeycode_W;
++        case GLFW_KEY_X: return eKeycode_X;
++        case GLFW_KEY_Y: return eKeycode_Y;
+         case GLFW_KEY_Z: return eKeycode_Z;
+ 
+         case GLFW_KEY_0: return eKeycode_0;
+@@ -124,6 +129,347 @@ static eGamepadButton GlfwGamepadButtonToNative(int gpbutton)
+     return eGamepadButton_null;
+ }
+ 
++#ifdef GAMEPAD_SDL
++// Windows reads controllers through SDL2 instead of GLFW: SDL talks to Switch,
++// PlayStation and other Bluetooth controllers directly, which plain Windows
++// controller input does not deliver for all of them.
++#include <SDL.h>
++static int sSlotJoystick[eGamepadID_COUNT] = { -1, -1, -1, -1 };
++static bool sSlotMapped[eGamepadID_COUNT] = {};
++static bool sGamepadSlotsDirty = true;
++static SDL_GameController* sSdlPads[eGamepadID_COUNT] = {};
++static bool sSdlReady = false;
++static int sGamepadLogBudget = 120;
++
++static void LoadGamepadMappings()
++{
++    SDL_SetMainReady();
++    SDL_SetHint(SDL_HINT_JOYSTICK_ALLOW_BACKGROUND_EVENTS, "1");
++    SDL_SetHint(SDL_HINT_GAMECONTROLLER_USE_BUTTON_LABELS, "0"); // layout by button position
++    if (SDL_Init(SDL_INIT_GAMECONTROLLER) != 0)
++    {
++        gConsole.LogMessage(eLogMessage_Warning, "Controller input failed to start: %s", SDL_GetError());
++        return;
++    }
++    sSdlReady = true;
++    std::string path = gFiles.mExecutableDirectory + "/gamecontrollerdb.txt";
++    int layouts = SDL_GameControllerAddMappingsFromFile(path.c_str());
++    SDL_version version;
++    SDL_GetVersion(&version);
++    gConsole.LogMessage(eLogMessage_Info, "Controller input: SDL %d.%d.%d, %d extra layouts", version.major, version.minor, version.patch, layouts < 0 ? 0 : layouts);
++}
++
++static void RefreshGamepadSlots()
++{
++    sGamepadSlotsDirty = true; // polled every frame: SDL reports connects and disconnects here
++    if (!sSdlReady)
++        return;
++    SDL_PumpEvents();
++    SDL_FlushEvents(SDL_FIRSTEVENT, SDL_LASTEVENT);
++    for (int slot = 0; slot < eGamepadID_COUNT; ++slot)
++    {
++        if (sSdlPads[slot] && SDL_GameControllerGetAttached(sSdlPads[slot]) != SDL_TRUE)
++        {
++            SDL_GameControllerClose(sSdlPads[slot]);
++            sSdlPads[slot] = nullptr;
++            sSlotJoystick[slot] = -1;
++            gInputs.SetGamepadPresent(slot, false);
++            gConsole.LogMessage(eLogMessage_Info, "Gamepad%d disconnected", slot + 1);
++        }
++    }
++    static int openFailures = 0;
++    int count = SDL_NumJoysticks();
++    for (int index = 0; index < count; ++index)
++    {
++        if (SDL_IsGameController(index) != SDL_TRUE)
++            continue;
++        SDL_JoystickID instance = SDL_JoystickGetDeviceInstanceID(index);
++        int freeSlot = -1;
++        bool alreadyOpen = false;
++        for (int slot = 0; slot < eGamepadID_COUNT; ++slot)
++        {
++            if (sSdlPads[slot] == nullptr)
++            {
++                if (freeSlot < 0) freeSlot = slot;
++            }
++            else if (SDL_JoystickInstanceID(SDL_GameControllerGetJoystick(sSdlPads[slot])) == instance)
++            {
++                alreadyOpen = true;
++            }
++        }
++        if (alreadyOpen || freeSlot < 0)
++            continue;
++        SDL_GameController* pad = SDL_GameControllerOpen(index);
++        if (pad == nullptr)
++        {
++            if (openFailures++ < 5)
++                gConsole.LogMessage(eLogMessage_Warning, "Controller could not be opened: %s", SDL_GetError());
++            continue;
++        }
++        sSdlPads[freeSlot] = pad;
++        sSlotJoystick[freeSlot] = freeSlot;
++        sSlotMapped[freeSlot] = true;
++        gInputs.SetGamepadPresent(freeSlot, true);
++        const char* name = SDL_GameControllerName(pad);
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d: %s", freeSlot + 1, name ? name : "?");
++    }
++}
++
++static bool ReadGamepad(int slot, bool, float axes[6], bool buttons[eGamepadButton_COUNT])
++{
++    SDL_GameController* pad = sSdlPads[slot];
++    if (pad == nullptr)
++        return false;
++    static const SDL_GameControllerAxis stickAxes[4] = {
++        SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, SDL_CONTROLLER_AXIS_RIGHTX, SDL_CONTROLLER_AXIS_RIGHTY };
++    for (int iaxis = 0; iaxis < 4; ++iaxis)
++    {
++        float value = SDL_GameControllerGetAxis(pad, stickAxes[iaxis]) / 32767.0f;
++        axes[iaxis] = value < -1.0f ? -1.0f : value;
++    }
++    axes[4] = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERLEFT) / 32767.0f;
++    axes[5] = SDL_GameControllerGetAxis(pad, SDL_CONTROLLER_AXIS_TRIGGERRIGHT) / 32767.0f;
++    static const struct { SDL_GameControllerButton from; eGamepadButton to; } map[] = {
++        { SDL_CONTROLLER_BUTTON_A, eGamepadButton_A }, { SDL_CONTROLLER_BUTTON_B, eGamepadButton_B },
++        { SDL_CONTROLLER_BUTTON_X, eGamepadButton_X }, { SDL_CONTROLLER_BUTTON_Y, eGamepadButton_Y },
++        { SDL_CONTROLLER_BUTTON_LEFTSHOULDER, eGamepadButton_LeftBumper }, { SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, eGamepadButton_RightBumper },
++        { SDL_CONTROLLER_BUTTON_BACK, eGamepadButton_Back }, { SDL_CONTROLLER_BUTTON_START, eGamepadButton_Start },
++        { SDL_CONTROLLER_BUTTON_GUIDE, eGamepadButton_Guide },
++        { SDL_CONTROLLER_BUTTON_LEFTSTICK, eGamepadButton_LeftThumb }, { SDL_CONTROLLER_BUTTON_RIGHTSTICK, eGamepadButton_RightThumb },
++        { SDL_CONTROLLER_BUTTON_DPAD_UP, eGamepadButton_DPAD_Up }, { SDL_CONTROLLER_BUTTON_DPAD_RIGHT, eGamepadButton_DPAD_Right },
++        { SDL_CONTROLLER_BUTTON_DPAD_DOWN, eGamepadButton_DPAD_Down }, { SDL_CONTROLLER_BUTTON_DPAD_LEFT, eGamepadButton_DPAD_Left } };
++    for (const auto& entry: map)
++        buttons[entry.to] = SDL_GameControllerGetButton(pad, entry.from) != 0;
++    buttons[eGamepadButton_LeftTrigger] = axes[4] > 0.5f;
++    buttons[eGamepadButton_RightTrigger] = axes[5] > 0.5f;
++    return true;
++}
++
++static void LogRawGamepadChanges(int slot, int)
++{
++    static const char* names[6] = { "left stick X", "left stick Y", "right stick X", "right stick Y", "left trigger", "right trigger" };
++    static const SDL_GameControllerAxis sdlAxes[6] = { SDL_CONTROLLER_AXIS_LEFTX, SDL_CONTROLLER_AXIS_LEFTY, SDL_CONTROLLER_AXIS_RIGHTX,
++        SDL_CONTROLLER_AXIS_RIGHTY, SDL_CONTROLLER_AXIS_TRIGGERLEFT, SDL_CONTROLLER_AXIS_TRIGGERRIGHT };
++    static float previous[eGamepadID_COUNT][6];
++    static bool described[eGamepadID_COUNT];
++    SDL_GameController* pad = sSdlPads[slot];
++    if (pad == nullptr || sGamepadLogBudget <= 0)
++        return;
++    if (!described[slot])
++    {
++        described[slot] = true;
++        char* mapping = SDL_GameControllerMapping(pad);
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d layout: %s", slot + 1, mapping ? mapping : "?");
++        if (mapping) SDL_free(mapping);
++    }
++    for (int iaxis = 0; iaxis < 6 && sGamepadLogBudget > 0; ++iaxis)
++    {
++        float value = SDL_GameControllerGetAxis(pad, sdlAxes[iaxis]) / 32767.0f;
++        if (fabsf(value - previous[slot][iaxis]) < 0.6f)
++            continue;
++        previous[slot][iaxis] = value;
++        --sGamepadLogBudget;
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d %s = %.2f", slot + 1, names[iaxis], value);
++    }
++}
++#endif // GAMEPAD_SDL
++
++#if !defined(__EMSCRIPTEN__) && !defined(GAMEPAD_SDL)
++// Engine gamepad slots are filled from whatever controllers GLFW reports, in
++// connection order, so a Bluetooth pad that is not joystick 0 still becomes
++// Gamepad1. Controllers with a known layout come first; an unknown controller
++// is read through a generic DirectInput-style layout.
++static int sSlotJoystick[eGamepadID_COUNT] = { -1, -1, -1, -1 };
++static bool sSlotMapped[eGamepadID_COUNT] = {};
++static bool sGamepadSlotsDirty = true;
++
++static void LoadGamepadMappings()
++{
++#ifndef __ANDROID__ // SDL shim already supplies mapped controllers.
++    std::string path = gFiles.mExecutableDirectory + "/gamecontrollerdb.txt";
++    std::ifstream file(path, std::ios::binary);
++    if (!file)
++        return;
++    std::stringstream buffer;
++    buffer << file.rdbuf();
++    bool loaded = ::glfwUpdateGamepadMappings(buffer.str().c_str()) == GLFW_TRUE;
++    gConsole.LogMessage(eLogMessage_Info, "Controller layouts %s from gamecontrollerdb.txt", loaded ? "loaded" : "NOT loaded");
++#endif
++}
++
++static void RefreshGamepadSlots()
++{
++    sGamepadSlotsDirty = false;
++    int joysticks[eGamepadID_COUNT];
++    bool mapped[eGamepadID_COUNT];
++    int count = 0;
++    for (int pass = 0; pass < 2; ++pass)
++    {
++        for (int jid = GLFW_JOYSTICK_1; jid <= GLFW_JOYSTICK_LAST && count < eGamepadID_COUNT; ++jid)
++        {
++            if (::glfwJoystickPresent(jid) != GLFW_TRUE)
++                continue;
++            bool isGamepad = ::glfwJoystickIsGamepad(jid) == GLFW_TRUE;
++            if (isGamepad != (pass == 0))
++                continue;
++            if (!isGamepad)
++            {
++#ifdef __ANDROID__
++                continue; // Android shim exposes mapped SDL controllers only.
++#else
++                int axes = 0, buttons = 0;
++                ::glfwGetJoystickAxes(jid, &axes);
++                ::glfwGetJoystickButtons(jid, &buttons);
++                if (axes < 2 || buttons < 4)
++                    continue; // not a game controller
++#endif
++            }
++            joysticks[count] = jid;
++            mapped[count] = isGamepad;
++            ++count;
++        }
++    }
++    for (int slot = 0; slot < eGamepadID_COUNT; ++slot)
++    {
++        int jid = slot < count ? joysticks[slot] : -1;
++        bool isMapped = slot < count && mapped[slot];
++        if (jid == sSlotJoystick[slot] && isMapped == sSlotMapped[slot] && gInputs.mGamepadsState[slot].mPresent == (jid >= 0))
++            continue;
++        sSlotJoystick[slot] = jid;
++        sSlotMapped[slot] = isMapped;
++        gInputs.SetGamepadPresent(slot, jid >= 0);
++        if (jid >= 0)
++        {
++#ifdef __ANDROID__
++            const char* name = "SDL controller", *guid = "";
++#else
++            const char* name = isMapped ? ::glfwGetGamepadName(jid) : ::glfwGetJoystickName(jid);
++            const char* guid = ::glfwGetJoystickGUID(jid);
++#endif
++            gConsole.LogMessage(eLogMessage_Info, "Gamepad%d: %s [%s] %s", slot + 1, name ? name : "?", guid ? guid : "?",
++                isMapped ? "known layout" : "unknown layout, generic layout used");
++        }
++        else
++        {
++            gConsole.LogMessage(eLogMessage_Info, "Gamepad%d disconnected", slot + 1);
++        }
++    }
++}
++
++// Reads one controller into engine form. Axes: 0-3 sticks, 4-5 triggers (0..1).
++static bool ReadGamepad(int jid, bool isMapped, float axes[6], bool buttons[eGamepadButton_COUNT])
++{
++    if (isMapped)
++    {
++        GLFWgamepadstate state;
++        if (::glfwGetGamepadState(jid, &state) != GLFW_TRUE)
++            return false;
++        for (int iaxis = 0; iaxis < 4; ++iaxis)
++            axes[iaxis] = state.axes[iaxis];
++        axes[4] = (state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
++        axes[5] = (state.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
++        for (int ibutton = 0; ibutton <= GLFW_GAMEPAD_BUTTON_LAST; ++ibutton)
++        {
++            eGamepadButton buttonNative = GlfwGamepadButtonToNative(ibutton);
++            if (buttonNative != eGamepadButton_null)
++                buttons[buttonNative] = state.buttons[ibutton] == GLFW_PRESS;
++        }
++        buttons[eGamepadButton_LeftTrigger] = state.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.5f;
++        buttons[eGamepadButton_RightTrigger] = state.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.5f;
++        return true;
++    }
++    // Generic layout: X/Y left stick, Z/Rz (or axes 2/3) right stick, buttons in the
++    // common DirectInput order, first hat as d-pad. Triggers are read as buttons only,
++    // because the resting value of an unknown trigger axis is not known.
++#ifdef __ANDROID__
++    return false; // Unmapped raw devices are a desktop GLFW fallback.
++#else
++    int axisCount = 0, buttonCount = 0, hatCount = 0;
++    const float* rawAxes = ::glfwGetJoystickAxes(jid, &axisCount);
++    const unsigned char* rawButtons = ::glfwGetJoystickButtons(jid, &buttonCount);
++    const unsigned char* rawHats = ::glfwGetJoystickHats(jid, &hatCount);
++    if (rawAxes == nullptr || rawButtons == nullptr || axisCount < 2)
++        return false;
++    axes[0] = rawAxes[0];
++    axes[1] = rawAxes[1];
++    if (axisCount >= 6) { axes[2] = rawAxes[2]; axes[3] = rawAxes[5]; }
++    else if (axisCount >= 4) { axes[2] = rawAxes[2]; axes[3] = rawAxes[3]; }
++    static const eGamepadButton order[] = {
++        eGamepadButton_X, eGamepadButton_A, eGamepadButton_B, eGamepadButton_Y,
++        eGamepadButton_LeftBumper, eGamepadButton_RightBumper, eGamepadButton_LeftTrigger, eGamepadButton_RightTrigger,
++        eGamepadButton_Back, eGamepadButton_Start, eGamepadButton_LeftThumb, eGamepadButton_RightThumb };
++    for (int ibutton = 0; ibutton < buttonCount && ibutton < (int) (sizeof(order) / sizeof(order[0])); ++ibutton)
++        buttons[order[ibutton]] = rawButtons[ibutton] == GLFW_PRESS;
++    axes[4] = buttons[eGamepadButton_LeftTrigger] ? 1.0f : 0.0f;
++    axes[5] = buttons[eGamepadButton_RightTrigger] ? 1.0f : 0.0f;
++    if (rawHats != nullptr && hatCount > 0)
++    {
++        buttons[eGamepadButton_DPAD_Up] = (rawHats[0] & GLFW_HAT_UP) != 0;
++        buttons[eGamepadButton_DPAD_Right] = (rawHats[0] & GLFW_HAT_RIGHT) != 0;
++        buttons[eGamepadButton_DPAD_Down] = (rawHats[0] & GLFW_HAT_DOWN) != 0;
++        buttons[eGamepadButton_DPAD_Left] = (rawHats[0] & GLFW_HAT_LEFT) != 0;
++    }
++    return true;
++#endif
++}
++// Controller diagnostics: the first raw and translated input changes of each
++// controller are written to the log, so a controller that is found but does
++// nothing can be told apart from one whose layout is wrong.
++static int sGamepadLogBudget = 120;
++#ifndef __ANDROID__
++static void LogRawGamepadChanges(int slot, int jid)
++{
++    static float prevAxes[eGamepadID_COUNT][16];
++    static unsigned char prevButtons[eGamepadID_COUNT][64];
++    static unsigned char prevHats[eGamepadID_COUNT][4];
++    static bool reported[eGamepadID_COUNT];
++    if (sGamepadLogBudget <= 0)
++        return;
++    int axisCount = 0, buttonCount = 0, hatCount = 0;
++    const float* axes = ::glfwGetJoystickAxes(jid, &axisCount);
++    const unsigned char* buttons = ::glfwGetJoystickButtons(jid, &buttonCount);
++    const unsigned char* hats = ::glfwGetJoystickHats(jid, &hatCount);
++    if (!reported[slot])
++    {
++        reported[slot] = true;
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d raw device: %d axes, %d buttons, %d hats%s", slot + 1, axisCount, buttonCount, hatCount,
++            (axes && buttons) ? "" : " (NO DATA from device)");
++        for (int i = 0; axes && i < axisCount && i < 16; ++i)
++        {
++            prevAxes[slot][i] = axes[i];
++            gConsole.LogMessage(eLogMessage_Info, "Gamepad%d raw axis %d rests at %.2f", slot + 1, i, axes[i]);
++        }
++    }
++    for (int i = 0; axes && i < axisCount && i < 16 && sGamepadLogBudget > 0; ++i)
++    {
++        if (fabsf(axes[i] - prevAxes[slot][i]) < 0.5f)
++            continue;
++        prevAxes[slot][i] = axes[i];
++        --sGamepadLogBudget;
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d raw axis %d = %.2f", slot + 1, i, axes[i]);
++    }
++    for (int i = 0; buttons && i < buttonCount && i < 64 && sGamepadLogBudget > 0; ++i)
++    {
++        if (buttons[i] == prevButtons[slot][i])
++            continue;
++        prevButtons[slot][i] = buttons[i];
++        --sGamepadLogBudget;
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d raw button %d %s", slot + 1, i, buttons[i] ? "down" : "up");
++    }
++    for (int i = 0; hats && i < hatCount && i < 4 && sGamepadLogBudget > 0; ++i)
++    {
++        if (hats[i] == prevHats[slot][i])
++            continue;
++        prevHats[slot][i] = hats[i];
++        --sGamepadLogBudget;
++        gConsole.LogMessage(eLogMessage_Info, "Gamepad%d raw hat %d = %d", slot + 1, i, (int) hats[i]);
++    }
++}
++#else
++static void LogRawGamepadChanges(int, int) {}
++#endif
++#endif // __EMSCRIPTEN__
++
+ //////////////////////////////////////////////////////////////////////////
+ 
+ GraphicsDevice::GraphicsDevice()
+@@ -178,6 +524,14 @@ bool GraphicsDevice::Initialize()
  #endif   
      );
  
@@ -2770,7 +3279,7 @@ index 2329731..832cf2f 100644
      GLFWmonitor* graphicsMonitor = nullptr;
      if (enableFullscreen)
      {
-@@ -213,6 +224,15 @@ bool GraphicsDevice::Initialize()
+@@ -213,6 +567,15 @@ bool GraphicsDevice::Initialize()
      }
      // setup current opengl context and register callback handlers
      ::glfwMakeContextCurrent(graphicsWindow);
@@ -2786,7 +3295,7 @@ index 2329731..832cf2f 100644
      ::glfwSetMouseButtonCallback(graphicsWindow, [](GLFWwindow*, int button, int action, int mods)
          {
              if (action == GLFW_REPEAT)
-@@ -227,6 +247,14 @@ bool GraphicsDevice::Initialize()
+@@ -227,6 +590,14 @@ bool GraphicsDevice::Initialize()
          });
      ::glfwSetKeyCallback(graphicsWindow, [](GLFWwindow*, int keycode, int scancode, int action, int mods)
          {
@@ -2801,7 +3310,7 @@ index 2329731..832cf2f 100644
          if (action == GLFW_REPEAT)
              return;
  
-@@ -251,8 +279,14 @@ bool GraphicsDevice::Initialize()
+@@ -251,8 +622,14 @@ bool GraphicsDevice::Initialize()
              };
              gInputs.InputEvent(ev);
          });
@@ -2817,19 +3326,24 @@ index 2329731..832cf2f 100644
              MouseMovedInputEvent ev 
              { 
                  static_cast<int>(xposition),
-@@ -264,7 +298,11 @@ bool GraphicsDevice::Initialize()
+@@ -260,12 +637,11 @@ bool GraphicsDevice::Initialize()
+             };
+             gInputs.InputEvent(ev);
+         });
+-    ::glfwSetJoystickCallback([](int gamepad, int gamepadStatus)
++    ::glfwSetJoystickCallback([](int, int)
          {
-             if (gamepad < eGamepadID_COUNT)
-             {
-+#ifdef _WIN32
-+                gInputs.SetGamepadPresent(gamepad, gamepadStatus == GLFW_CONNECTED && ::glfwJoystickIsGamepad(gamepad) == GLFW_TRUE);
-+#else
-                 gInputs.SetGamepadPresent(gamepad, (gamepadStatus == GLFW_CONNECTED));
+-            if (gamepad < eGamepadID_COUNT)
+-            {
+-                gInputs.SetGamepadPresent(gamepad, (gamepadStatus == GLFW_CONNECTED));
+-            }
++#ifndef __EMSCRIPTEN__
++            sGamepadSlotsDirty = true;
 +#endif
-             }
          });
  
-@@ -282,6 +320,9 @@ bool GraphicsDevice::Initialize()
+     // setup opengl extensions
+@@ -282,6 +658,9 @@ bool GraphicsDevice::Initialize()
      mGraphicsWindow = graphicsWindow;
      mGraphicsMonitor = graphicsMonitor;
  
@@ -2839,7 +3353,21 @@ index 2329731..832cf2f 100644
      QueryGraphicsDeviceCaps();
  
      // create global vertex array object
-@@ -375,7 +416,32 @@ void GraphicsDevice::EnableVSync(bool vsyncEnabled)
+@@ -326,11 +705,8 @@ bool GraphicsDevice::Initialize()
+ 
+     // init gamepads
+ #ifndef __EMSCRIPTEN__
+-    for (int icurr = 0; icurr < eGamepadID_COUNT; ++icurr)
+-    {
+-        bool isGamepad = ::glfwJoystickIsGamepad(icurr) == GLFW_TRUE;
+-        gInputs.SetGamepadPresent(icurr, isGamepad);
+-    }
++    LoadGamepadMappings();
++    RefreshGamepadSlots();
+ #endif // __EMSCRIPTEN__
+ 
+     // reset modified cvars
+@@ -375,7 +751,32 @@ void GraphicsDevice::EnableVSync(bool vsyncEnabled)
  
  void GraphicsDevice::EnableFullscreen(bool fullscreenEnabled)
  {
@@ -2873,7 +3401,7 @@ index 2329731..832cf2f 100644
      return; // fullscreen mode is not available
  #endif
  
-@@ -729,7 +795,13 @@ void GraphicsDevice::RenderIndexedPrimitives(ePrimitiveType primitive, eIndicesT
+@@ -729,7 +1130,13 @@ void GraphicsDevice::RenderIndexedPrimitives(ePrimitiveType primitive, eIndicesT
  
      GLenum primitives = EnumToGL(primitive);
      GLenum indicesTypeGL = EnumToGL(indices);
@@ -2887,7 +3415,7 @@ index 2329731..832cf2f 100644
      glCheckError();
  }
  
-@@ -760,6 +832,18 @@ void GraphicsDevice::Present()
+@@ -760,6 +1167,18 @@ void GraphicsDevice::Present()
      ::glfwSwapBuffers(mGraphicsWindow);
      // process window messages
      ::glfwPollEvents();
@@ -2906,27 +3434,81 @@ index 2329731..832cf2f 100644
      if (::glfwWindowShouldClose(mGraphicsWindow) == GL_TRUE)
      {
          gSystem.QuitRequest();
-@@ -782,7 +866,19 @@ void GraphicsDevice::ProcessGamepadsInputs()
-         if (::glfwGetGamepadState(icurr, &gamepadstate) != GLFW_TRUE)
+@@ -771,44 +1190,46 @@ void GraphicsDevice::Present()
+ void GraphicsDevice::ProcessGamepadsInputs()
+ {
+ #ifndef __EMSCRIPTEN__
+-    GLFWgamepadstate gamepadstate;
+-
++    if (sGamepadSlotsDirty)
++    {
++        RefreshGamepadSlots();
++    }
+     for (int icurr = 0; icurr < eGamepadID_COUNT; ++icurr)
+     {
+         GamepadState& currGamepad = gInputs.mGamepadsState[icurr];
+-        if (!currGamepad.mPresent)
+-            continue;
+-
+-        if (::glfwGetGamepadState(icurr, &gamepadstate) != GLFW_TRUE)
++        if (!currGamepad.mPresent || sSlotJoystick[icurr] < 0)
              continue;
  
-+        // analog sticks and triggers (twin-stick aiming, analog steering)
-+        for (int iaxis = 0; iaxis < 4; ++iaxis)
-+        {
-+            currGamepad.mAxes[iaxis] = gamepadstate.axes[iaxis];
-+        }
-+        currGamepad.mAxes[4] = (gamepadstate.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] + 1.0f) * 0.5f;
-+        currGamepad.mAxes[5] = (gamepadstate.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] + 1.0f) * 0.5f;
-+
-+#ifdef _WIN32
-+        for (int ibutton = 0; ibutton <= GLFW_GAMEPAD_BUTTON_LAST; ++ibutton)
-+#else
-         for (int ibutton = 0; ibutton < GLFW_JOYSTICK_LAST + 1; ++ibutton)
-+#endif
+-        for (int ibutton = 0; ibutton < GLFW_JOYSTICK_LAST + 1; ++ibutton)
++        float axes[6] = {};
++        bool buttons[eGamepadButton_COUNT] = {};
++        LogRawGamepadChanges(icurr, sSlotJoystick[icurr]);
++        if (!ReadGamepad(sSlotJoystick[icurr], sSlotMapped[icurr], axes, buttons))
          {
-             eGamepadButton buttonNative = GlfwGamepadButtonToNative(ibutton);
-             if (buttonNative == eGamepadButton_null)
-@@ -889,6 +985,13 @@ bool GraphicsDevice::InitializeOGLExtensions()
+-            eGamepadButton buttonNative = GlfwGamepadButtonToNative(ibutton);
+-            if (buttonNative == eGamepadButton_null)
+-                continue;
+-
+-            bool newPressed = gamepadstate.buttons[ibutton] == GLFW_PRESS;
+-            if (currGamepad.mButtons[buttonNative] == newPressed)
+-                continue;
+-
+-            GamepadInputEvent inputEvent { icurr, buttonNative, newPressed };
+-            gInputs.InputEvent(inputEvent);
++            static bool readFailureLogged = false;
++            if (!readFailureLogged)
++            {
++                readFailureLogged = true;
++                gConsole.LogMessage(eLogMessage_Warning, "Gamepad%d could not be read", icurr + 1);
++            }
++            sGamepadSlotsDirty = true;
++            continue;
+         }
+-        
+-        // triggers
+-        bool leftTriggerPressed = gamepadstate.axes[GLFW_GAMEPAD_AXIS_LEFT_TRIGGER] > 0.5f;
+-        if (leftTriggerPressed != currGamepad.mButtons[eGamepadButton_LeftTrigger])
++        for (int iaxis = 0; iaxis < 6; ++iaxis)
+         {
+-            GamepadInputEvent inputEvent { icurr, eGamepadButton_LeftTrigger, leftTriggerPressed };
+-            gInputs.InputEvent(inputEvent);
++            currGamepad.mAxes[iaxis] = axes[iaxis];
+         }
+-
+-        bool rightTriggerPressed = gamepadstate.axes[GLFW_GAMEPAD_AXIS_RIGHT_TRIGGER] > 0.5f;
+-        if (rightTriggerPressed != currGamepad.mButtons[eGamepadButton_RightTrigger])
++        for (int ibutton = 0; ibutton < eGamepadButton_COUNT; ++ibutton)
+         {
+-            GamepadInputEvent inputEvent { icurr, eGamepadButton_RightTrigger, rightTriggerPressed };
++            if (ibutton == eGamepadButton_null || currGamepad.mButtons[ibutton] == buttons[ibutton])
++                continue;
++            GamepadInputEvent inputEvent { icurr, (eGamepadButton) ibutton, buttons[ibutton] };
+             gInputs.InputEvent(inputEvent);
++            if (sGamepadLogBudget > 0)
++            {
++                --sGamepadLogBudget;
++                gConsole.LogMessage(eLogMessage_Info, "Gamepad%d game button %s %s%s", icurr + 1, cxx::enum_to_string((eGamepadButton) ibutton),
++                    buttons[ibutton] ? "down" : "up", inputEvent.mConsumed ? "" : " (not used here)");
++            }
+         }
+     }
+ #endif // __EMSCRIPTEN__
+@@ -889,6 +1310,13 @@ bool GraphicsDevice::InitializeOGLExtensions()
          return false;
      }
  
@@ -2940,7 +3522,7 @@ index 2329731..832cf2f 100644
      if (!GLEW_VERSION_3_2)
      {
          gConsole.LogMessage(eLogMessage_Warning, "OpenGL 3.2 API is not available");
-@@ -966,7 +1069,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
+@@ -966,7 +1394,7 @@ void GraphicsDevice::InternalSetRenderStates(const RenderStates& renderStates, b
      if (mCurrentStates == renderStates && !forceState)
          return;
  
@@ -6052,7 +6634,7 @@ index 0000000..c5466fa
 +}
 +}
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..ff45167 100644
+index a13af22..dea916d 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,157 +1,180 @@
@@ -6505,7 +7087,7 @@ index a13af22..ff45167 100644
              if (mCharacter->IsCarPassenger())
              {
                  mCtlState.mHorn = isActivated;
-@@ -223,287 +253,786 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+@@ -223,287 +253,800 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
                  {
                      mCharacter->mCurrentCar->EnableEmergencyLights(isActivated);
                  }
@@ -7070,14 +7652,20 @@ index a13af22..ff45167 100644
 +
 +    if (useGamepad)
 +    {
-+        // the d-pad moves in 8 directions when the left stick is centred
++        // Mapped movement buttons supply digital movement when the left stick is centred.
 +        if (Length(moveStick) <= config.mMoveDeadZone)
 +        {
 +            moveStick = MakeVec2(0.0f, 0.0f);
-+            if (pad.mButtons[eGamepadButton_DPAD_Right]) moveStick.x += 1.0f;
-+            if (pad.mButtons[eGamepadButton_DPAD_Left]) moveStick.x -= 1.0f;
-+            if (pad.mButtons[eGamepadButton_DPAD_Down]) moveStick.y += 1.0f;
-+            if (pad.mButtons[eGamepadButton_DPAD_Up]) moveStick.y -= 1.0f;
++            auto pressed = [&](eInputAction action) {
++                const auto button = mActionsMapping.mActionToKeys[action].mGpButton;
++                return button != eGamepadButton_null && pad.mButtons[button];
++            };
++            if (pressed(eInputAction_TurnRight)) moveStick.x += 1.0f;
++            if (pressed(eInputAction_TurnLeft)) moveStick.x -= 1.0f;
++            if (pressed(eInputAction_WalkBackward)) moveStick.y += 1.0f;
++            if (pressed(eInputAction_Run) || pressed(eInputAction_WalkForward)) moveStick.y -= 1.0f;
++            if (pressed(eInputAction_WalkForward) && !pressed(eInputAction_Run))
++                moveStick = Scale(Normalize(moveStick), 0.5f);
 +        }
 +    }
 +    else
@@ -7191,10 +7779,18 @@ index a13af22..ff45167 100644
 +    if (!pad.mPresent)
 +        return;
 +
++    // a trigger that is assigned to an action does not also work as gas / brake
++    auto triggerFree = [this](eGamepadButton button)
++    {
++        return mActionsMapping.GetAction(eInputActionsGroup_InCar, button) == eInputAction_null &&
++            mActionsMapping.GetAction(eInputActionsGroup_Common, button) == eInputAction_null;
++    };
++    const float leftTrigger = triggerFree(eGamepadButton_LeftTrigger) ? pad.mAxes[4] : 0.0f;
++    const float rightTrigger = triggerFree(eGamepadButton_RightTrigger) ? pad.mAxes[5] : 0.0f;
 +    // right stick Y (up = gas, down = brake/reverse) overrides the triggers outside its dead zone
 +    const driving::Result input = driving::Resolve(
 +        mCtlState.mAcceleration, mCtlState.mSteerDirection,
-+        pad.mAxes[0], pad.mAxes[3], pad.mAxes[4], pad.mAxes[5]);
++        pad.mAxes[0], pad.mAxes[3], leftTrigger, rightTrigger);
 +    mCtlState.mAcceleration = input.acceleration;
 +    mCtlState.mSteerDirection = input.steering;
 +    mTestScript.mTwinStick = false;
@@ -7668,10 +8264,17 @@ index aaad5bb..8861b3a 100644
      io.Fonts->TexID = fontTexture;
      return true;
 diff --git a/src/InputActionsMapping.cpp b/src/InputActionsMapping.cpp
-index 25e57de..0482818 100644
+index 25e57de..d62babc 100644
 --- a/src/InputActionsMapping.cpp
 +++ b/src/InputActionsMapping.cpp
-@@ -32,6 +32,7 @@ static const DefaultActionMapping gDefaultActionsMapping[] =
+@@ -1,5 +1,6 @@
+ #include "stdafx.h"
+ #include "InputActionsMapping.h"
++#include "ControlsRules.h"
+ 
+ struct DefaultActionMapping
+ {
+@@ -32,6 +33,7 @@ static const DefaultActionMapping gDefaultActionsMapping[] =
      {eInputActionsGroup_InCar,  eInputAction_SteerLeft,             eKeycode_LEFT},
      {eInputActionsGroup_InCar,  eInputAction_SteerRight,            eKeycode_RIGHT},
      {eInputActionsGroup_InCar,  eInputAction_Horn,                  eKeycode_TAB},
@@ -7679,7 +8282,58 @@ index 25e57de..0482818 100644
  
      // on foot
      {eInputActionsGroup_OnFoot, eInputAction_TurnLeft,              eKeycode_LEFT},
-@@ -177,6 +178,7 @@ eInputActionsGroup InputActionsMapping::GetInputActionsGroup(eInputAction action
+@@ -109,8 +111,8 @@ void InputActionsMapping::LoadConfig(cxx::json_document_node& configNode)
+             debug_assert(actionGroup < eInputActionsGroup_COUNT);
+ 
+             // map action
+-            mKeycodeActions[keycode].mActions[actionGroup] = action;
+-            mGpButtonActions[gpButton].mActions[actionGroup] = action;
++            if (keycode != eKeycode_null) mKeycodeActions[keycode].mActions[actionGroup] = action;
++            if (gpButton != eGamepadButton_null) mGpButtonActions[gpButton].mActions[actionGroup] = action;
+ 
+             // map action
+             mActionToKeys[action].mKeycode = keycode;
+@@ -121,7 +123,38 @@ void InputActionsMapping::LoadConfig(cxx::json_document_node& configNode)
+ 
+ void InputActionsMapping::SaveConfig(cxx::json_document_node& configNode)
+ {
+-    // todo
++    if (!cxx::json_node_object(configNode)) return;
++    configNode.set_string_attribute("gamepad_id", cxx::enum_to_string(mGamepadID));
++    cxx::json_document_node actions = configNode["actions"];
++    if (!actions) actions = configNode.create_array_node("actions");
++    if (!cxx::json_node_array(actions)) return;
++    auto keys = [&](cxx::json_document_node node, int i) {
++        if (mActionToKeys[i].mKeycode != eKeycode_null)
++            node.set_string_attribute("keycode", cxx::enum_to_string(mActionToKeys[i].mKeycode));
++        else node.remove_attribute("keycode");
++        if (mActionToKeys[i].mGpButton != eGamepadButton_null)
++            node.set_string_attribute("gpbutton", cxx::enum_to_string(mActionToKeys[i].mGpButton));
++        else node.remove_attribute("gpbutton");
++    };
++    for (int i = 1; i < eInputAction_COUNT; ++i)
++    {
++        const auto action = static_cast<eInputAction>(i);
++        const std::string name = cxx::enum_to_string(action);
++        bool found = false;
++        for (auto node = actions.first_child(); node; node = node.next_sibling())
++        {
++            std::string existing;
++            if (!cxx::json_get_attribute(node, "action", existing) || existing != name) continue;
++            keys(node, i);
++            found = true;
++        }
++        if (!found)
++        {
++            auto node = actions.append_object();
++            node.set_string_attribute("action", name);
++            keys(node, i);
++        }
++    }
+ }
+ 
+ eInputAction InputActionsMapping::GetAction(eInputActionsGroup group, eKeycode keycode) const
+@@ -177,6 +210,7 @@ eInputActionsGroup InputActionsMapping::GetInputActionsGroup(eInputAction action
          case eInputAction_Reverse:
          case eInputAction_SteerLeft:
          case eInputAction_SteerRight:
@@ -7687,6 +8341,62 @@ index 25e57de..0482818 100644
          case eInputAction_Horn:
          case eInputAction_LeaveCar:
              return eInputActionsGroup_InCar;
+@@ -185,3 +219,40 @@ eInputActionsGroup InputActionsMapping::GetInputActionsGroup(eInputAction action
+     }
+     return eInputActionsGroup_Common;
+ }
++
++void InputActionsMapping::RebuildGamepadActions()
++{
++    ::memset(mGpButtonActions, 0, sizeof(mGpButtonActions));
++    for (int i = 1; i < eInputAction_COUNT; ++i)
++    {
++        const auto button = mActionToKeys[i].mGpButton;
++        if (button > eGamepadButton_null && button < eGamepadButton_COUNT)
++            mGpButtonActions[button].mActions[GetInputActionsGroup(static_cast<eInputAction>(i))] = static_cast<eInputAction>(i);
++    }
++}
++
++bool InputActionsMapping::AssignGamepadButton(eInputAction action, eGamepadButton button)
++{
++    if (action <= eInputAction_null || action >= eInputAction_COUNT ||
++        button <= eGamepadButton_null || button >= eGamepadButton_COUNT) return false;
++    std::array<eGamepadButton,eInputAction_COUNT> buttons{};
++    std::array<eInputActionsGroup,eInputAction_COUNT> groups{};
++    for (int i = 1; i < eInputAction_COUNT; ++i)
++    {
++        buttons[i] = mActionToKeys[i].mGpButton;
++        groups[i] = GetInputActionsGroup(static_cast<eInputAction>(i));
++    }
++    if (!controls::assign(buttons, groups, action, button)) return false;
++    for (int i = 1; i < eInputAction_COUNT; ++i) mActionToKeys[i].mGpButton = buttons[i];
++    RebuildGamepadActions();
++    return true;
++}
++
++void InputActionsMapping::RestoreGamepadButtons(const InputActionsMapping& defaults)
++{
++    std::array<eGamepadButton,eInputAction_COUNT> buttons{}, original{};
++    for (int i = 1; i < eInputAction_COUNT; ++i) original[i] = defaults.mActionToKeys[i].mGpButton;
++    controls::restore(buttons, original);
++    for (int i = 1; i < eInputAction_COUNT; ++i) mActionToKeys[i].mGpButton = buttons[i];
++    RebuildGamepadActions();
++}
+diff --git a/src/InputActionsMapping.h b/src/InputActionsMapping.h
+index 574f535..12d8b5b 100644
+--- a/src/InputActionsMapping.h
++++ b/src/InputActionsMapping.h
+@@ -12,6 +12,10 @@ public:
+     void LoadConfig(cxx::json_document_node& configNode);
+     void SaveConfig(cxx::json_document_node& configNode);
+ 
++    bool AssignGamepadButton(eInputAction action, eGamepadButton button);
++    void RestoreGamepadButtons(const InputActionsMapping& defaults);
++    void RebuildGamepadActions();
++
+     void SetDefaults();
+     void Clear();
+ 
 diff --git a/src/InputsDefs.h b/src/InputsDefs.h
 index 138173a..36ad51d 100644
 --- a/src/InputsDefs.h
@@ -7782,10 +8492,10 @@ index 068fae5..076b482 100644
  }
 \ No newline at end of file
 diff --git a/src/MainMenuGamestate.cpp b/src/MainMenuGamestate.cpp
-index 9089238..18e5d97 100644
+index 9089238..b0d53f9 100644
 --- a/src/MainMenuGamestate.cpp
 +++ b/src/MainMenuGamestate.cpp
-@@ -1,42 +1,352 @@
+@@ -1,42 +1,514 @@
 -#include "stdafx.h"
 -#include "MainMenuGamestate.h"
 -
@@ -7813,21 +8523,19 @@ index 9089238..18e5d97 100644
 +#include "GameTextsManager.h"
 +#include "GpuTexture2D.h"
 +#include "InputsManager.h"
++#include "HumanPlayer.h"
 +#include "TimeManager.h"
 +#include "System.h"
 +#include "AudioManager.h"
 +#include "AudioSource.h"
 +#include "cvars.h"
 +#include "mission/MissionScript.h"
- 
--void MainMenuGamestate::OnGamestateInputEvent(MouseButtonInputEvent& inputEvent)
--{
--}
++
 +CvarString gCvarFrontendProfiles("g_frontendProfiles", "", "Original front-end player profiles", CvarFlags_Archive);
 +CvarInt gCvarTextSpeed("g_textSpeed", 2, 1, 3, "Original text speed", CvarFlags_Archive);
 +CvarBoolean gCvarTransparencyEffects("g_transparencyEffects", true, "Original transparency preference (sprite consumer unresolved)", CvarFlags_Archive);
  
--void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
+-void MainMenuGamestate::OnGamestateInputEvent(MouseButtonInputEvent& inputEvent)
 -{
 +namespace {
 +std::string Text(const std::string& key) {return gGameTexts.GetText(key);}
@@ -7838,23 +8546,56 @@ index 9089238..18e5d97 100644
 +    if(src.width==640 && y>=0 && y+src.height<=480)
 +        std::copy(src.pixels.begin(),src.pixels.end(),dst.pixels.begin()+y*640*4);
  }
--
--void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent& inputEvent)
++}
++
+ 
+-void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent& inputEvent)
 -{
++namespace {
++struct ControlsRow {eInputAction action;const char* label;const char* group;};
++constexpr ControlsRow controlsRows[]={
++    {eInputAction_TurnLeft,"Turn left","On foot"},
++    {eInputAction_TurnRight,"Turn right","On foot"},
++    {eInputAction_Jump,"Jump","On foot"},
++    {eInputAction_WalkForward,"Walk forward","On foot"},
++    {eInputAction_WalkBackward,"Walk backward","On foot"},
++    {eInputAction_Run,"Run","On foot"},
++    {eInputAction_Shoot,"Shoot","On foot"},
++    {eInputAction_EnterCar,"Enter car","On foot"},
++    {eInputAction_EnterCarAsPassenger,"Enter as passenger","On foot"},
++    {eInputAction_Special,"Special","On foot"},
++    {eInputAction_HandBrake,"Handbrake","In car"},
++    {eInputAction_Accelerate,"Accelerate","In car"},
++    {eInputAction_Reverse,"Reverse","In car"},
++    {eInputAction_SteerLeft,"Steer left","In car"},
++    {eInputAction_SteerRight,"Steer right","In car"},
++    {eInputAction_Horn,"Horn","In car"},
++    {eInputAction_LeaveCar,"Leave car","In car"},
++    {eInputAction_NextRadioStation,"Next radio station","In car"},
++    {eInputAction_NextWeapon,"Next weapon","Common"},
++    {eInputAction_PrevWeapon,"Previous weapon","Common"}
++};
++eInputAction ControlsRowAction(int row) {return row>=0 && row<20?controlsRows[row].action:eInputAction_null;}
++std::string ButtonLabel(eGamepadButton button) {
++    switch(button) {
++        case eGamepadButton_null:return "Unassigned";
++        case eGamepadButton_DPAD_Up:return "D-pad up";
++        case eGamepadButton_DPAD_Down:return "D-pad down";
++        case eGamepadButton_DPAD_Left:return "D-pad left";
++        case eGamepadButton_DPAD_Right:return "D-pad right";
++        case eGamepadButton_LeftBumper:return "Left bumper";
++        case eGamepadButton_RightBumper:return "Right bumper";
++        case eGamepadButton_LeftTrigger:return "Left trigger";
++        case eGamepadButton_RightTrigger:return "Right trigger";
++        case eGamepadButton_LeftThumb:return "Left stick";
++        case eGamepadButton_RightThumb:return "Right stick";
++        default:return cxx::enum_to_string(button);
++    }
++}
  }
  
--void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
+-void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent& inputEvent)
 -{
--}
--
--void MainMenuGamestate::OnGamestateInputEvent(GamepadInputEvent& inputEvent)
--{
--}
--
--void MainMenuGamestate::OnGamestateInputEventLost()
--{
--}
-\ No newline at end of file
 +bool MainMenuGamestate::LoadAssets() {
 +    auto font=[](frontend::Font& f,const std::string& name,int base) {
 +        std::ifstream in; const bool ok=gFiles.OpenBinaryFile(name,in) && f.load(in,base);
@@ -7918,6 +8659,7 @@ index 9089238..18e5d97 100644
 +    return ok;
 +}
 +void MainMenuGamestate::OnGamestateEnter() {
++    LoadControls();
 +    mMenu=frontend::Menu{};mElapsed=0;mStartPending=mQuitPending=false;
 +    mMenu.options[0]=gCvarSoundsVolume.mValue;mMenu.options[1]=gCvarMusicVolume.mValue;
 +    const auto stored=frontend::loadProfiles(gFiles.mWorkingDirectoryPath+"/PLAYER_A.DAT",mMenu.profiles);
@@ -7971,9 +8713,10 @@ index 9089238..18e5d97 100644
 +}
 +void MainMenuGamestate::Act(frontend::Action a) {
 +    if(!mReady)return;
++    if(mMenu.page==frontend::Page::Controls) {ControlsAction(a);return;}
 +    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Cities) {if(mMenu.profiles.unlocked(mMenu.city*2+mMenu.chapter)){SaveProfiles();mStartPending=true;}return;}
 +    if(a==frontend::Action::Accept && mMenu.page==frontend::Page::Quit) {mQuitPending=true;return;}
-+    const bool save=mMenu.page==frontend::Page::Options && a==frontend::Action::Accept;
++    const bool save=mMenu.page==frontend::Page::Options && mMenu.row<5 && a==frontend::Action::Accept;
 +    const auto previous=mMenu.page;
 +    const auto previousProfiles=mMenu.profiles.encode();
 +    mMenu.act(a);
@@ -8011,6 +8754,10 @@ index 9089238..18e5d97 100644
 +        return;
 +    }
 +    if(!mReady)return;
++    if(mCapture.active && !gInputs.mGamepadsState[mCapture.gamepad].mPresent) {
++        mCapture.cancel();mControlsNotice="Controller disconnected";mControlsNoticeTime=3;
++    }
++    if(mControlsNoticeTime>0) mControlsNoticeTime-=gTimeManager.mGameFrameDelta;
 +    mElapsed+=gTimeManager.mGameFrameDelta;
 +    Blit(mFrame,mLogos[int(mElapsed/0.083f)%8],0);
 +    Blit(mFrame,mLower[mMenu.page==frontend::Page::Cities?1:0],168);
@@ -8094,9 +8841,12 @@ index 9089238..18e5d97 100644
 +                i==3 ? Text(mMenu.options[i]?"constant":"radio") : Text(mMenu.options[i]?"On":"Off");
 +            mText.draw(mFrame,Text(keys[i])+": "+value,196,224+i*mText.height);
 +        }
++        mText.draw(mFrame,"Controls",196,224+5*mText.height);
 +        cursor(116,208+mMenu.row*mText.height);
 +        mText.draw(mFrame,Text("esc-key")+": "+Text("Cancel"),0,480-mText.height);
 +        const auto s=Text("rtn-key")+": "+Text("save");mText.draw(mFrame,s,640-mText.measure(s),480-mText.height);
++    } else if(mMenu.page==frontend::Page::Controls) {
++        DrawControls();
 +    } else {
 +        // Original state 10: credits scroll two pixels per 25 Hz update.
 +        mCreditsElapsed+=gTimeManager.mGameFrameDelta;
@@ -8112,7 +8862,7 @@ index 9089238..18e5d97 100644
 +    mTexture->Upload(mFrame.pixels.data());
 +    const auto& res=gGraphicsDevice.mScreenResolution;frontend::View v(res.x,res.y);
 +    ImGui::GetBackgroundDrawList()->AddImage(mTexture,ImVec2(v.x,v.y),ImVec2(v.x+640*v.scale,v.y+480*v.scale));
-+}
+ }
 +void MainMenuGamestate::Tap(int px,int py) {
 +    const auto& r=gGraphicsDevice.mScreenResolution;frontend::View v(r.x,r.y);int x,y;
 +    if(!mReady || !v.point(px,py,x,y))return;
@@ -8123,8 +8873,10 @@ index 9089238..18e5d97 100644
 +    }
 +    if(mMenu.page==frontend::Page::Main && x>=110 && x<600 && y>=216 && y<216+2*mHead.height) {
 +        mMenu.row=(y-216)/mHead.height;Act(frontend::Action::Accept);
-+    } else if(mMenu.page==frontend::Page::Options && x>=110 && y>=224 && y<224+5*mText.height) {
-+        mMenu.row=(y-224)/mText.height;Act(x<320?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Options && x>=110 && y>=224 && y<224+6*mText.height) {
++        mMenu.row=(y-224)/mText.height;Act(mMenu.row==5?frontend::Action::Accept:x<320?frontend::Action::Left:frontend::Action::Right);
++    } else if(mMenu.page==frontend::Page::Controls && !mCapture.active && y>=236 && y<236+ControlsVisibleRows()*(mMiss.height+4)) {
++        mMenu.row=std::min(20,mControlsTop+(y-236)/(mMiss.height+4));Act(frontend::Action::Accept);
 +    } else if(mMenu.page==frontend::Page::Profiles) {
 +        if(x>=440 && y>=400 && y<400+2*mMiss.height)Act(y<400+mMiss.height?frontend::Action::Rename:frontend::Action::Reset);
 +        else if(y>=192 && y<392)Act(x<319?frontend::Action::Left:frontend::Action::Right);
@@ -8156,6 +8908,16 @@ index 9089238..18e5d97 100644
 +    }e.SetConsumed();
 +}
 +void MainMenuGamestate::OnGamestateInputEvent(GamepadInputEvent& e) {
++    if(mCapture.active) {
++        if(!e.mPressed) mCapture.release(e.mGamepad,e.mButton);
++        else if(e.mGamepad==mCapture.gamepad && e.mButton==eGamepadButton_B)
++            mCapture.cancel();
++        else if(mCapture.press(e.mGamepad,e.mButton)) {
++            auto mapping=mControlsMapping;
++            if(mapping.AssignGamepadButton(ControlsRowAction(mMenu.row),e.mButton))SaveControls(mapping);
++        }
++        e.SetConsumed();return;
++    }
 +    if(!e.mPressed)return;
 +    switch(e.mButton) {
 +        case eGamepadButton_DPAD_Up:Act(frontend::Action::Up);break;
@@ -8171,11 +8933,119 @@ index 9089238..18e5d97 100644
 +    if(e.mPressed && e.mButton==eMButton_LEFT) {Tap(gInputs.mCursorPositionX,gInputs.mCursorPositionY);e.SetConsumed();}
 +}
 +void MainMenuGamestate::OnGamestateInputEvent(MouseMovedInputEvent&) {}
-+void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent&) {}
++void MainMenuGamestate::OnGamestateInputEvent(MouseScrollInputEvent& e) {
++    if(mMenu.page==frontend::Page::Controls) {Act(e.mScrollY>0?frontend::Action::Up:frontend::Action::Down);e.SetConsumed();}
++}
 +void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent& e) {
 +    if(mMenu.page==frontend::Page::Name){mMenu.character(e.mUnicodeChar);e.SetConsumed();}
 +}
-+void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;}
++void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;mCapture.cancel();}
+ 
+-void MainMenuGamestate::OnGamestateInputEvent(KeyCharEvent& inputEvent)
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateInputEvent(GamepadInputEvent& inputEvent)
+-{
+-}
+-
+-void MainMenuGamestate::OnGamestateInputEventLost()
+-{
+-}
+\ No newline at end of file
++void MainMenuGamestate::LoadControls() {
++    mCapture.cancel();mControlsTop=0;mControlsNotice.clear();mControlsNoticeTime=0;
++    cxx::json_document defaults;
++    mDefaultsReady=gFiles.ReadConfig("config/inputs.json.default",defaults);
++    auto defaultsPlayer=defaults.get_root_node()["player1"];
++    mDefaultsReady=mDefaultsReady && bool(cxx::json_node_object(defaultsPlayer)) && bool(cxx::json_node_array(defaultsPlayer["actions"]));
++    mControlsDefaults.Clear();
++    if(mDefaultsReady)mControlsDefaults.LoadConfig(defaultsPlayer);
++    const std::string path=gFiles.mWorkingDirectoryPath+"/config/inputs.json";
++    errno=0;std::ifstream in(path,std::ios::binary);
++    const bool missing=!in && errno==ENOENT;
++    std::string content;
++    if(in) content.assign(std::istreambuf_iterator<char>(in),std::istreambuf_iterator<char>());
++    else if(missing && mDefaultsReady) defaults.dump_document(content);
++    mControlsWritable=mControlsDocument.parse_document(content);
++    auto root=mControlsDocument.get_root_node();auto player=root["player1"];
++    mControlsWritable=mControlsWritable && bool(cxx::json_node_object(root)) && bool(cxx::json_node_object(player)) && bool(cxx::json_node_array(player["actions"]));
++    mControlsMapping.Clear();
++    if(mControlsWritable)mControlsMapping.LoadConfig(player);
++    else {mControlsMapping=mControlsDefaults;mControlsNotice="Cannot read inputs.json; file preserved";mControlsNoticeTime=5;}
++}
++bool MainMenuGamestate::SaveControls(const InputActionsMapping& mapping) {
++    if(!mControlsWritable)return false;
++    std::string content;mControlsDocument.dump_document(content);
++    cxx::json_document document(content);
++    auto player=document.get_root_node()["player1"];
++    auto copy=mapping;copy.SaveConfig(player);document.dump_document(content);
++    const auto path=gFiles.mWorkingDirectoryPath+"/config/inputs.json",temp=path+".tmp";
++    std::ofstream out(temp,std::ios::binary|std::ios::trunc);
++    if(out)out<<content;
++    out.flush();const bool good=bool(out);out.close();
++#ifdef _WIN32
++    const bool saved=good && out && MoveFileExA(temp.c_str(),path.c_str(),MOVEFILE_REPLACE_EXISTING|MOVEFILE_WRITE_THROUGH);
++#else
++    const bool saved=good && out && std::rename(temp.c_str(),path.c_str())==0;
++#endif
++    if(!saved) {
++        std::remove(temp.c_str());mControlsNotice="Cannot save inputs.json; change cancelled";mControlsNoticeTime=5;return false;
++    }
++    mControlsDocument.parse_document(content);mControlsMapping=mapping;
++    if(auto* player1=gCarnageGame.mHumanPlayers[0]) {
++        player1->InputEventLost();player1->mActionsMapping=mapping;
++    }
++    mControlsNotice="Controls saved";mControlsNoticeTime=2;return true;
++}
++void MainMenuGamestate::ControlsAction(frontend::Action action) {
++    if(mCapture.active) {if(action==frontend::Action::Back)mCapture.cancel();return;}
++    if(action==frontend::Action::Back) {mMenu.act(action);return;}
++    if(action==frontend::Action::Up || action==frontend::Action::Down) {
++        mMenu.row=(mMenu.row+21+(action==frontend::Action::Up?-1:1))%21;return;
++    }
++    if(action!=frontend::Action::Accept)return;
++    if(!mControlsWritable) {mControlsNotice="Cannot read inputs.json; file preserved";mControlsNoticeTime=5;return;}
++    if(mMenu.row==20) {
++        if(!mDefaultsReady) {mControlsNotice="Cannot read inputs.json.default";mControlsNoticeTime=5;return;}
++        auto mapping=mControlsMapping;mapping.RestoreGamepadButtons(mControlsDefaults);SaveControls(mapping);return;
++    }
++    const int pad=mControlsMapping.mGamepadID;
++    if(pad<0 || pad>=eGamepadID_COUNT || !gInputs.mGamepadsState[pad].mPresent) {
++        mControlsNotice="Connect Player 1 controller first";mControlsNoticeTime=3;return;
++    }
++    std::array<bool,eGamepadButton_COUNT> held{};
++    std::copy_n(gInputs.mGamepadsState[pad].mButtons,eGamepadButton_COUNT,held.begin());
++    mCapture.begin(pad,held);mControlsNoticeTime=0;
++}
++int MainMenuGamestate::ControlsVisibleRows() const {
++    return std::max(1,std::min(21,(398-236)/std::max(1,mMiss.height+4)));
++}
++void MainMenuGamestate::DrawControls() {
++    Center(mText,mFrame,"Player 1 - Controls",176);
++    const int visible=ControlsVisibleRows(),step=mMiss.height+4;
++    mControlsTop=std::max(0,std::min(mControlsTop,21-visible));
++    if(mMenu.row<mControlsTop)mControlsTop=mMenu.row;
++    if(mMenu.row>=mControlsTop+visible)mControlsTop=mMenu.row-visible+1;
++    Center(mMiss,mFrame,mMenu.row<20?controlsRows[mMenu.row].group:"Defaults",206);
++    auto fit=[&](std::string text,int width) {
++        while(!text.empty() && mMiss.measure(text)>width)text.pop_back();return text;
++    };
++    for(int i=mControlsTop;i<std::min(21,mControlsTop+visible);++i) {
++        const int y=236+(i-mControlsTop)*step;
++        std::string label=i<20?std::string(controlsRows[i].group)+": "+controlsRows[i].label:"Restore defaults";
++        mMiss.draw(mFrame,fit(label,360),50,y);
++        if(i<20) {
++            const auto button=mControlsMapping.mActionToKeys[controlsRows[i].action].mGpButton;
++            mMiss.draw(mFrame,fit(mCapture.active && i==mMenu.row?"Press a button...":ButtonLabel(button),180),430,y);
++        }
++        if(i==mMenu.row)mMiss.draw(mFrame,">",24,y);
++    }
++    Center(mMiss,mFrame,std::to_string(mMenu.row+1)+" / 21  -  Up / Down to scroll",404);
++    Center(mMiss,mFrame,mCapture.active?"Press a gamepad button. Esc / B cancels":
++        mControlsNoticeTime>0?mControlsNotice:"Enter / A: assign     Esc / B: back",426);
++    Center(mMiss,mFrame,"Analog sticks and analog triggers keep their behavior",448);
++}
 diff --git a/src/MainMenuGamestate.cpp.orig b/src/MainMenuGamestate.cpp.orig
 new file mode 100755
 index 0000000..db85b42
@@ -8534,10 +9404,10 @@ index 0000000..db85b42
 +}
 +void MainMenuGamestate::OnGamestateInputEventLost() {mStartPending=mQuitPending=false;}
 diff --git a/src/MainMenuGamestate.h b/src/MainMenuGamestate.h
-index 38eedcd..81cba96 100644
+index 38eedcd..0938060 100644
 --- a/src/MainMenuGamestate.h
 +++ b/src/MainMenuGamestate.h
-@@ -1,24 +1,32 @@
+@@ -1,24 +1,46 @@
 -#pragma once
 -
 -#include "GenericGamestate.h"
@@ -8565,6 +9435,8 @@ index 38eedcd..81cba96 100644
 +#pragma once
 +#include "GenericGamestate.h"
 +#include "Frontend.h"
++#include "ControlsRules.h"
++#include "InputActionsMapping.h"
 +class GpuTexture2D;
 +class MainMenuGamestate: public GenericGamestate {
 +public:
@@ -8580,6 +9452,18 @@ index 38eedcd..81cba96 100644
 +    void OnGamestateInputEvent(GamepadInputEvent&) override;
 +    void OnGamestateInputEventLost() override;
 +private:
++    void LoadControls();
++    bool SaveControls(const InputActionsMapping& mapping);
++    void ControlsAction(frontend::Action);
++    void DrawControls();
++    int ControlsVisibleRows() const;
++    cxx::json_document mControlsDocument;
++    InputActionsMapping mControlsMapping,mControlsDefaults;
++    controls::Capture mCapture;
++    bool mControlsWritable=false,mDefaultsReady=false;
++    int mControlsTop=0;
++    float mControlsNoticeTime=0;
++    std::string mControlsNotice;
 +    void Act(frontend::Action);
 +    void Tap(int,int);
 +    bool LoadAssets();
@@ -8929,7 +9813,7 @@ index 0000000..8d98198
 +inline bool musicDrained(bool eof, unsigned int queued) { return eof && queued == 0; }
 +}
 diff --git a/src/Pedestrian.cpp b/src/Pedestrian.cpp
-index af31f7a..4db55be 100644
+index af31f7a..31b561e 100644
 --- a/src/Pedestrian.cpp
 +++ b/src/Pedestrian.cpp
 @@ -51,6 +51,7 @@ void Pedestrian::HandleSpawn()
@@ -8940,7 +9824,32 @@ index af31f7a..4db55be 100644
  
      for (int currWeapon = 0; currWeapon < eWeapon_COUNT; ++currWeapon)
      {
-@@ -303,6 +304,11 @@ void Pedestrian::UpdateLocomotion()
+@@ -272,6 +273,24 @@ void Pedestrian::UpdateLocomotion()
+ {
+     debug_assert(mPhysicsBody);
+ 
++    if (mMissionMoveEnabled && IsIdle() && !mCurrentCar)
++    {
++        auto velocity = mMissionVelocity;
++        // Ped/car contacts disable Box2D response. Retain normal locomotion's
++        // contact guard so mission movement cannot pass through vehicles.
++        for (const Contact& contact: mObjectsContacts)
++        {
++            if (contact.mThatObject->IsVehicleClass() &&
++                glm::dot(-contact.mContactPoints[0].mNormal, velocity) > 0.0f)
++            {
++                velocity = glm::vec2(0.0f, 0.0f);
++                break;
++            }
++        }
++        mPhysicsBody->SetLinearVelocity(velocity);
++        return;
++    }
++
+     float walkingSpeed = 0.0f;
+ 
+     bool inverseDirection = false;
+@@ -303,6 +322,11 @@ void Pedestrian::UpdateLocomotion()
      if (walkingSpeed)
      {
          glm::vec2 moveDirection = mPhysicsBody->GetSignVector() * (inverseDirection ? -1.0f : 1.0f);
@@ -8952,7 +9861,7 @@ index af31f7a..4db55be 100644
          desiredVelocity = moveDirection * walkingSpeed;
          
          if (!isSlideOverCar)
-@@ -395,8 +401,41 @@ Weapon& Pedestrian::GetWeapon(eWeaponID weapon)
+@@ -395,8 +419,41 @@ Weapon& Pedestrian::GetWeapon(eWeaponID weapon)
      return mWeapons[weapon];
  }
  
@@ -8994,7 +9903,31 @@ index af31f7a..4db55be 100644
      mChangeWeapon = weapon;
  }
  
-@@ -728,6 +767,7 @@ void Pedestrian::DecArmor()
+@@ -441,7 +498,13 @@ bool Pedestrian::ReceiveDamage(const DamageInfo& damageInfo)
+ {
+     PedestrianStateEvent evData { ePedestrianStateEvent_ReceiveDamage };
+     evData.mDamageInfo = damageInfo;
+-    return mStatesManager.ProcessEvent(evData);
++    const bool accepted = mStatesManager.ProcessEvent(evData);
++    if (accepted)
++    {
++        auto* causer = damageInfo.GetDamageCauser();
++        mLastDamageCauserID = causer ? causer->mObjectID : 0;
++    }
++    return accepted;
+ }
+ 
+ void Pedestrian::SetAnimation(ePedestrianAnimID animation, eSpriteAnimLoop loopMode)
+@@ -573,6 +636,8 @@ void Pedestrian::SetDead(ePedestrianDeathReason deathReason)
+ 
+ void Pedestrian::DieFromDamage(const DamageInfo& damageInfo)
+ {
++    auto* causer = damageInfo.GetDamageCauser();
++    mLastDamageCauserID = causer ? causer->mObjectID : 0;
+     PedestrianStateEvent evData { ePedestrianStateEvent_Die };
+     evData.mDeathReason = ePedestrianDeathReason_Unknown;
+     evData.mDamageInfo = damageInfo;
+@@ -728,6 +793,7 @@ void Pedestrian::DecArmor()
  
  void Pedestrian::ClearAmmunition()
  {
@@ -9003,7 +9936,7 @@ index af31f7a..4db55be 100644
      {
          mWeapons[icurrent].SetAmmunition(0);
 diff --git a/src/Pedestrian.h b/src/Pedestrian.h
-index 6880e30..7f7b92b 100644
+index 6880e30..15ae580 100644
 --- a/src/Pedestrian.h
 +++ b/src/Pedestrian.h
 @@ -7,6 +7,7 @@
@@ -9014,7 +9947,7 @@ index 6880e30..7f7b92b 100644
  #include "PedestrianInfo.h"
  
  // defines generic city pedestrian
-@@ -36,6 +37,11 @@ public:
+@@ -36,8 +37,17 @@ public:
      eWeaponID mCurrentWeapon = eWeapon_Fists;
      eWeaponID mChangeWeapon = eWeapon_Fists;
      Weapon mWeapons[eWeapon_COUNT];
@@ -9025,7 +9958,13 @@ index 6880e30..7f7b92b 100644
 +    static eWeaponID OriginalWeaponID(int type);
  
      int mArmorHitPoints = 0;
++    // Mission projection: velocity is applied by normal physics/collision.
++    bool mMissionMoveEnabled = false;
++    glm::vec2 mMissionVelocity {0.0f,0.0f};
++    GameObjectID mLastDamageCauserID = 0; // zero: no attributed engine ped
  
+ public:
+     // @param id: Unique object identifier, constant
 diff --git a/src/PedestrianStates.cpp b/src/PedestrianStates.cpp
 index e5fbabd..bfa9527 100644
 --- a/src/PedestrianStates.cpp
@@ -13625,12 +14564,63 @@ index ed6bad2..8c822c2 100644
  };
  
  impl_enum_strings(ePedestrianState)
+diff --git a/src/json_document.cpp b/src/json_document.cpp
+index 752db64..67d4c74 100644
+--- a/src/json_document.cpp
++++ b/src/json_document.cpp
+@@ -644,4 +644,27 @@ bool json_get_attribute(json_node_array json_node, int item_index, float& output
+     return false;
+ }
+ 
+-} // namespace cxx
+\ No newline at end of file
++} // namespace cxx
++
++void cxx::json_document_node::set_string_attribute(const std::string& name, const std::string& value)
++{
++    if (!mJsonElement || mJsonElement->type != cJSON_Object) return;
++    cJSON* item = cJSON_CreateString(value.c_str());
++    if (cJSON_GetObjectItem(mJsonElement, name.c_str()))
++        cJSON_ReplaceItemInObject(mJsonElement, name.c_str(), item);
++    else cJSON_AddItemToObject(mJsonElement, name.c_str(), item);
++}
++
++cxx::json_document_node cxx::json_document_node::append_object()
++{
++    if (!mJsonElement || mJsonElement->type != cJSON_Array) return {};
++    cJSON* item = cJSON_CreateObject();
++    cJSON_AddItemToArray(mJsonElement, item);
++    return json_document_node{item};
++}
++
++void cxx::json_document_node::remove_attribute(const std::string& name)
++{
++    if (mJsonElement && mJsonElement->type == cJSON_Object)
++        cJSON_DeleteItemFromObject(mJsonElement, name.c_str());
++}
+diff --git a/src/json_document.h b/src/json_document.h
+index 3079c22..3d3c0c9 100644
+--- a/src/json_document.h
++++ b/src/json_document.h
+@@ -36,6 +36,12 @@ namespace cxx
+         // @returns null if node with same name already exists
+         json_document_node create_string_node(const std::string& nodeName, const std::string& value);
+ 
++        // Replace a string attribute, preserving other members.
++        void set_string_attribute(const std::string& name, const std::string& value);
++        void remove_attribute(const std::string& name);
++        // Append a distinct object to an array.
++        json_document_node append_object();
++
+         // add child boolean node
+         // @param parent: Parent node, must be non null, must be object type or array type
+         // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..22cf2b7
+index 0000000..69c62bc
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1353 @@
+@@ -0,0 +1,1482 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -13800,11 +14790,12 @@ index 0000000..22cf2b7
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    parkCars_={}; parkRemovals_.clear();
++    parkCars_={}; parkRemovals_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    playerBindings_.clear(); carRecords_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
++    UpdateScriptPeds();
 +    UpdateDoors();
 +    UpdateCameras();
 +    // 00401280 -> 00445580 -> 0040b660: a parked car leaves the world when
@@ -13841,10 +14832,12 @@ index 0000000..22cf2b7
 +        const auto& at=object->mTransform.mPosition;
 +        const bool car=object->mClassID==eGameObjectClass_Car;
 +        if(object->mClassID==eGameObjectClass_Pedestrian || !std::isfinite(at.x) || !std::isfinite(at.z)) {
-+            // 0043cfe0 (30-update off-screen count, conversion to an ambient
-+            // pedestrian) is not mapped; no script ped can exist yet.
 +            // 0043cfe0: unless it has been off screen for 30 checks the ped
 +            // simply stops being a script ped and joins the ambient crowd.
++            if(object->mClassID==eGameObjectClass_Pedestrian) {
++                Once("cleanup-ped", "UNRESOLVED script ped cleanup: original offscreen timer/ambient conversion unavailable");
++                resolved=false; ++it; continue;
++            }
 +            object->mObjectFlags=(object->mObjectFlags | GameObjectFlags_Traffic);
 +            ownedObjects_.erase(*it); it=missionEntities_.erase(it); continue;
 +        }
@@ -13884,7 +14877,11 @@ index 0000000..22cf2b7
 +    }
 +    if(doorsChanged) {
 +        enabledDoors_.clear(); animatingDoors_.clear();
-+        for(int id:doorOrder_) if(!doors_.at(id).disabled) enabledDoors_.push_back(&doors_.at(id));
++        for(int id:doorOrder_) {
++            auto& d=doors_.at(id);
++            if(!d.disabled) enabledDoors_.push_back(&d);
++            if(d.state==2 || d.state==3) animatingDoors_.push_back(&d);
++        }
 +    }
 +    arrows_={}; // 00481a00
 +    if(!resolved) Once("cleanup-view","Script world cleanup incomplete: an entity has no recovered rule");
@@ -14096,6 +15093,7 @@ index 0000000..22cf2b7
 +}
 +WorldResult CarnageMissionWorld::execute(WorldRequest& r) {
 +    const auto& token=r.token; auto& i=r.instruction;
++    if(doorUpdateUnresolved_) return WorldResult::Unresolved;
 +    auto found=r.entities.find(i.A);
 +    auto* entity=found==r.entities.end()?nullptr:&found->second;
 +    if(!OwnerValid(r.owner)) {Once("owner","Invalid mission owner"); return WorldResult::Unresolved;}
@@ -14451,10 +15449,10 @@ index 0000000..22cf2b7
 +    }
 +    if(token=="ENABLE") {
 +        // 00447752 -> 0043e4f0 case9: 00474840(door) and its result is
-+        // ignored. The VM sends only door-family records here; the car-bound
-+        // variants (0x1f/0x21/0x23/0x28/0x34) have no constructed door yet.
++        // ignored. The VM sends only door-family records here; unsupported
++        // constructors remain absent from doors_ and stop this step.
 +        auto at=doors_.find(i.A);
-+        if(!entity || entity->type!=9 || at==doors_.end()) {
++        if(!entity || at==doors_.end()) {
 +            Once("enable-door","ENABLE door-family variant unresolved"); return WorldResult::Unresolved;
 +        }
 +        at->second.enable(true);
@@ -14464,7 +15462,7 @@ index 0000000..22cf2b7
 +    }
 +    if(token=="CLOSE_DOOR") {
 +        auto at=doors_.find(i.A);
-+        if(at==doors_.end() || !entity || entity->declaration.token!="DOOR") return WorldResult::Failure;
++        if(at==doors_.end() || !entity) return WorldResult::Failure;
 +        AnimateDoor(at->second,false); return WorldResult::Done;
 +    }
 +    if(token=="PED_ON") {
@@ -14488,8 +15486,36 @@ index 0000000..22cf2b7
 +        Once("ped-remap","Script pedestrians use the default look: remap table 004b20b0 and the 004770a0 spawn clearing are not applied");
 +        int prefix=-1;
 +        if(integer(entity->declaration.prefix,prefix) && prefix>=0) missionEntities_.erase(ped->mObjectID);
++        scriptPeds_[ped->mObjectID].stand(kind);
++        ped->mMissionMoveEnabled=true;
 +        entity->value=static_cast<std::int32_t>(ped->mObjectID); entity->type=99;
 +        return WorldResult::Success;
++    }
++    if(token=="PED_SENDTO" || token=="SET_PED_SPEED") {
++        const int id=token=="PED_SENDTO"?i.D:i.A;
++        auto at=r.entities.find(id);
++        if(at==r.entities.end() || at->second.type!=99) return WorldResult::Unresolved;
++        auto* object=ResolveObject(at->second);
++        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Unresolved;
++        auto* ped=static_cast<Pedestrian*>(object); auto state=scriptPeds_.find(ped->mObjectID);
++        if(state==scriptPeds_.end() || state->second.removed || ped->IsDead() || ped->IsDies() ||
++           ped->mCurrentCar || ped->IsEnteringOrExitingCar()) return WorldResult::Unresolved;
++        if(token=="SET_PED_SPEED") {
++            const auto byte=static_cast<unsigned int>(i.D)&255U;
++            state->second.desired=byte<128?int(byte):int(byte)-256;
++        } else {
++            if(!entity) return WorldResult::Unresolved;
++            auto target=OriginalPosition(*entity,i.A); if(!target) return WorldResult::Unresolved;
++            // X==0 follows the retained +86 target in the original; not recovered here.
++            if((*target)[0]==0) return WorldResult::Unresolved;
++            state->second.send((*target)[0],(*target)[1]);
++            const auto at=ped->mTransform.mPosition;
++            const double dx=(*target)[0]-Convert::MetersToMapUnits(at.x)*64;
++            const double dy=(*target)[1]-Convert::MetersToMapUnits(at.z)*64;
++            ped->SetTransform(at,cxx::angle_t::from_radians(std::atan2(-dy,dx)));
++            Once("ped-motion", "PED_SENDTO uses straight-line engine physics; original waypoint/path/terrain arbitration is UNRESOLVED");
++        }
++        return WorldResult::Done; // VM pays E and branches immediately
 +    }
 +    if(token=="CHANGE_PED_TYPE") {
 +        // 00443690: always the success branch, never a reward. A dead ped is
@@ -14500,7 +15526,12 @@ index 0000000..22cf2b7
 +        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Success;
 +        auto* ped=static_cast<Pedestrian*>(object);
 +        if(ped->IsDead() || ped->IsDies()) return WorldResult::Success;
-+        if(i.D==0 || i.D==4) return WorldResult::Success;
++        if(i.D==0 || i.D==4) {
++            auto state=scriptPeds_.find(ped->mObjectID);
++            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
++            state->second.stand(i.D); ped->mMissionVelocity={0,0};
++            return WorldResult::Success;
++        }
 +        Once("ped-change:"+std::to_string(i.D),"CHANGE_PED_TYPE "+std::to_string(i.D)+" objective not implemented yet");
 +        return WorldResult::Unresolved;
 +    }
@@ -14511,6 +15542,9 @@ index 0000000..22cf2b7
 +        if(auto* object=ResolveObject(*entity)) {
 +            if(object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Unresolved;
 +            if(static_cast<Pedestrian*>(object)->mCurrentCar) {Once("kill-ped-car","KILL_PED of a seated ped (00477320 car rules) unresolved"); return WorldResult::Unresolved;}
++            auto state=scriptPeds_.find(object->mObjectID);
++            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
++            state->second.removed=true; state->second.killer=static_cast<Pedestrian*>(object)->mLastDamageCauserID;
 +            object->MarkForDeletion();
 +            missionEntities_.erase(object->mObjectID);
 +        }
@@ -14598,6 +15632,7 @@ index 0000000..22cf2b7
 +    return WorldResult::Unresolved;
 +}
 +std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
++    if(doorUpdateUnresolved_) return {};
 +    if(r.token=="IS_POWERUP_DONE") {
 +        const auto at=r.entities.find(r.instruction.A);
 +        if(at==r.entities.end() || at->second.declaration.token!="POWERUP") return {};
@@ -14610,7 +15645,7 @@ index 0000000..22cf2b7
 +    if(r.token=="DOOR_ON" || r.token=="DOOR_OFF") {
 +        auto at=doors_.find(r.instruction.A);
 +        auto entity=r.entities.find(r.instruction.A);
-+        if(at==doors_.end() || entity==r.entities.end() || entity->second.declaration.token!="DOOR") return {};
++        if(at==doors_.end() || entity==r.entities.end()) return {};
 +        if(!at->second.enable(r.token=="DOOR_ON")) return false;
 +        enabledDoors_.clear();
 +        for(int id:doorOrder_) if(!doors_.at(id).disabled) enabledDoors_.push_back(&doors_.at(id));
@@ -14780,28 +15815,53 @@ index 0000000..22cf2b7
 +        return {};
 +    }
 +    if(r.token=="IS_GOAL_DEAD") {
-+        // 00449c6d -> 0043e870: car model==-1 or clamped health==0.
-+        // The positive-D killer filter is exclusively for original type99.
-+        // Engine damage units differ; only stable pristine/wrecked states are
-+        // projected here. Missing/deleted handles are not proof of death.
-+        auto at=r.entities.find(r.instruction.A);
-+        if(at!=r.entities.end() && at->second.type==0) {
-+            auto* object=ResolveObject(at->second);
-+            if(object && object->mClassID==eGameObjectClass_Car) {
-+                auto* car=static_cast<Vehicle*>(object);
-+                if(car->IsWrecked()) return true;
-+                if(car->GetCurrentDamage()==0) return false;
++        // 0043e870 returns100 for all non-car/non-ped declaration types.
++        auto at=r.entities.find(r.instruction.A); if(at==r.entities.end()) return {};
++        const auto& e=at->second;
++        switch(e.type) {
++        case 0: case 5: case 6: case 0x12: case 0x15: case 0x16: case 0x1b: {
++            auto* object=ResolveObject(e);
++            if(!object || object->mClassID!=eGameObjectClass_Car) return {};
++            auto* car=static_cast<Vehicle*>(object);
++            // Engine damage has the same critical boundary100. A live damaged
++            // car is not an unknown health value. Wreck projects original model=-1.
++            return car->IsWrecked() || car->GetCurrentDamage()>=100;
++        }
++        case 1: case 3: case 99: {
++            GameObject* object=nullptr;
++            if(e.type==3) {
++                auto binding=playerBindings_.find(r.instruction.A);
++                if(binding!=playerBindings_.end()) object=gGameObjectsManager.GetGameObjectByID(binding->second);
++            } else object=ResolveObject(e);
++            bool dead=false; unsigned int killer=0;
++            if(object && !object->IsMarkedForDeletion() && object->mClassID==eGameObjectClass_Pedestrian) {
++                auto* ped=static_cast<Pedestrian*>(object);
++                // Engine dead/electrocution states project the original zero-health
++                // conditions. It has no original +49 or +58 health/effect fields.
++                dead=ped->IsDead() || ped->IsDies(); killer=ped->mLastDamageCauserID;
++            } else {
++                auto known=e.value?scriptPeds_.find(static_cast<unsigned int>(*e.value)):scriptPeds_.end();
++                if(known==scriptPeds_.end() || !known->second.removed) {
++                    Once("goal-ped-handle", "UNRESOLVED IS_GOAL_DEAD: ped handle was never bound or disappeared without a known removal");
++                    return {};
++                }
++                dead=true; killer=known->second.killer;
 +            }
++            if(!dead) return false; // short circuit before any killer lookup
++            if(r.instruction.D<=0 || e.type!=99) return true;
++            auto target=r.entities.find(r.instruction.D); if(target==r.entities.end()) return {};
++            GameObject* other=nullptr;
++            auto binding=playerBindings_.find(r.instruction.D);
++            if(target->second.type==3 && binding!=playerBindings_.end()) other=gGameObjectsManager.GetGameObjectByID(binding->second);
++            else other=ResolveObject(target->second);
++            if(!other) {
++                if(target->second.value && *target->second.value==-1) return killer==0;
++                return {};
++            }
++            return killer==other->mObjectID;
 +        }
-+        if(at!=r.entities.end() && at->second.type==99 && r.instruction.D<=0) {
-+            // Health query: a removed or dying ped reports no health.
-+            auto* object=ResolveObject(at->second);
-+            if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return true;
-+            auto* ped=static_cast<Pedestrian*>(object);
-+            return ped->IsDead() || ped->IsDies();
++        default:return false;
 +        }
-+        Once("goal-health", "IS_GOAL_DEAD requires a trusted pristine/wrecked mission car; other health/killer mappings unresolved");
-+        return {};
 +    }
 +    if(r.token=="PHONE_VALID") {
 +        auto phone=phones_.find(r.instruction.A);
@@ -14860,20 +15920,44 @@ index 0000000..22cf2b7
 +}
 +void CarnageMissionWorld::PrepareDoors(const Section& section) {
 +    if(!gGameMap.IsLoaded()) return;
-+    for(const auto& r:section.declarations) if(r.token=="DOOR") {
-+        int id=0,direction=0,base=0,roof=0;
++    for(const auto& r:section.declarations) {
++        const bool ordinary=r.token=="DOOR";
++        const bool barrier=r.token=="BARRIER" || r.token=="BASIC_BARRIER";
++        const bool model=r.token=="MODEL_BARRIER" || r.token=="MODEL_DOOR";
++        const bool specific=r.token=="SPECIFIC_BARR" || r.token=="SPECIFIC_DOOR" || r.token=="SPECIFIC_DOOR_BOMB";
++        if(!ordinary && !barrier && !model && !specific) continue;
++        int id=0,direction=0,base=0,roof=0,frames=8,required=-1;
 +        auto pos=DeclarationPosition(r);
-+        if(!integer(r.label,id) || !pos || r.operands.size()!=3 ||
-+           !integer(r.operands[0],direction) || !integer(r.operands[1],base) ||
-+           !integer(r.operands[2],roof) || direction<0 || direction>3 ||
-+           base<0 || base+8>gGameMap.mStyleData.GetBlockTexturesCount(eBlockType_Aux) ||
++        std::vector<int> operands; bool valid=true;
++        for(const auto& text:r.operands) {int n=0;if(!integer(text,n)) valid=false;operands.push_back(n);}
++        const auto count=r.token=="MODEL_DOOR"?5U:model?4U:specific?5U:3U;
++        if(!integer(r.label,id) || !pos || !valid || operands.size()!=count) {
++            Once("door-declaration:"+r.label,"UNRESOLVED "+r.token+" malformed constructor"); continue;
++        }
++        direction=operands[0];
++        if(barrier) {frames=operands[1];base=operands[2];}
++        else if(r.token=="MODEL_BARRIER" || r.token=="SPECIFIC_BARR") {base=operands[1];frames=operands[2];}
++        else if(r.token=="MODEL_DOOR") {base=operands[1];frames=operands[2];roof=operands[3];}
++        else {base=operands[1];roof=operands[2];}
++        if(model) required=static_cast<std::int16_t>(operands[r.token=="MODEL_DOOR"?4:3]);
++        if(specific) {
++            // Initial loaders pass the record NUMBER, not value(record), except
++            // FUTURECAR -> -1. Non-wildcard raw original slot IDs and +0x24c
++            // color/+0x9c bomb predicates lack a trusted engine source.
++            Once("door-specific:"+r.label,"UNRESOLVED "+r.token+" original car-slot/color/bomb constructor binding"); continue;
++        }
++        if(direction<0 || direction>3 || frames<2 ||
++           base<0 || frames>gGameMap.mStyleData.GetBlockTexturesCount(eBlockType_Aux)-base ||
 +           roof<0 || roof>=gGameMap.mStyleData.GetBlockTexturesCount(eBlockType_Lid)) {
-+            Once("door-declaration","Unresolved DOOR constructor variant"); continue;
++            Once("door-texture:"+r.label,"UNRESOLVED "+r.token+" direction/frame/texture range"); continue;
 +        }
 +        DoorState d; d.x=static_cast<int>(Convert::MetersToMapUnits(pos->x));
 +        d.y=static_cast<int>(Convert::MetersToMapUnits(pos->z));
 +        d.z=static_cast<int>(Convert::MetersToMapUnits(pos->y));
-+        d.direction=direction; d.frames=8; d.base=base; d.roof=roof;
++        d.direction=direction; d.frames=frames; d.base=base; d.roof=roof;
++        d.kind=r.token=="BARRIER"?1:model?3:0;
++        d.radius=barrier?1:model?(r.token=="MODEL_BARRIER"?1:2):2;
++        d.model=required;
 +        int x=d.x+(direction==1),y=d.y+(direction==3),z=INVERT_MAP_LAYER(d.z);
 +        if(x>=MAP_DIMENSIONS || y>=MAP_DIMENSIONS ||
 +           (roof && (d.z+1>=MAP_LAYERS_COUNT || (direction<2?(d.y<1 || d.y>=255):(d.x<1 || d.x>=255))))) continue;
@@ -14929,7 +16013,30 @@ index 0000000..22cf2b7
 +    }
 +    CopyDoorFrame(d);
 +}
++void CarnageMissionWorld::UpdateScriptPeds() {
++    for(auto& entry:scriptPeds_) {
++        auto& state=entry.second;
++        auto* object=gGameObjectsManager.GetGameObjectByID(entry.first);
++        if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Pedestrian) continue;
++        auto* ped=static_cast<Pedestrian*>(object); ped->mMissionVelocity={0,0};
++        if(state.removed || !state.destination || ped->IsDead() || ped->IsDies() ||
++           ped->mCurrentCar || !ped->IsIdle()) continue;
++        const auto& at=ped->mTransform.mPosition;
++        const double x=Convert::MetersToMapUnits(at.x)*64, y=Convert::MetersToMapUnits(at.z)*64;
++        if(!std::isfinite(x) || !std::isfinite(y)) continue;
++        const int speed=state.speedFor(x,y); if(!state.destination || speed==0) continue;
++        const double dx=(*state.destination)[0]-x,dy=(*state.destination)[1]-y;
++        const double length=std::hypot(dx,dy); if(length==0) continue;
++        // Projection: continuous direction and Box2D collision replace original
++        // 1024-angle fixed-point steps and refreshed obstacle/path waypoints.
++        const auto heading=cxx::angle_t::from_radians(std::atan2(-dy,dx));
++        ped->SetTransform(at,heading);
++        const float velocity=Convert::MapUnitsToMeters(speed*25.0f/64);
++        ped->mMissionVelocity=glm::vec2(dx/length,dy/length)*velocity;
++    }
++}
 +void CarnageMissionWorld::UpdateDoors() {
++    doorUpdateUnresolved_=false;
 +    // Original00430c00: animation tick BEFORE scheduler00479e00/00479f00.
 +    if(enabledDoors_.empty() && animatingDoors_.empty()) return;
 +    for(auto* door:animatingDoors_) {
@@ -14965,7 +16072,19 @@ index 0000000..22cf2b7
 +            int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(pos.x)));
 +            int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(pos.z)));
 +            if(d.x-d.radius<=x && x<=d.x+d.radius && d.y-d.radius<=y && y<=d.y+d.radius) {
-+                if(d.state==1 && mode0) AnimateDoor(d,true);
++                if(d.state==1 && mode0) {
++                    const int model=static_cast<int>(static_cast<Vehicle*>(participant)->mCarInfo->mModelID);
++                    bool opens=d.kind==0 || (d.kind==3 && model==d.model);
++                    if(d.kind==1) {
++                        opens=model==5 || model==4 || model==15 || model==32 || model==16 || model==44;
++                        if(!opens) {
++                            // car+0x34==14 also qualifies; it is not the style class.
++                            doorUpdateUnresolved_=true;
++                            Once("barrier-car-state", "UNRESOLVED BARRIER car+0x34==14 alternative; next script dispatch stops");
++                        }
++                    }
++                    if(opens) AnimateDoor(d,true);
++                }
 +            } else if(d.state==0) {
 +                bool obstructed=false,unknown=false;
 +                for(int other=0;other<4;++other) {
@@ -14986,15 +16105,16 @@ index 0000000..22cf2b7
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..1b151ab
+index 0000000..c08010b
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,96 @@
+@@ -0,0 +1,101 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
 +#include "PickupRules.h"
 +#include "DoorRules.h"
++#include "PedMotion.h"
 +#include "OriginalCamera.h"
 +#include "../GameDefs.h"
 +#include <array>
@@ -15026,6 +16146,7 @@ index 0000000..1b151ab
 +    struct Pickup {unsigned int object=0; int help=0; pickup::Box shape{}; int depth=0; int type=14;};
 +    const std::array<Pickup,256>& Pickups() const {return pickups_;}
 +    const std::map<int,DoorState>& Doors() const {return doors_;}
++    const std::map<unsigned int,PedMotion>& ScriptPeds() const {return scriptPeds_;}
 +    // Mission car object -> declaring record ID (diagnostics and tests).
 +    const std::map<unsigned int,int>& CarRecords() const {return carRecords_;}
 +    // Only a recovered original-camera record can establish this rectangle.
@@ -15047,6 +16168,9 @@ index 0000000..1b151ab
 +    std::vector<glm::vec2> pickupObstacles_; // scratch, reused every update
 +    void PrepareDoors(const Section&);
 +    void UpdateDoors();
++    bool doorUpdateUnresolved_=false;
++    void UpdateScriptPeds();
++    std::map<unsigned int,PedMotion> scriptPeds_;
 +    void CopyDoorFrame(const DoorState&);
 +    void AnimateDoor(DoorState&,bool open);
 +    std::map<int,DoorState> doors_;
@@ -15283,10 +16407,10 @@ index 0000000..5f3dbfe
 +{"IS_PED_STUNNED", "004453c0", false}, // 149
 diff --git a/src/mission/DoorRules.h b/src/mission/DoorRules.h
 new file mode 100755
-index 0000000..9f2c6e1
+index 0000000..52dfccc
 --- /dev/null
 +++ b/src/mission/DoorRules.h
-@@ -0,0 +1,64 @@
+@@ -0,0 +1,65 @@
 +#pragma once
 +#include <algorithm>
 +#include <cstdint>
@@ -15297,6 +16421,7 @@ index 0000000..9f2c6e1
 +struct DoorState {
 +    int x=0,y=0,z=0,direction=0,frames=0,base=0,roof=0,radius=2;
 +    int state=1,frame=0,counter=0;
++    int kind=0,model=-1; // 00773240 opening rule; 00773242 model for kind3
 +    bool disabled=true,solid=true;
 +    bool permanent=false; // declared with a prefix: 004745c0 leaves it alone
 +    bool enable(bool on) {
@@ -16903,6 +18028,36 @@ index 0000000..f7c987c
 +    return y-64<=r.field256 && r.field256<=y+64;
 +}
 +}
+diff --git a/src/mission/PedMotion.h b/src/mission/PedMotion.h
+new file mode 100755
+index 0000000..28f0329
+--- /dev/null
++++ b/src/mission/PedMotion.h
+@@ -0,0 +1,24 @@
++#pragma once
++#include <algorithm>
++#include <cmath>
++#include <cstdint>
++#include <optional>
++#include <array>
++namespace mission {
++// SPEC_PEDS, 00457c81: explicit objective-0x19 destination only. Units are
++// original pixels (1/64 map cell), sampled once per 25Hz mission update.
++struct PedMotion {
++    int objective=0x19,state=3,mode=8,action=8,current=0,desired=4;
++    std::optional<std::array<int,2>> destination;
++    bool removed=false;
++    unsigned int killer=0; // engine ID; zero projects original -1
++    void send(int x,int y) {destination=std::array<int,2>{{x,y}};objective=0x19;state=4;mode=8;action=2;}
++    int speedFor(double x,double y) {
++        if(!destination || state!=4) return current=0;
++        const auto d=std::max(std::floor(std::abs((*destination)[0]-x)),std::floor(std::abs((*destination)[1]-y)));
++        if(d<8) {destination.reset();state=3;mode=8;action=8;return current=0;}
++        return current=d<12?2:desired;
++    }
++    void stand(int kind) {destination.reset();objective=0x19;state=3;mode=8;action=kind==4?2:8;current=kind==4?1:0;}
++};
++}
 diff --git a/src/mission/PhoneRules.h b/src/mission/PhoneRules.h
 new file mode 100755
 index 0000000..3f64bf1
@@ -18108,3 +19263,236 @@ index 0000000..9b92d0c
 +    VALUE "Translation", 0x0409, 1200
 +  END
 +END
+diff --git a/tests/check_controls.py b/tests/check_controls.py
+new file mode 100755
+index 0000000..720f84a
+--- /dev/null
++++ b/tests/check_controls.py
+@@ -0,0 +1,38 @@
++#!/usr/bin/env python3
++"""Run native controls tests against an existing Linux CMake engine build.
++Usage: python3 tests/check_controls.py /path/to/build [dependency-prefix]
++All binaries and configuration fixtures go into an automatically removed temp dir.
++"""
++from pathlib import Path
++import os
++import shlex
++import subprocess
++import sys
++import tempfile
++
++engine = Path(__file__).resolve().parents[1]
++build = Path(sys.argv[1]).resolve()
++deps = Path(sys.argv[2] if len(sys.argv)>2 else '/home/codebox/.local/c3d-deps/root/usr')
++cxx = os.environ.get('CXX', 'g++')
++
++def run(args, **kwargs):
++    subprocess.run(list(map(str, args)), check=True, **kwargs)
++
++with tempfile.TemporaryDirectory(prefix='controls-tests-') as directory:
++    work = Path(directory)
++    flags = [cxx,'-std=c++17','-O0','-Wno-deprecated-declarations','-iquote',engine/'src',
++             '-I'+str(engine/'third_party/Box2D/include'),'-I'+str(deps/'include')]
++    run(flags+['-Wall','-Wextra','-Werror',engine/'tests/controls_rules_test.cpp','-o',work/'rules'])
++    run([work/'rules'])
++    run(flags+['-ffunction-sections','-fdata-sections',engine/'tests/input_mapping_test.cpp']+
++        [engine/'src'/name for name in ['InputActionsMapping.cpp','json_document.cpp','cJSON.cpp','enums_impl.cpp']]+
++        ['-Wl,--gc-sections','-o',work/'mapping'])
++    run([work/'mapping'])
++    run(flags+['-c',engine/'tests/controls_menu_test.cpp','-o',work/'menu.o'])
++    args=shlex.split((build/'CMakeFiles/carnage3d.dir/link.txt').read_text())
++    args=[str(work/'menu.o') if a=='CMakeFiles/carnage3d.dir/src/Main.cpp.o' else a for a in args]
++    args[args.index('-o')+1]=str(work/'menu')
++    run(args,cwd=build)
++    (work/'fixture/config').mkdir(parents=True)
++    (work/'fixture/config/inputs.json.default').write_bytes((engine/'gamedata/config/inputs.json.default').read_bytes())
++    run([work/'menu',work/'fixture'])
+diff --git a/tests/controls_menu_test.cpp b/tests/controls_menu_test.cpp
+new file mode 100755
+index 0000000..3074f32
+--- /dev/null
++++ b/tests/controls_menu_test.cpp
+@@ -0,0 +1,89 @@
++#include "stdafx.h"
++#define private public
++#include "MainMenuGamestate.h"
++#include "CarnageGame.h"
++#include "HumanPlayer.h"
++#undef private
++#include "Pedestrian.h"
++#include "InputsManager.h"
++#include "HumanPlayer.h"
++#include <cassert>
++#include <filesystem>
++int main(int argc,char** argv) {
++    assert(argc==2);
++    const std::string dir=argv[1];
++    std::filesystem::create_directories(dir+"/config");
++    gFiles.mWorkingDirectoryPath=dir;
++    gFiles.mSearchPlaces={dir};
++    MainMenuGamestate menu;
++    menu.mReady=true;
++    menu.LoadControls();
++    assert(menu.mControlsWritable && menu.mDefaultsReady);
++    menu.mMenu.page=frontend::Page::Options;menu.mMenu.row=5;
++    menu.Act(frontend::Action::Accept);
++    assert(menu.mMenu.page==frontend::Page::Controls);
++    // No controller: accept gives notice without capturing.
++    menu.Act(frontend::Action::Accept);
++    assert(!menu.mCapture.active && !menu.mControlsNotice.empty());
++    gInputs.mGamepadsState[0].mPresent=true;
++    menu.Act(frontend::Action::Accept);
++    assert(menu.mCapture.active);
++    KeyInputEvent escape;escape.mKeycode=eKeycode_ESCAPE;escape.mPressed=true;
++    menu.OnGamestateInputEvent(escape);assert(!menu.mCapture.active);
++    menu.Act(frontend::Action::Up);assert(menu.mMenu.row==20);
++    menu.Act(frontend::Action::Down);assert(menu.mMenu.row==0);
++    menu.Act(frontend::Action::Accept);assert(menu.mCapture.active);
++    GamepadInputEvent back(0,eGamepadButton_B,true);menu.OnGamestateInputEvent(back);
++    assert(!menu.mCapture.active && menu.mMenu.page==frontend::Page::Controls);
++    // Jump row (third): A starts capture, its repeated press must not assign.
++    menu.mMenu.row=2;
++    GamepadInputEvent a;a.mGamepad=eGamepadID_Gamepad1;a.mButton=eGamepadButton_A;a.mPressed=true;
++    gInputs.mGamepadsState[0].mButtons[eGamepadButton_A]=true;
++    menu.OnGamestateInputEvent(a);assert(menu.mCapture.active);
++    menu.OnGamestateInputEvent(a);assert(menu.mCapture.active);
++    GamepadInputEvent trigger;trigger.mGamepad=eGamepadID_Gamepad1;
++    trigger.mButton=eGamepadButton_RightTrigger;trigger.mPressed=true;
++    menu.OnGamestateInputEvent(trigger);assert(!menu.mCapture.active);
++    assert(menu.mControlsMapping.mActionToKeys[eInputAction_Jump].mGpButton==eGamepadButton_RightTrigger);
++    assert(menu.mControlsMapping.mActionToKeys[eInputAction_Shoot].mGpButton==eGamepadButton_A);
++    assert(menu.mControlsMapping.mActionToKeys[eInputAction_Horn].mGpButton==eGamepadButton_B);
++    // Reload proves the actual menu save path, without a game restart.
++    MainMenuGamestate reloaded;reloaded.LoadControls();
++    assert(reloaded.mControlsMapping.mActionToKeys[eInputAction_Jump].mGpButton==eGamepadButton_RightTrigger);
++    menu.mMenu.row=20;menu.Act(frontend::Action::Accept);
++    assert(menu.mControlsMapping.mActionToKeys[eInputAction_Jump].mGpButton==eGamepadButton_A);
++    // Failed writes keep the running mapping unchanged.
++    gFiles.mWorkingDirectoryPath=dir+"/missing";
++    const auto before=menu.mControlsMapping;
++    auto changed=before;changed.AssignGamepadButton(eInputAction_Jump,eGamepadButton_X);
++    assert(!menu.SaveControls(changed));
++    assert(menu.mControlsMapping.mActionToKeys[eInputAction_Jump].mGpButton==eGamepadButton_A);
++    // Rebinding movement must affect the actual twin-stick control path.
++    Pedestrian pedestrian(1,ePedestrianType_Player1);
++    HumanPlayer human(nullptr);human.AssignCharacter(&pedestrian);
++    human.mActionsMapping=reloaded.mControlsMapping;
++    human.mGamepadActive=true;
++    human.mViewCamera.mUpDirection=glm::vec3(0,0,-1);human.mViewCamera.mRightDirection=glm::vec3(1,0,0);
++    std::fill_n(gInputs.mGamepadsState[0].mButtons,eGamepadButton_COUNT,false);
++    gInputs.mGamepadsState[0].mButtons[eGamepadButton_X]=true;
++    human.mActionsMapping.AssignGamepadButton(eInputAction_Run,eGamepadButton_X);
++    human.mCtlState.Clear();assert(human.ProcessTwinStick());
++    assert(human.mTestScript.mMoving);
++    gInputs.mGamepadsState[0].mButtons[eGamepadButton_X]=false;
++    gInputs.mGamepadsState[0].mButtons[eGamepadButton_DPAD_Up]=true;
++    human.mCtlState.Clear();assert(human.ProcessTwinStick());
++    assert(!human.mTestScript.mMoving);
++    // Saving updates an existing HumanPlayer immediately and clears held actions.
++    gFiles.mWorkingDirectoryPath=dir;gCarnageGame.mHumanPlayers[0]=&human;
++    assert(menu.SaveControls(changed));
++    assert(human.mActionsMapping.mActionToKeys[eInputAction_Jump].mGpButton==eGamepadButton_X);
++    gCarnageGame.mHumanPlayers[0]=nullptr;
++    human.AssignCharacter(nullptr);
++    // Invalid JSON cannot overwrite user configuration.
++    {std::ofstream broken(dir+"/config/inputs.json");broken<<"{broken";}
++    MainMenuGamestate invalid;invalid.LoadControls();
++    assert(!invalid.mControlsWritable && !invalid.SaveControls(changed));
++    {std::ifstream in(dir+"/config/inputs.json");std::string data;std::getline(in,data);assert(data=="{broken");}
++    menu.mReady=false; // no graphics/resources were created
++    std::cout<<"controls menu capture/persistence PASS\n";
++}
+diff --git a/tests/controls_rules_test.cpp b/tests/controls_rules_test.cpp
+new file mode 100755
+index 0000000..c2dbf70
+--- /dev/null
++++ b/tests/controls_rules_test.cpp
+@@ -0,0 +1,47 @@
++#include "ControlsRules.h"
++#include "Frontend.h"
++#include <cassert>
++#include <iostream>
++int main() {
++    // A same-group conflict swaps; other groups using that button are untouched.
++    std::array<int,5> buttons{{1,2,0,2,3}}, groups{{0,0,0,1,1}};
++    assert(controls::assign(buttons,groups,0,2));
++    assert((buttons==std::array<int,5>{{2,1,0,2,3}}));
++    // Assign to an unused button clears the old assignment; unbound swap stays unbound.
++    assert(controls::assign(buttons,groups,0,4));
++    assert((buttons==std::array<int,5>{{4,1,0,2,3}}));
++    assert(controls::assign(buttons,groups,2,1));
++    assert((buttons==std::array<int,5>{{4,0,1,2,3}}));
++    const auto before=buttons;
++    assert(!controls::assign(buttons,groups,2,1));
++    assert(!controls::assign(buttons,groups,5,2));
++    assert(!controls::assign(buttons,groups,0,0));
++    assert(buttons==before);
++    // Defaults restore only gamepad buttons, including unassigned entries.
++    const std::array<int,5> defaults{{1,2,0,2,3}};
++    controls::restore(buttons,defaults);
++    assert(buttons==defaults);
++    // The initiating/held button cannot bind until released; other pads cannot bind.
++    controls::Capture capture;
++    std::array<bool,18> held{};held[1]=true;
++    capture.begin(0,held);
++    assert(!capture.press(0,1));
++    capture.release(0,1);
++    assert(!capture.press(1,17));
++    assert(capture.press(0,17)); // trigger button
++    assert(!capture.active);
++    capture.begin(0,held);capture.cancel();
++    assert(!capture.press(0,2));
++    // Controls is a sixth options row, returning to options without discarding edits.
++    frontend::Menu menu;
++    menu.act(frontend::Action::Down);menu.act(frontend::Action::Accept);
++    menu.options[0]=6;
++    menu.act(frontend::Action::Up);
++    assert(menu.row==5);
++    menu.act(frontend::Action::Right);assert(menu.options[4]==1);
++    menu.act(frontend::Action::Accept);
++    assert(menu.page==frontend::Page::Controls);
++    menu.act(frontend::Action::Back);
++    assert(menu.page==frontend::Page::Options && menu.row==5 && menu.options[0]==6);
++    std::cout<<"controls rules and navigation PASS\n";
++}
+diff --git a/tests/input_mapping_test.cpp b/tests/input_mapping_test.cpp
+new file mode 100755
+index 0000000..1af047c
+--- /dev/null
++++ b/tests/input_mapping_test.cpp
+@@ -0,0 +1,35 @@
++#include "stdafx.h"
++#include "InputActionsMapping.h"
++#include <cassert>
++#include <iostream>
++int main() {
++    cxx::json_document source(R"({"player1":{"gamepad_id":"Gamepad2","note":"keep","actions":[
++        {"action":"Jump","keycode":"Space","gpbutton":"A","extra":7},
++        {"action":"Shoot","keycode":"LCtrl","gpbutton":"RightTrigger"},
++        {"action":"Horn","keycode":"Tab","gpbutton":"A"}]},
++        "player2":{"gamepad_id":"Gamepad3","custom":42}})");
++    auto root=source.get_root_node();auto p1=root["player1"];
++    InputActionsMapping mapping;mapping.LoadConfig(p1);
++    assert(mapping.AssignGamepadButton(eInputAction_Jump,eGamepadButton_RightTrigger));
++    assert(mapping.GetAction(eInputActionsGroup_OnFoot,eGamepadButton_RightTrigger)==eInputAction_Jump);
++    assert(mapping.GetAction(eInputActionsGroup_OnFoot,eGamepadButton_A)==eInputAction_Shoot);
++    assert(mapping.GetAction(eInputActionsGroup_InCar,eGamepadButton_A)==eInputAction_Horn);
++    assert(!mapping.AssignGamepadButton(eInputAction_Jump,eGamepadButton_null));
++    InputActionsMapping defaults;defaults.LoadConfig(p1);
++    mapping.RestoreGamepadButtons(defaults);
++    assert(mapping.GetAction(eInputActionsGroup_OnFoot,eGamepadButton_A)==eInputAction_Jump);
++    assert(mapping.mGamepadID==eGamepadID_Gamepad2);
++    assert(mapping.mActionToKeys[eInputAction_Shoot].mKeycode==eKeycode_LEFT_CTRL);
++    mapping.SaveConfig(p1);
++    assert(cxx::json_node_string(p1["note"]).get_value()=="keep");
++    assert(cxx::json_node_numeric(p1["actions"][0]["extra"]).get_value_integer()==7);
++    assert(cxx::json_node_numeric(root["player2"]["custom"]).get_value_integer()==42);
++    cxx::json_document saved;saved.create_document();auto out=saved.get_root_node();
++    mapping.SaveConfig(out);
++    InputActionsMapping loaded;loaded.LoadConfig(out);
++    assert(loaded.GetAction(eInputActionsGroup_OnFoot,eGamepadButton_A)==eInputAction_Jump);
++    assert(loaded.mActionToKeys[eInputAction_WalkForward].mGpButton==eGamepadButton_null);
++    assert(loaded.mGamepadID==eGamepadID_Gamepad2);
++    assert(loaded.mActionToKeys[eInputAction_Shoot].mKeycode==eKeycode_LEFT_CTRL);
++    std::cout<<"mapping serialization PASS\n";
++}

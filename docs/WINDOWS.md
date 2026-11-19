@@ -1,4 +1,4 @@
-GTA Perspective Lock 0.6.9 - Windows 10/11 x64
+GTA Perspective Lock 0.7.4 - Windows 10/11 x64
 
 Extract the ENTIRE zip into a writable, short ASCII path, for example:
   C:/Games/GTA-Perspective-Lock
@@ -74,3 +74,10 @@ avoid Program Files, protected folders, and running directly inside the zip.
 Early Carnage3D remake prototype. Built and statically checked on Linux only;
 Windows launch, graphics, sound, controls, persistence and gameplay still need
 owner testing. The Android scripted-input test hook is disabled in this build.
+
+Controllers (USB or Bluetooth):
+Pair/connect the controller in Windows first; it can also be connected while the
+game is running. The first controller found becomes Gamepad1. Layouts come from
+gamecontrollerdb.txt next to the exe; a controller not listed there is read with
+a generic layout. The log lists every controller found ("Gamepad1: name [id]").
+If buttons are wrong, send that log line.

@@ -18,6 +18,7 @@ with tempfile.TemporaryDirectory(prefix='package-', dir=dist) as tmp:
     stage = Path(tmp)
     shutil.copy2(root/'build/carnage3d.exe', stage/'GTA-Perspective-Lock.exe')
     shutil.copy2(root/'deps/openal/bin/Win64/soft_oal.dll', stage/'OpenAL32.dll')
+    shutil.copy2(root/'deps/sdl2/bin/SDL2.dll', stage/'SDL2.dll')
     shutil.copytree(root/'engine/gamedata', stage/'gamedata')
     # Strip test controls and any local profile/config residue from the staged copy.
     for path in list((stage/'gamedata').rglob('*')):
@@ -31,9 +32,10 @@ with tempfile.TemporaryDirectory(prefix='package-', dir=dist) as tmp:
     for name in ('sys_config.json', 'inputs.json'):
         shutil.copy2(stage/'gamedata/config'/f'{name}.default', stage/'gamedata/config'/name)
     shutil.copy2(root/'README-windows.txt', stage/'README.txt')
+    shutil.copy2(root/'gamecontrollerdb.txt', stage/'gamecontrollerdb.txt')
     licenses = stage/'licenses'
     licenses.mkdir()
-    for name, path in [('GLEW.txt', root/'deps/glew/LICENSE.txt'), ('GLFW.txt', root/'deps/glfw/LICENSE.md'), ('OpenAL.txt', root/'deps/openal/COPYING'), ('Carnage3D.txt', root.parent/'engines/carnage3d/LICENSE'), ('Box2D.txt', root/'engine/third_party/Box2D/LICENSE'), ('GLM.txt', root.parent/'engines/android-deps/glm/copying.txt'), ('llvm-mingw.txt', Path('/home/codebox/.local/opt/llvm-mingw/LICENSE.TXT'))]:
+    for name, path in [('GLEW.txt', root/'deps/glew/LICENSE.txt'), ('GLFW.txt', root/'deps/glfw/LICENSE.md'), ('SDL2.txt', root/'deps/sdl2/LICENSE.txt'), ('OpenAL.txt', root/'deps/openal/COPYING'), ('Carnage3D.txt', root.parent/'engines/carnage3d/LICENSE'), ('Box2D.txt', root/'engine/third_party/Box2D/LICENSE'), ('GLM.txt', root.parent/'engines/android-deps/glm/copying.txt'), ('llvm-mingw.txt', Path('/home/codebox/.local/opt/llvm-mingw/LICENSE.TXT'))]:
         if path.exists(): shutil.copy2(path, licenses/name)
     pending = list(stage.glob('*.exe')) + list(stage.glob('*.dll'))
     checked = set()
