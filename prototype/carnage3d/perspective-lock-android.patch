@@ -14636,10 +14636,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..b2968b0
+index 0000000..77aa556
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1678 @@
+@@ -0,0 +1,1717 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -15526,7 +15526,17 @@ index 0000000..b2968b0
 +        if(!entity || at==doors_.end()) {
 +            Once("enable-door","ENABLE door-family variant unresolved"); return WorldResult::Unresolved;
 +        }
-+        at->second.enable(true);
++        if(at->second.kind==2) {
++            // 0043e4f0 case 0x28 -> 00474710(door,3,value(car record),-2): rebinds to the
++            // record's runtime car, keeps the colour, and enables in any animation state.
++            bool found=false;
++            for(const auto& entry:carRecords_) if(entry.second==at->second.carRecord) found=true;
++            if(!found) {
++                Once("enable-specific-door","UNRESOLVED ENABLE specific door: bound car record has no trusted runtime car");
++                return WorldResult::Unresolved;
++            }
++            at->second.car=at->second.carRecord; at->second.carBound=true; at->second.disabled=false;
++        } else at->second.enable(true);
 +        enabledDoors_.clear();
 +        for(int id:doorOrder_) if(!doors_.at(id).disabled) enabledDoors_.push_back(&doors_.at(id));
 +        return WorldResult::Done;
@@ -16155,11 +16165,17 @@ index 0000000..b2968b0
 +        else if(r.token=="MODEL_DOOR") {base=operands[1];frames=operands[2];roof=operands[3];}
 +        else {base=operands[1];roof=operands[2];}
 +        if(model) required=static_cast<std::int16_t>(operands[r.token=="MODEL_DOOR"?4:3]);
++        int specificCar=-1,specificColor=0xffff;
 +        if(specific) {
-+            // Initial loaders pass the record NUMBER, not value(record), except
-+            // FUTURECAR -> -1. Non-wildcard raw original slot IDs and +0x24c
-+            // color/+0x9c bomb predicates lack a trusted engine source.
-+            Once("door-specific:"+r.label,"UNRESOLVED "+r.token+" original car-slot/color/bomb constructor binding"); continue;
++            if(r.token!="SPECIFIC_DOOR") {
++                // SPECIFIC_DOOR_BOMB (0043e040, kind 5) needs car+0x9c, which SETBOMB does not
++                // project yet; the SPECIFIC_BARR constructor is not recovered.
++                Once("door-specific:"+r.label,"UNRESOLVED "+r.token+" constructor binding"); continue;
++            }
++            // 0043df70: the binding is the record NUMBER (not its
++            // value), or -1 when that record is a FUTURECAR (type 0x1d).
++            specificCar=operands[3];
++            specificColor=operands[4]==-1?0xffff:(operands[4]&0xffff);
 +        }
 +        if(direction<0 || direction>3 || frames<2 ||
 +           base<0 || frames>gGameMap.mStyleData.GetBlockTexturesCount(eBlockType_Aux)-base ||
@@ -16170,8 +16186,13 @@ index 0000000..b2968b0
 +        d.y=static_cast<int>(Convert::MetersToMapUnits(pos->z));
 +        d.z=static_cast<int>(Convert::MetersToMapUnits(pos->y));
 +        d.direction=direction; d.frames=frames; d.base=base; d.roof=roof;
-+        d.kind=r.token=="BARRIER"?1:model?3:0;
-+        d.radius=barrier?1:model?(r.token=="MODEL_BARRIER"?1:2):2;
++        d.kind=specific?2:r.token=="BARRIER"?1:model?3:0;
++        if(specific) {
++            d.carRecord=specificCar; d.color=specificColor; d.car=specificCar;
++            for(const auto& other:section.declarations)
++                if(other.label==r.operands[3] && other.token=="FUTURECAR") d.car=-1;
++        }
++        d.radius=specific?3:barrier?1:model?(r.token=="MODEL_BARRIER"?1:2):2;
 +        d.model=required;
 +        int x=d.x+(direction==1),y=d.y+(direction==3),z=INVERT_MAP_LAYER(d.z);
 +        if(x>=MAP_DIMENSIONS || y>=MAP_DIMENSIONS ||
@@ -16290,6 +16311,24 @@ index 0000000..b2968b0
 +                if(d.state==1 && mode0) {
 +                    const int model=static_cast<int>(static_cast<Vehicle*>(participant)->mCarInfo->mModelID);
 +                    bool opens=d.kind==0 || (d.kind==3 && model==d.model);
++                    if(d.kind==2) {
++                        // 00479f00 case 2: (binding==-1 || car index==binding) && (colour==0xffff || colour==car+0x24c).
++                        bool carOk=d.car==-1,known=true;
++                        if(!carOk) {
++                            if(d.carBound) {
++                                auto record=carRecords_.find(participant->mObjectID);
++                                carOk=record!=carRecords_.end() && record->second==d.car;
++                            }
++                            // A raw record number is compared with the car pool index (004be248, stride
++                            // 0x2b0, below the record table at 005f30e8): numbers above 1839 can never match.
++                            else if(d.car<=1839) known=false;
++                        }
++                        if(carOk && d.color!=0xffff) known=false; // car+0x24c has no trusted engine source
++                        if(!known) {
++                            doorUpdateUnresolved_=true;
++                            Once("specific-door-car", "UNRESOLVED specific door car index/colour comparison; next script dispatch stops");
++                        } else opens=carOk;
++                    }
 +                    if(d.kind==1) {
 +                        opens=model==5 || model==4 || model==15 || model==32 || model==16 || model==44;
 +                        if(!opens) {
@@ -16667,10 +16706,10 @@ index 0000000..4398432
 +}
 diff --git a/src/mission/DoorRules.h b/src/mission/DoorRules.h
 new file mode 100755
-index 0000000..52dfccc
+index 0000000..4a1a6cf
 --- /dev/null
 +++ b/src/mission/DoorRules.h
-@@ -0,0 +1,65 @@
+@@ -0,0 +1,70 @@
 +#pragma once
 +#include <algorithm>
 +#include <cstdint>
@@ -16682,6 +16721,11 @@ index 0000000..52dfccc
 +    int x=0,y=0,z=0,direction=0,frames=0,base=0,roof=0,radius=2;
 +    int state=1,frame=0,counter=0;
 +    int kind=0,model=-1; // 00773240 opening rule; 00773242 model for kind3
++    // kind 2 (00474710): 00773242 car binding, 00773244 colour (0xffff = any).
++    // carBound: `car` is a mission record number whose runtime car is the
++    // binding (set by ENABLE); otherwise it is the raw constructor value,
++    // which the original compares with the car pool index.
++    int car=-1,color=0xffff,carRecord=-1; bool carBound=false;
 +    bool disabled=true,solid=true;
 +    bool permanent=false; // declared with a prefix: 004745c0 leaves it alone
 +    bool enable(bool on) {
