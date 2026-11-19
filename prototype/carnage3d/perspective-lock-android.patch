@@ -14636,10 +14636,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..5898b50
+index 0000000..7cab7f2
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1620 @@
+@@ -0,0 +1,1675 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -14727,7 +14727,7 @@ index 0000000..5898b50
 +        return std::array<int,3>{{
 +            static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x)*64)),
 +            static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z)*64)),
-+            static_cast<int>(std::lround(MAP_LAYERS_COUNT*64-1-Convert::MetersToMapUnits(at.y)*64))}};
++            static_cast<int>(std::floor(MAP_LAYERS_COUNT*64-1-Convert::MetersToMapUnits(at.y)*64))}};
 +    };
 +    switch(e.type) {
 +    case 0: case 5: case 6: case 0x12: case 0x15: case 0x16: case 0x1b: // car handle
@@ -15618,10 +15618,16 @@ index 0000000..5898b50
 +        // objective, which is what a constructed ped already does here.
 +        if(!entity || entity->type!=99) return WorldResult::Unresolved;
 +        auto* object=ResolveObject(*entity);
-+        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Success;
++        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Unresolved;
 +        auto* ped=static_cast<Pedestrian*>(object);
 +        if(ped->IsDead() || ped->IsDies()) return WorldResult::Success;
++        // 00443690 has no helper or target lookup outside these ranges.
++        // D3 is the diagnostic case; D14 is NOT PED_ON's kind14.
++        if(i.D<0 || (i.D>13 && i.D<21) || i.D>46) return WorldResult::Success;
 +        if(i.D==0 || i.D==4) {
++            // Original car detachment depends on +7c==0x11 and +4c. Engine
++            // seat/entry state alone does not establish that mutation.
++            if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) return WorldResult::Unresolved;
 +            auto state=scriptPeds_.find(ped->mObjectID);
 +            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
 +            state->second.stand(i.D); ped->mMissionVelocity={0,0};
@@ -15644,6 +15650,32 @@ index 0000000..5898b50
 +            missionEntities_.erase(object->mObjectID);
 +        }
 +        return WorldResult::Done;
++    }
++    if(token=="CRANE") {
++        // 00440040 stage1: mode!=0 or car outside D's XYZ cell takes F,
++        // without consulting the crane allocation or granting a reward.
++        if(r.process.state!=1) return WorldResult::Unresolved;
++        auto* human=player(r.owner); auto* ped=human?human->mCharacter:nullptr;
++        if(!ped || ped->IsMarkedForDeletion() || ped->IsDead() || ped->IsDies() ||
++           ped->IsEnteringOrExitingCar()) return WorldResult::Unresolved;
++        if(!ped->mCurrentCar) {
++            if(ped->IsStanding() || ped->IsWalking()) return WorldResult::Failure;
++            return WorldResult::Unresolved;
++        }
++        auto* car=ped->mCurrentCar;
++        if(!ped->IsCarDriver() || car->GetCarDriver()!=ped || car->IsMarkedForDeletion()) return WorldResult::Unresolved;
++        auto target=r.entities.find(i.D);
++        if(target==r.entities.end()) return WorldResult::Unresolved;
++        auto destination=OriginalPosition(target->second,i.D);
++        const auto& at=car->mTransform.mPosition;
++        if(!destination || !std::isfinite(at.x) || !std::isfinite(at.y) || !std::isfinite(at.z)) return WorldResult::Unresolved;
++        const double cells[]={std::floor(Convert::MetersToMapUnits(at.x)),
++                              std::floor(Convert::MetersToMapUnits(at.z)),
++                              std::floor((MAP_LAYERS_COUNT*64-1-Convert::MetersToMapUnits(at.y)*64)/64.0)};
++        for(int axis=0;axis<3;++axis)
++            if(cells[axis]!=std::floor((*destination)[axis]/64.0)) return WorldResult::Failure;
++        Once("crane-acceptance","UNRESOLVED CRANE machine acceptance/update/removal state");
++        return WorldResult::Unresolved;
 +    }
 +    if(token=="PARK") {
 +        // 004407c0 (SPEC_PARK): state1 takes the car over at speed 5, state2
@@ -15751,6 +15783,29 @@ index 0000000..5898b50
 +        const double tx=x&255,ty=y&255,d=r.instruction.D;
 +        if(d<0 || d>32767) return {}; // unprojected signed-overflow geometry
 +        return tx-d<=px && px<=tx+d && ty-d<=py && py<=ty+d;
++    }
++    if(r.token=="WAIT_FOR_PED") {
++        // 00447b2d -> 00475e60(ped(value(D)), X(A)>>6,Y(A)>>6,Z(A)>>6,0).
++        // No health, arrival, objective or timeout test. 0045fb00 reads the
++        // ped's own raw XYZ, not its associated car's position.
++        auto target=r.entities.find(r.instruction.A);
++        auto subject=r.entities.find(r.instruction.D);
++        if(target==r.entities.end() || subject==r.entities.end()) return {};
++        GameObject* object=nullptr;
++        if(subject->second.type==3) {
++            auto binding=playerBindings_.find(r.instruction.D);
++            if(binding!=playerBindings_.end()) object=gGameObjectsManager.GetGameObjectByID(binding->second);
++        } else if(subject->second.type==99) object=ResolveObject(subject->second);
++        // Original numeric ped slots cannot be inferred from engine object IDs.
++        if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Pedestrian) return {};
++        auto* ped=static_cast<Pedestrian*>(object);
++        if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) return {};
++        auto destination=OriginalPosition(target->second,r.instruction.A);
++        auto position=OriginalPosition(subject->second,r.instruction.D);
++        if(!destination || !position) return {};
++        for(int axis=0;axis<3;++axis)
++            if(std::floor((*position)[axis]/64.0)!=std::floor((*destination)[axis]/64.0)) return false;
++        return true;
 +    }
 +    if(r.token=="IS_POWERUP_DONE") {
 +        const auto at=r.entities.find(r.instruction.A);
