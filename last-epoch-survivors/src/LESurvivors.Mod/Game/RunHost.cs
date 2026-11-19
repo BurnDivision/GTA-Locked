@@ -5,6 +5,7 @@ using Il2Cpp;
 using LESurvivors.Core;
 using LESurvivors.Core.Content;
 using UnityEngine;
+using CharacterClass = LESurvivors.Core.Content.CharacterClass;
 
 namespace LESurvivors.Mod.Game;
 
