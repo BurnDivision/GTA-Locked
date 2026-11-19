@@ -14636,10 +14636,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..7cab7f2
+index 0000000..b2968b0
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1675 @@
+@@ -0,0 +1,1678 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -16019,7 +16019,10 @@ index 0000000..7cab7f2
 +        if(ped->IsStanding() || ped->IsWalking() || ped->IsCarPassenger()) return false;
 +        return {};
 +    }
-+    if(r.token=="IS_GOAL_DEAD") {
++    if(r.token=="IS_GOAL_DEAD" || r.token=="DESTROY") {
++        // DESTROY 0043ed90 waits on 0043e870(A)==0; it does not damage
++        // or remove A. The VM owns W(D), E and S/F. Unlike IS_GOAL_DEAD,
++        // DESTROY never interprets D as a killer declaration.
 +        // 0043e870 returns100 for all non-car/non-ped declaration types.
 +        auto at=r.entities.find(r.instruction.A); if(at==r.entities.end()) return {};
 +        const auto& e=at->second;
@@ -16051,13 +16054,13 @@ index 0000000..7cab7f2
 +            } else {
 +                auto known=e.value?scriptPeds_.find(static_cast<unsigned int>(*e.value)):scriptPeds_.end();
 +                if(known==scriptPeds_.end() || !known->second.removed) {
-+                    Once("goal-ped-handle", "UNRESOLVED IS_GOAL_DEAD: ped handle was never bound or disappeared without a known removal");
++                    Once("goal-ped-handle", "UNRESOLVED health predicate: ped handle was never bound or disappeared without a known removal");
 +                    return {};
 +                }
 +                dead=true; killer=known->second.killer;
 +            }
 +            if(!dead) return false; // short circuit before any killer lookup
-+            if(r.instruction.D<=0 || e.type!=99) return true;
++            if(r.token=="DESTROY" || r.instruction.D<=0 || e.type!=99) return true;
 +            auto target=r.entities.find(r.instruction.D); if(target==r.entities.end()) return {};
 +            GameObject* other=nullptr;
 +            auto binding=playerBindings_.find(r.instruction.D);
