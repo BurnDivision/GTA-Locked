@@ -14617,10 +14617,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..69c62bc
+index 0000000..44d9de0
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1482 @@
+@@ -0,0 +1,1513 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -14788,7 +14788,7 @@ index 0000000..69c62bc
 +    for(const auto& saved:savedDoorBlocks_) {
 +        auto [x,y,z]=saved.first; gGameMap.SetBlockInfo(x,y,z,saved.second);
 +    }
-+    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); savedDoorBlocks_.clear(); rectangles_={};
++    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
 +    parkCars_={}; parkRemovals_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    playerBindings_.clear(); carRecords_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
@@ -15643,9 +15643,37 @@ index 0000000..69c62bc
 +        return true;
 +    }
 +    if(r.token=="DOOR_ON" || r.token=="DOOR_OFF") {
-+        auto at=doors_.find(r.instruction.A);
 +        auto entity=r.entities.find(r.instruction.A);
-+        if(at==doors_.end() || entity==r.entities.end()) return {};
++        if(entity==r.entities.end()) return {};
++        int id=r.instruction.A;
++        // 004484dd/0044850a read record.value with no type guard. Ordinary
++        // door declarations already have an adapter identity. For numeric
++        // records (including DUMMY), project the original allocation slot.
++        if(entity->second.value) {
++            // These values are engine object IDs, not recovered original slots.
++            // Do not interpret a coincidentally small handle as a door alias.
++            switch(entity->second.type) {
++            case 0: case 1: case 2: case 3: case 5: case 6:
++            case 0x12: case 0x15: case 0x16: case 0x1b: case 99:
++                Once("door-object-slot","UNRESOLVED original object-slot door alias");
++                return {};
++            default: break;
++            }
++            const int slot=*entity->second.value;
++            if(slot<0 || static_cast<std::size_t>(slot)>=doorSlots_.size() || !doorSlots_[slot]) {
++                Once("door-slot:"+std::to_string(slot),"UNRESOLVED original door slot "+std::to_string(slot));
++                return {};
++            }
++            id=*doorSlots_[slot];
++        }
++        // An unset numeric record cannot borrow a same-numbered declaration.
++        else if(entity->second.declaration.token!="DOOR" &&
++                entity->second.declaration.token!="BARRIER" &&
++                entity->second.declaration.token!="BASIC_BARRIER" &&
++                entity->second.declaration.token!="MODEL_BARRIER" &&
++                entity->second.declaration.token!="MODEL_DOOR") return {};
++        auto at=doors_.find(id);
++        if(at==doors_.end()) return {};
 +        if(!at->second.enable(r.token=="DOOR_ON")) return false;
 +        enabledDoors_.clear();
 +        for(int id:doorOrder_) if(!doors_.at(id).disabled) enabledDoors_.push_back(&doors_.at(id));
@@ -15926,6 +15954,9 @@ index 0000000..69c62bc
 +        const bool model=r.token=="MODEL_BARRIER" || r.token=="MODEL_DOOR";
 +        const bool specific=r.token=="SPECIFIC_BARR" || r.token=="SPECIFIC_DOOR" || r.token=="SPECIFIC_DOOR_BOMB";
 +        if(!ordinary && !barrier && !model && !specific) continue;
++        // Reserve before validation: a missing projection must not shift all
++        // later slots and silently redirect a numeric DUMMY to another door.
++        doorSlots_.push_back(std::nullopt);
 +        int id=0,direction=0,base=0,roof=0,frames=8,required=-1;
 +        auto pos=DeclarationPosition(r);
 +        std::vector<int> operands; bool valid=true;
@@ -15985,7 +16016,7 @@ index 0000000..69c62bc
 +        }
 +        int prefix=-1;
 +        d.permanent=integer(r.prefix,prefix) && prefix>=0; // 00773247
-+        doors_.emplace(id,d); doorOrder_.push_back(id); CopyDoorFrame(d);
++        doors_.emplace(id,d); doorOrder_.push_back(id); doorSlots_.back()=id; CopyDoorFrame(d);
 +    }
 +}
 +void CarnageMissionWorld::CopyDoorFrame(const DoorState& d) {
@@ -16105,10 +16136,10 @@ index 0000000..69c62bc
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..c08010b
+index 0000000..195817a
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,101 @@
+@@ -0,0 +1,104 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -16175,6 +16206,9 @@ index 0000000..c08010b
 +    void AnimateDoor(DoorState&,bool open);
 +    std::map<int,DoorState> doors_;
 +    std::vector<int> doorOrder_;
++    // 004740f0 allocates by loader order, including unprojected constructors.
++    // DUMMY values are these original slots, never declaration IDs.
++    std::vector<std::optional<int>> doorSlots_;
 +    std::vector<DoorState*> enabledDoors_,animatingDoors_;
 +    std::map<std::tuple<int,int,int>,MapBlockInfo> savedDoorBlocks_;
 +    std::array<std::optional<ScreenRectangle>,4> rectangles_{};
