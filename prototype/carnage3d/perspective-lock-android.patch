@@ -14636,10 +14636,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..77aa556
+index 0000000..38e2388
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1717 @@
+@@ -0,0 +1,1718 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -15855,7 +15855,8 @@ index 0000000..77aa556
 +                entity->second.declaration.token!="BARRIER" &&
 +                entity->second.declaration.token!="BASIC_BARRIER" &&
 +                entity->second.declaration.token!="MODEL_BARRIER" &&
-+                entity->second.declaration.token!="MODEL_DOOR") return {};
++                entity->second.declaration.token!="MODEL_DOOR" &&
++                entity->second.declaration.token!="SPECIFIC_DOOR") return {};
 +        auto at=doors_.find(id);
 +        if(at==doors_.end()) return {};
 +        if(!at->second.enable(r.token=="DOOR_ON")) return false;
