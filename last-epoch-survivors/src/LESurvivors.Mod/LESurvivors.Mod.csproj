@@ -1,0 +1,44 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <!-- MelonLoader mod. Builds only on a machine with Last Epoch + MelonLoader installed (it references the
+       generated interop assemblies, which are never committed). Set GameDir if the game is elsewhere. -->
+  <PropertyGroup>
+    <TargetFramework>net6.0</TargetFramework>
+    <AssemblyName>LESurvivors</AssemblyName>
+    <RootNamespace>LESurvivors.Mod</RootNamespace>
+    <Nullable>disable</Nullable>
+    <ImplicitUsings>disable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <GameDir Condition="'$(GameDir)' == ''">C:\Program Files (x86)\Steam\steamapps\common\Last Epoch</GameDir>
+    <ML>$(GameDir)\MelonLoader</ML>
+    <IA>$(ML)\Il2CppAssemblies</IA>
+    <CopyLocalLockFileAssemblies>false</CopyLocalLockFileAssemblies>
+    <NoWarn>CS0618;CS8632</NoWarn>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\LESurvivors.Core\LESurvivors.Core.csproj" />
+  </ItemGroup>
+  <ItemGroup>
+    <Reference Include="MelonLoader"><HintPath>$(ML)\net6\MelonLoader.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="0Harmony"><HintPath>$(ML)\net6\0Harmony.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Runtime"><HintPath>$(ML)\net6\Il2CppInterop.Runtime.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="Il2CppInterop.Common"><HintPath>$(ML)\net6\Il2CppInterop.Common.dll</HintPath><Private>false</Private></Reference>
+    <Reference Include="$(IA)\Il2Cppmscorlib.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\Il2CppLE.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\Il2CppLE.Core.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\Il2CppUniTask.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\Il2CppRewired_Core.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.CoreModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.IMGUIModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.InputLegacyModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.PhysicsModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.AIModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.ScreenCaptureModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.TextRenderingModule.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\UnityEngine.AnimationModule.dll"><Private>false</Private></Reference>
+  </ItemGroup>
+  <!-- Ship Core inside the mod folder: copy both DLLs to Mods/ after build when DeployToGame=true -->
+  <Target Name="Deploy" AfterTargets="Build" Condition="'$(DeployToGame)' == 'true'">
+    <Copy SourceFiles="$(TargetDir)LESurvivors.dll;$(TargetDir)LESurvivors.Core.dll" DestinationFolder="$(GameDir)\Mods" />
+  </Target>
+</Project>
