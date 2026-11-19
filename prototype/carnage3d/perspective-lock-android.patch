@@ -9936,7 +9936,7 @@ index af31f7a..31b561e 100644
      {
          mWeapons[icurrent].SetAmmunition(0);
 diff --git a/src/Pedestrian.h b/src/Pedestrian.h
-index 6880e30..15ae580 100644
+index 6880e30..0fd92a9 100644
 --- a/src/Pedestrian.h
 +++ b/src/Pedestrian.h
 @@ -7,6 +7,7 @@
@@ -9965,6 +9965,25 @@ index 6880e30..15ae580 100644
  
  public:
      // @param id: Unique object identifier, constant
+@@ -133,6 +143,10 @@ public:
+ 
+     ePedestrianAnimID GetCurrentAnimationID() const;
+ 
++    // Apply an explicit script palette after the spawn policy.
++    void SetRemap(int remapIndex);
++    int GetRemapIndex() const { return mRemapIndex; }
++
+     // Get current pedestrian control state
+     const PedestrianCtlState& GetCtlState() const;
+ 
+@@ -142,7 +156,6 @@ private:
+ 
+     bool CanRun() const;
+ 
+-    void SetRemap(int remapIndex);
+     void SetAnimation(ePedestrianAnimID animation, eSpriteAnimLoop loopMode);
+     void SetDead(ePedestrianDeathReason deathReason);
+     void SetCarEntered(Vehicle* targetCar, eCarSeat targetSeat);
 diff --git a/src/PedestrianStates.cpp b/src/PedestrianStates.cpp
 index e5fbabd..bfa9527 100644
 --- a/src/PedestrianStates.cpp
@@ -14617,10 +14636,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..44d9de0
+index 0000000..5898b50
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1513 @@
+@@ -0,0 +1,1620 @@
 +#include "../stdafx.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
@@ -14630,6 +14649,7 @@ index 0000000..44d9de0
 +#include "../Convert.h"
 +#include "../Decoration.h"
 +#include "PhoneRules.h"
++#include "ConstructionRules.h"
 +#include "../GameTextsManager.h"
 +#include "../AudioManager.h"
 +#include "../PhysicsBody.h"
@@ -14713,7 +14733,9 @@ index 0000000..44d9de0
 +    case 0: case 5: case 6: case 0x12: case 0x15: case 0x16: case 0x1b: // car handle
 +    case 2: // object handle
 +        return object(ResolveObject(e));
-+    case 3: case 99: { // ped handle
++    case 0x1c: case 0x40: // DRIVER_PARK / PARKED_PIXELS must first become cars
++        return {};
++    case 1: case 3: case 99: { // ped handle (unconstructed PED stays unresolved)
 +        auto binding=playerBindings_.find(id);
 +        if(binding!=playerBindings_.end()) return object(gGameObjectsManager.GetGameObjectByID(binding->second));
 +        return object(ResolveObject(e));
@@ -14791,7 +14813,7 @@ index 0000000..44d9de0
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
 +    parkCars_={}; parkRemovals_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
-+    playerBindings_.clear(); carRecords_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
++    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
 +    if(!std::isfinite(dt) || dt<0) return;
@@ -15074,12 +15096,39 @@ index 0000000..44d9de0
 +    return {};
 +}
 +Pedestrian* CarnageMissionWorld::SpawnPedestrian(const glm::vec3& position,int remap) {
-+    if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded() || remap!=NO_REMAP) {
-+        Once("ped-spawn","Ped spawn requires loaded style and NO_REMAP; unverified palettes rejected"); return nullptr;
++    if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded() || remap<NO_REMAP || remap>=MAX_PED_REMAPS) {
++        Once("ped-spawn","Ped spawn requires loaded style and a valid pedestrian palette"); return nullptr;
 +    }
 +    auto* ped=gGameObjectsManager.CreatePedestrian(position,cxx::angle_t::from_degrees(0),ePedestrianType_Civilian,remap);
-+    if(ped) {ownedObjects_.insert(ped->mObjectID); missionEntities_.insert(ped->mObjectID);}
++    if(ped) {
++        // HandleSpawn chooses a civilian palette; the script's explicit
++        // remap is applied afterwards, including the unremapped value.
++        ped->SetRemap(remap);
++        ownedObjects_.insert(ped->mObjectID); missionEntities_.insert(ped->mObjectID);
++    }
 +    return ped;
++}
++bool CarnageMissionWorld::EmptySpawn(int x,int y,int z) {
++    // 004770a0 is not a no-op. Only the provably empty case is projected
++    // here; refuse candidates requiring original spatial/cleanup flags.
++    for(auto* object:gGameObjectsManager.mAllObjects) {
++        if(object->IsMarkedForDeletion()) continue;
++        if(object->mClassID==eGameObjectClass_Pedestrian &&
++           static_cast<Pedestrian*>(object)->IsHumanPlayerCharacter()) continue; // O=0x25
++        const auto& at=object->mTransform.mPosition;
++        if(!std::isfinite(at.x) || !std::isfinite(at.y) || !std::isfinite(at.z)) return false;
++        const auto ox=Convert::MetersToMapUnits(at.x),oy=Convert::MetersToMapUnits(at.z);
++        const auto oz=MAP_LAYERS_COUNT*64-1-Convert::MetersToMapUnits(at.y)*64;
++        if(object->mClassID==eGameObjectClass_Car) {
++            auto* car=static_cast<Vehicle*>(object);
++            if(!car->mCarInfo) return false;
++            const float radius=1+Convert::MetersToMapUnits(glm::length(car->mCarInfo->mDimensions));
++            if(std::floor(oz/64)==std::floor((z-1)/64.0) &&
++               std::abs(ox-x/64.0f)<=radius && std::abs(oy-y/64.0f)<=radius) return false;
++        } else if(std::floor(ox)==x/64 && std::floor(oy)==y/64 &&
++                  std::floor(oz/64)==z/64) return false;
++    }
++    return true;
 +}
 +Vehicle* CarnageMissionWorld::SpawnVehicle(const glm::vec3& position,int model,int heading) {
 +    if(!gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return nullptr;
@@ -15097,6 +15146,27 @@ index 0000000..44d9de0
 +    auto found=r.entities.find(i.A);
 +    auto* entity=found==r.entities.end()?nullptr:&found->second;
 +    if(!OwnerValid(r.owner)) {Once("owner","Invalid mission owner"); return WorldResult::Unresolved;}
++    if(token=="CHECKPOINT_PASSED") {
++        auto* human=player(0);
++        if(r.owner!=0 || !human || !human->mCharacter) return WorldResult::Unresolved;
++        for(int owner=1;owner<4;++owner) if(player(owner)) return WorldResult::Unresolved;
++        std::optional<glm::vec3> next;
++        if(i.D==0x13) {
++            if(!entity) return WorldResult::Unresolved;
++            int x=0,y=0,z=0;
++            if(!Tuple(entity->declaration,x,y,z)) return WorldResult::Unresolved;
++            // Trigger +10/+11/+12 are unsigned bytes (004744a0).
++            next=EnginePosition((x&255)*64,(y&255)*64,(z&255)*64);
++            if(!next) return WorldResult::Unresolved;
++        } else if(i.D!=0x14) return WorldResult::Unresolved;
++        // First crossing by participant0: text/sound, clear red arrow and
++        // point it at the linked trigger. Ranking and network exit are not
++        // used by the recovered single-participant WAIT predicate.
++        human->mHUD.ShowMissionText(gGameTexts.GetText(i.D==0x13?"1st_over_checkpoint":"win_race"));
++        gAudioManager.StartSound(eSfxSampleType_Level,i.D==0x13?15:4,SfxFlags_None,human->mCharacter->mTransform.mPosition);
++        arrows_[0]=next;
++        return WorldResult::Done;
++    }
 +    if(token=="PHONE_START" || token=="PHONE_ANSWER_START" || token=="PHONE_RING" || token=="PHONE_STOP") {
 +        auto phone=phones_.find(i.A);
 +        if(phone==phones_.end() || !phone->second.object) return WorldResult::Unresolved;
@@ -15134,11 +15204,12 @@ index 0000000..44d9de0
 +        return CleanupScriptWorld()?WorldResult::Done:WorldResult::Unresolved;
 +    }
 +    if(token=="PARKED_ON" || token=="LOAD_PARKED") {
-+        // The loader calls 004770a0 with cell numbers where it expects
-+        // pixels, so its cleanup looks at the map corner: nothing to clear.
 +        const bool loading=token=="LOAD_PARKED";
 +        if(!entity) return WorldResult::Failure;
-+        auto position=DeclarationPosition(entity->declaration);
++        const bool pixels=loading && entity->declaration.token=="PARKED_PIXELS";
++        int tupleX=0,tupleY=0,tupleZ=0;
++        if(!Tuple(entity->declaration,tupleX,tupleY,tupleZ)) return WorldResult::Unresolved;
++        auto position=pixels?EnginePosition(tupleX,tupleY,tupleZ):DeclarationPosition(entity->declaration);
 +        int model=0,heading=0;
 +        if(!position || entity->declaration.operands.size()<2 ||
 +           !integer(entity->declaration.operands[0],model) || !integer(entity->declaration.operands[1],heading)) return WorldResult::Unresolved;
@@ -15152,19 +15223,20 @@ index 0000000..44d9de0
 +        // 00407ab0 returns -1 for a model without sprites; 00475840 then
 +        // indexes the car table with it. Refuse instead of reproducing that.
 +        if(!info) {Once("vehicle-model:"+std::to_string(model),"Vehicle model absent from current style"); return WorldResult::Unresolved;}
-+        const int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(position->x)));
-+        const int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(position->z)));
-+        const int z=static_cast<int>(std::floor(Convert::MetersToMapUnits(position->y)));
++        const int x=pixels?tupleX/64:tupleX;
++        const int y=pixels?tupleY/64:tupleY;
++        const int z=pixels?tupleZ/64:tupleZ;
++        // Both loader paths pass the unconverted tuple to 004770a0.
++        if(loading && !EmptySpawn(tupleX,tupleY,tupleZ)) return WorldResult::Unresolved;
 +        // 004544e0: from the start layer (cellZ*64-2 pixels, so cellZ-1) the
 +        // search runs down through air to the first ground cell, at most 4.
 +        int layer=z-1;
 +        if(layer<0 || layer>4) return WorldResult::Unresolved;
 +        while(layer<4 && gGameMap.GetBlockInfo(x,y,INVERT_MAP_LAYER(layer))->mGroundType==eGroundType_Air) ++layer;
 +        auto* block=gGameMap.GetBlockInfo(x,y,INVERT_MAP_LAYER(layer));
-+        if(block->mIsFlat || block->mSlopeType) {
-+            Once("parked-terrain","PARKED_ON sloped/flat-bit terrain branch unresolved");
-+            return WorldResult::Unresolved;
-+        }
++        const int pixelX=pixels?tupleX:x*64+32,pixelY=pixels?tupleY:y*64+32;
++        const auto ground=carGroundZ(pixelX,pixelY,layer,block->mIsFlat,block->mSlopeType);
++        if(!ground) return WorldResult::Unresolved;
 +        if(!loading) {
 +        // 004770a0 clears the spawn cell first. Cars: 00476cd0 collects every
 +        // car with a box corner or its centre in the cell on the query layer
@@ -15250,14 +15322,13 @@ index 0000000..44d9de0
 +        for(auto* doomed:doomedPeds) doomed->MarkForDeletion();
 +        for(auto* doomed:doomedObjects) doomed->MarkForDeletion();
 +        }
-+        // 004544e0 ordinary flat cell returns layer*2^22+0x3f0000, which the
-+        // engine stands on that ground block's own layer index.
-+        const float height=MAP_LAYERS_COUNT-1-layer;
-+        auto spawn=Convert::MapUnitsToMeters(glm::vec3(x+0.5f,height,y+0.5f));
-+        auto* car=SpawnVehicle(spawn,model,static_cast<std::int16_t>(heading));
++        auto spawn=EnginePosition(pixelX,pixelY,*ground);
++        if(!spawn) return WorldResult::Unresolved;
++        auto* car=SpawnVehicle(*spawn,model,static_cast<std::int16_t>(heading));
 +        if(!car) return WorldResult::Failure;
 +        entity->value=static_cast<std::int32_t>(car->mObjectID); entity->type=0;
 +        carRecords_[car->mObjectID]=static_cast<std::int16_t>(i.A); // car+0x134
++        carRemaps_[car->mObjectID]=0; // 00407ab0 argument7 -> unsigned byte+24c
 +        // 005f3104: a record declared with a prefix never joins the RESET
 +        // cleanup list (006b3b90).
 +        int prefix=-1;
@@ -15465,25 +15536,49 @@ index 0000000..44d9de0
 +        if(at==doors_.end() || !entity) return WorldResult::Failure;
 +        AnimateDoor(at->second,false); return WorldResult::Done;
 +    }
-+    if(token=="PED_ON") {
++    if(token=="PED_ON" || token=="LOAD_PED") {
 +        // 00441600 (SPEC_PEDS). Constructed here: FUTUREPED 0 and 4, the
 +        // neutral objective-0x19 peds that make up most script peds. E is a
 +        // target, never a reward. Only handle -1 takes the failure branch.
-+        if(!entity || !gGameMap.IsLoaded()) return WorldResult::Unresolved;
-+        const int kind=entity->value?*entity->value:-1;
++        if(!entity || !gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return WorldResult::Unresolved;
++        const bool loading=token=="LOAD_PED";
++        if((loading && entity->type!=1) || (!loading && entity->type!=24)) return WorldResult::Unresolved;
++        int kind=entity->value?*entity->value:-1,heading=entity->aux,occupation=i.D;
++        if(loading) {
++            const auto& operands=entity->declaration.operands;
++            if(operands.size()<3 || !integer(operands[0],kind) ||
++               !integer(operands[1],heading) || !integer(operands[2],occupation)) return WorldResult::Unresolved;
++            if(kind==14) kind=0; // 0043da0b calls 004773f0, unlike PED_ON14
++        }
 +        if(kind!=0 && kind!=4) {
 +            Once("ped-kind:"+std::to_string(kind),"PED_ON pedestrian type "+std::to_string(kind)+" (armed/following/car objectives) not constructed yet");
 +            return WorldResult::Unresolved;
 +        }
-+        auto at=OriginalPosition(*entity,i.A); if(!at) return WorldResult::Unresolved;
++        auto at=loading?std::optional<std::array<int,3>>{}:OriginalPosition(*entity,i.A);
++        if(loading) {
++            int x=0,y=0,z=0;
++            if(!Tuple(entity->declaration,x,y,z)) return WorldResult::Unresolved;
++            at=std::array<int,3>{{x,y,z}};
++        }
++        if(!at) return WorldResult::Unresolved;
++        if((*at)[2]<2) return WorldResult::Unresolved;
 +        // 00453e90: Z snaps to the bottom of the layer holding Z-2 pixels.
-+        const int z=((((*at)[2]-2)>>6)<<6)+63;
++        const int z=std::min((((*at)[2]-2)/64)*64+63,319);
 +        auto position=EnginePosition((*at)[0],(*at)[1],z);
-+        if(!position) return WorldResult::Failure;
-+        auto* ped=SpawnPedestrian(*position,NO_REMAP);
++        if(!position || (*at)[2]<2) return WorldResult::Unresolved;
++        if(!EmptySpawn((*at)[0],(*at)[1],(*at)[2])) {
++            Once("ped-clearing","UNRESOLVED 004770a0 spawn clearing candidate");
++            return WorldResult::Unresolved;
++        }
++        // 0045fc10: occupation low byte indexes 004b20b0. 004385e0:
++        // palette0 is the sprite CLUT; positive palettes index base+n-1.
++        static const unsigned char palette[256]={
++#include "PedRemaps.inc"
++        };
++        const int remap=int(palette[static_cast<unsigned int>(occupation)&255])-1;
++        auto* ped=SpawnPedestrian(*position,remap);
 +        if(!ped) return WorldResult::Failure;
-+        ped->SetTransform(*position,-Convert::Fix16ToAngle(static_cast<unsigned short>(entity->aux)));
-+        Once("ped-remap","Script pedestrians use the default look: remap table 004b20b0 and the 004770a0 spawn clearing are not applied");
++        ped->SetTransform(*position,-Convert::Fix16ToAngle(static_cast<unsigned short>(heading)));
 +        int prefix=-1;
 +        if(integer(entity->declaration.prefix,prefix) && prefix>=0) missionEntities_.erase(ped->mObjectID);
 +        scriptPeds_[ped->mObjectID].stand(kind);
@@ -15633,6 +15728,30 @@ index 0000000..44d9de0
 +}
 +std::optional<bool> CarnageMissionWorld::predicate(const WorldRequest& r) {
 +    if(doorUpdateUnresolved_) return {};
++    if(r.token=="CHECKPOINT_PARTICIPANT" || r.token=="CHECKPOINT_AREA") {
++        // 00412a70/00412a90: participant0 only. We project stable modes0/2;
++        // temporary participant modes and additional humans remain unknown.
++        auto* human=player(0); auto* ped=human?human->mCharacter:nullptr;
++        if(r.owner!=0 || !ped || ped->IsMarkedForDeletion()) return {};
++        for(int owner=1;owner<4;++owner) if(player(owner)) return {};
++        if(r.token=="CHECKPOINT_PARTICIPANT") return true;
++        if(ped->IsEnteringOrExitingCar()) return {};
++        GameObject* participant=ped;
++        if(ped->IsCarDriver() && ped->mCurrentCar && ped->mCurrentCar->GetCarDriver()==ped &&
++           !ped->mCurrentCar->IsMarkedForDeletion()) participant=ped->mCurrentCar;
++        else if(ped->mCurrentCar || (!ped->IsStanding() && !ped->IsWalking())) return {};
++        auto at=r.entities.find(r.instruction.A);
++        int x=0,y=0,z=0;
++        if(at==r.entities.end() || !Tuple(at->second.declaration,x,y,z)) return {};
++        const auto& position=participant->mTransform.mPosition;
++        if(!std::isfinite(position.x) || !std::isfinite(position.z)) return {};
++        const double px=std::floor(Convert::MetersToMapUnits(position.x));
++        const double py=std::floor(Convert::MetersToMapUnits(position.z));
++        // 004744a0 truncates XYZ to bytes. The inclusive area ignores Z.
++        const double tx=x&255,ty=y&255,d=r.instruction.D;
++        if(d<0 || d>32767) return {}; // unprojected signed-overflow geometry
++        return tx-d<=px && px<=tx+d && ty-d<=py && py<=ty+d;
++    }
 +    if(r.token=="IS_POWERUP_DONE") {
 +        const auto at=r.entities.find(r.instruction.A);
 +        if(at==r.entities.end() || at->second.declaration.token!="POWERUP") return {};
@@ -15769,10 +15888,13 @@ index 0000000..44d9de0
 +        if(ped->IsCarDriver()) {
 +            auto* car=ped->mCurrentCar;
 +            if(!car || car->GetCarDriver()!=ped) return {};
-+            // 00448a10 mode0 and exact associated handle. Nonnegative D
-+            // compares car byte+0x24c (NOT model+0x22); mapping is unresolved.
++            // 00448a10: D compares the full operand to unsigned byte+24c.
 +            if(car!=object) return false;
-+            if(r.instruction.D>=0) return {};
++            if(r.instruction.D>=0) {
++                auto remap=carRemaps_.find(car->mObjectID);
++                if(remap==carRemaps_.end()) return {};
++                return r.instruction.D==remap->second;
++            }
 +            return true;
 +        }
 +        if(ped->IsCarPassenger()) return {}; // original participant mode not proved
@@ -15847,6 +15969,10 @@ index 0000000..44d9de0
 +        auto at=r.entities.find(r.instruction.A); if(at==r.entities.end()) return {};
 +        const auto& e=at->second;
 +        switch(e.type) {
++        case 0x1c: case 0x40:
++            // Successful original loader construction rewrites these types.
++            // An unprojected constructor cannot borrow default health100.
++            return {};
 +        case 0: case 5: case 6: case 0x12: case 0x15: case 0x16: case 0x1b: {
 +            auto* object=ResolveObject(e);
 +            if(!object || object->mClassID!=eGameObjectClass_Car) return {};
@@ -16136,10 +16262,10 @@ index 0000000..44d9de0
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..195817a
+index 0000000..dd10c67
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,104 @@
+@@ -0,0 +1,106 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -16201,6 +16327,7 @@ index 0000000..195817a
 +    void UpdateDoors();
 +    bool doorUpdateUnresolved_=false;
 +    void UpdateScriptPeds();
++    bool EmptySpawn(int x,int y,int z);
 +    std::map<unsigned int,PedMotion> scriptPeds_;
 +    void CopyDoorFrame(const DoorState&);
 +    void AnimateDoor(DoorState&,bool open);
@@ -16237,6 +16364,7 @@ index 0000000..195817a
 +    std::optional<std::array<int,3>> OriginalPosition(const Entity&,int id) const;
 +    // Mission car object -> declaring record ID (original car+0x134).
 +    std::map<unsigned int,int> carRecords_;
++    std::map<unsigned int,int> carRemaps_; // original car+0x24c, not model
 +    std::array<std::string,4> briefKeys_;
 +    // PARK 004407c0: the participant's cached car (005fdfe8) and cars queued
 +    // for the timed removal 00401050(10,0,car+200).
@@ -16284,7 +16412,7 @@ index 0000000..657622a
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..5f3dbfe
+index 0000000..bfee210
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -16432,13 +16560,53 @@ index 0000000..5f3dbfe
 +{"KF_CANCEL_GENERAL", "00444c40", false}, // 140
 +{"KF_PROCESS", "0043d150", true}, // 141
 +{"RESET_KF", "00444d60", true}, // 142
-+{"WAIT_FOR_PLAYERS", "00444f30", false}, // 143
++{"WAIT_FOR_PLAYERS", "00444f30", true}, // 143, bounded single-player checkpoint projection
 +{"RED_ARROW", "00441320", true}, // 144
 +{"RESET_WITH_BRIEFS", "0044a7f4", false}, // 145
 +{"RED_ARROW_OFF", "004414e0", true}, // 146
 +{"IS_A_TRAIN_WRECKED", "004450f0", false}, // 147
 +{"INC_HEADS", "00445290", false}, // 148
 +{"IS_PED_STUNNED", "004453c0", false}, // 149
+diff --git a/src/mission/ConstructionRules.h b/src/mission/ConstructionRules.h
+new file mode 100755
+index 0000000..4398432
+--- /dev/null
++++ b/src/mission/ConstructionRules.h
+@@ -0,0 +1,34 @@
++#pragma once
++#include <optional>
++namespace mission {
++// 004544e0 after its air-layer search, in original integer pixels. The
++// high bit of type_map gates slope lookup, including the special slope0.
++inline std::optional<int> carGroundZ(int x,int y,int layer,bool flat,int slope) {
++    if(x<0 || y<0 || x>=16384 || y>=16384 || layer<0 || layer>4) return {};
++    if(!flat) return layer*64+63;
++    const int px=x%64,py=y%64,top=(layer+1)*64;
++    switch(slope) {
++    case 0:return top-63;
++    case 1:return top-31+py/2;
++    case 2:return top-63+py/2;
++    case 3:return top-py/2;
++    case 4:return top-32-py/2;
++    case 5:return top-31+px/2;
++    case 6:return top-63+px/2;
++    case 7:return top-px/2;
++    case 8:return top-32-px/2;
++    case 0x29:return top-63+py;
++    case 0x2a:return top-py;
++    case 0x2b:return top-63+px;
++    case 0x2c:return top-px;
++    default:break;
++    }
++    static constexpr int positive[]={9,15,23,31,39,47,55,63};
++    static constexpr int negative[]={2,8,16,24,32,40,48,56};
++    if(slope>=9 && slope<=16) return top-positive[slope-9]+py/8;
++    if(slope>=17 && slope<=24) return top-negative[slope-17]-py/8;
++    if(slope>=25 && slope<=32) return top-positive[slope-25]+px/8;
++    if(slope>=33 && slope<=40) return top-negative[slope-33]-px/8;
++    return {}; // original diagnostic fallback is not a proved spawn
++}
++}
 diff --git a/src/mission/DoorRules.h b/src/mission/DoorRules.h
 new file mode 100755
 index 0000000..52dfccc
@@ -17039,10 +17207,10 @@ index 0000000..8a8b42a
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..510674b
+index 0000000..c66b57a
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
-@@ -0,0 +1,684 @@
+@@ -0,0 +1,759 @@
 +#include "MissionVM.h"
 +#include <algorithm>
 +#include <limits>
@@ -17089,6 +17257,8 @@ index 0000000..510674b
 +}
 +}
 +LoadReport MissionVM::load(const Section& section) {
++    declarationOrder_.clear(); constructed_=false;
++    checkpoints_.fill(-1); checkpointCount_=checkpointCursor_=0; checkpointUnresolved_=false;
 +    processes_={}; instructions_.clear(); lines_.clear(); labels_.clear();
 +    entities_.clear(); triggers_.clear(); unresolvedTriggerTypes_=0; startupDone_=false; bookkeeping_.clear(); childRecords_.clear(); phoneRing_=false; phoneMission_={}; valid_=true;
 +    LoadReport report; std::set<std::string> unsupported;
@@ -17171,8 +17341,31 @@ index 0000000..510674b
 +                    triggers_[other].bound=*e.value;
 +                break;
 +            }
-+            case 0x2f: e.aux=op(0); alloc(0x13,-1,op(1),0); break;
-+            case 0x31: alloc(0x14,-1,op(0),0); break;
++            case 0x2f: case 0x31: {
++                if(e.type==0x2f) {e.aux=op(0); alloc(0x13,-1,op(1),0);}
++                else alloc(0x14,-1,op(0),0);
++                const int byte=*e.value&255;
++                if(checkpointCount_<20) checkpoints_[checkpointCount_++]=byte<128?byte:byte-256;
++                else checkpointUnresolved_=true; // original would overwrite adjacent globals
++                break;
++            }
++            case 0x30: { // 00445800 -> 00474db0, only preceding declarations exist
++                int current=op(0); std::set<int> visited;
++                while(true) {
++                    auto at=entities_.find(current);
++                    if(at==entities_.end() || at->second.type!=0x2f || !at->second.value ||
++                       !visited.insert(current).second) {checkpointUnresolved_=true; break;}
++                    auto next=entities_.find(at->second.aux);
++                    if(next==entities_.end() || !next->second.value ||
++                       (next->second.type!=0x2f && next->second.type!=0x31)) {checkpointUnresolved_=true; break;}
++                    const int handle=*at->second.value;
++                    if(handle<0 || handle>=int(triggers_.size())) {checkpointUnresolved_=true; break;}
++                    triggers_[handle].bound=*next->second.value;
++                    if(next->second.type!=0x2f) break;
++                    current=next->first;
++                }
++                break;
++            }
 +            case 0x35: {const auto first=op(0); e.aux=first; alloc(0x16,car(first),op(1),0); break;}
 +            case 0x37: {const auto first=op(0); e.aux=first; alloc(0x18,op(1),0,car(first)); break;}
 +            case 0x38: alloc(0x19,op(0),op(1),0); break;
@@ -17201,6 +17394,7 @@ index 0000000..510674b
 +            default: break; // Remaining types create world objects or doors.
 +            }
 +            if(!entities_.emplace(id,std::move(e)).second) error(r,"duplicate entity ID");
++            else declarationOrder_.push_back(id);
 +        } catch(const std::exception& e) {error(r,e.what());}
 +    }
 +    for(std::size_t n=0;n<section.declarations.size();++n) bookkeeping_[static_cast<int>(n)].type=0;
@@ -17246,13 +17440,18 @@ index 0000000..510674b
 +}
 +std::size_t MissionVM::indexOf(std::int32_t label) const {return labels_.at(label);}
 +void MissionVM::construct() {
-+    // 00445800 case5 PARKED: 00475840 car, record type becomes 0. The other
-+    // constructing cases (CAR, PED, OBJECT, DRIVER, MODEL...) are not
-+    // delegated yet and keep an unset handle.
-+    for(auto& item:entities_) if(item.second.type==5) {
-+        Instruction declared; declared.A=item.first;
-+        WorldRequest request{"LOAD_PARKED","00445800",0,0,declared,processes_[0],entities_,instructions_,labels_};
-+        world_.execute(request);
++    if(constructed_ || !valid_) return;
++    constructed_=true;
++    // Loader order is physical declaration order, never numeric label order.
++    // FUTUREPED/FUTURECAR retain their operands until an explicit *_ON.
++    for(auto id:declarationOrder_) {
++        const int type=entities_.at(id).type;
++        const char* token=type==1?"LOAD_PED":type==5 || type==0x40?"LOAD_PARKED":nullptr;
++        if(!token) continue;
++        Instruction declared; declared.A=id;
++        WorldRequest request{token,"00445800",0,0,declared,processes_[0],entities_,instructions_,labels_};
++        if(world_.execute(request)==WorldResult::Unresolved)
++            issue("construction-unresolved",std::string(token)+" declaration "+std::to_string(id));
 +    }
 +}
 +void MissionVM::issue(std::string code,std::string detail,int slot) {
@@ -17348,6 +17547,29 @@ index 0000000..510674b
 +            WorldRequest request{token,"0047a3a0",root,root,query,processes_[root],entities_,instructions_,labels_};
 +            return world_.predicate(request);
 +        };
++        if(t.type==0x13 || t.type==0x14) {
++            if(root!=0) {checkpointUnresolved_=true; continue;}
++            if(checkpointUnresolved_) continue;
++            if(checkpointCursor_>=20) {checkpointUnresolved_=true; continue;}
++            if(checkpoints_[checkpointCursor_]!=handle) continue;
++            auto inside=ask("CHECKPOINT_AREA");
++            if(!inside) {checkpointUnresolved_=true; continue;}
++            if(!*inside || (t.state!=1 && t.state!=0)) continue;
++            // In single player, +8 changes from -1 to participant0 exactly
++            // once. Re-entry by that participant never advances the cursor.
++            if(t.target==0) continue;
++            if(t.target!=-1 || (t.type==0x13 && (t.bound<0 || t.bound>=int(triggers_.size())))) {
++                checkpointUnresolved_=true; continue;
++            }
++            Instruction event;
++            event.D=t.type;
++            if(t.type==0x13) event.A=triggers_[t.bound].entity;
++            WorldRequest notice{"CHECKPOINT_PASSED","0047b4bf",root,root,event,processes_[root],entities_,instructions_,labels_};
++            if(world_.execute(notice)!=WorldResult::Done) {checkpointUnresolved_=true; continue;}
++            ++checkpointCursor_; t.target=0; t.state=1;
++            if(t.type==0x13) triggers_[t.bound].state=1;
++            continue;
++        }
 +        if(t.type==4 || t.type==12) {
 +            if(t.type==4 && t.state==3) continue;
 +            auto inside=ask(t.type==4?"AREA_TRIGGER":"MPHONES_TRIGGER");
@@ -17406,6 +17628,27 @@ index 0000000..510674b
 +    const auto op=i.opcode;
 +    if(op>=std::size(commands) || !commands[op].supported) {block(slot,"unsupported opcode"); return;}
 +    auto success=[&] {pay(slot,i); branch(slot,i.B);};
++    if(op==143) {
++        bool single=processes_[0].player==0;
++        for(int root=1;root<4;++root) if(processes_[root].player>=0) single=false;
++        WorldRequest request{"CHECKPOINT_PARTICIPANT","00474040",slot,owner(slot),i,p,entities_,instructions_,labels_};
++        auto participant=world_.predicate(request);
++        auto at=entities_.find(i.A);
++        if(!single || !participant || !*participant || checkpointUnresolved_ || checkpointCursor_>=20 ||
++           at==entities_.end() || !at->second.value) {
++            block(slot,"WAIT_FOR_PLAYERS single-player checkpoint projection unresolved"); return;
++        }
++        switch(at->second.type) {
++        case 0: case 1: case 2: case 3: case 5: case 6:
++        case 0x12: case 0x15: case 0x16: case 0x1b: case 99:
++            block(slot,"WAIT_FOR_PLAYERS original object-slot value unresolved"); return;
++        default: break;
++        }
++        // Signed next handle > FULL value(A). Sentinel -1 is not completion.
++        if(checkpoints_[checkpointCursor_]>*at->second.value) success();
++        else branch(slot,i.C);
++        return;
++    }
 +    auto effect=[&](bool reward=true) {
 +        auto r=execute(slot,i);
 +        if(r==WorldResult::Failure && oneOf(op,{32,40,53,74,79})) {
@@ -17729,10 +17972,10 @@ index 0000000..510674b
 +}
 diff --git a/src/mission/MissionVM.h b/src/mission/MissionVM.h
 new file mode 100755
-index 0000000..874ef19
+index 0000000..a1a1b3a
 --- /dev/null
 +++ b/src/mission/MissionVM.h
-@@ -0,0 +1,120 @@
+@@ -0,0 +1,126 @@
 +#pragma once
 +#include "MissionScript.h"
 +#include <array>
@@ -17828,6 +18071,12 @@ index 0000000..874ef19
 +    std::vector<std::size_t> lines_;
 +    std::map<std::int32_t,std::size_t> labels_;
 +    std::map<std::int32_t,Entity> entities_;
++    std::vector<std::int32_t> declarationOrder_;
++    bool constructed_=false;
++    // 00473fb0/00474020: signed bytes of trigger handles, not record IDs.
++    std::array<int,20> checkpoints_{};
++    int checkpointCount_=0,checkpointCursor_=0;
++    bool checkpointUnresolved_=false;
 +    // Raw entity-record indices, separate from declaration-ID lookup.
 +    struct Bookkeeping { int type=-1; std::array<int,4> cells{{-1,-1,-1,-1}}; };
 +    std::map<int,Bookkeeping> bookkeeping_;
@@ -18092,6 +18341,29 @@ index 0000000..28f0329
 +    void stand(int kind) {destination.reset();objective=0x19;state=3;mode=8;action=kind==4?2:8;current=kind==4?1:0;}
 +};
 +}
+diff --git a/src/mission/PedRemaps.inc b/src/mission/PedRemaps.inc
+new file mode 100755
+index 0000000..72c8961
+--- /dev/null
++++ b/src/mission/PedRemaps.inc
+@@ -0,0 +1,17 @@
++// gta.exe 004b20b0: occupation &255 -> original palette selector.
++0,0,0,2,1,3,0,0,0,0,0,0,0,0,4,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,64,0,0,0,0,0,5,6,7,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,8,9,10,11,12,13,14,15,16,17,0,18,19,
++20,21,22,23,24,25,26,27,28,29,30,31,32,33,34,35,
++36,37,38,39,40,41,42,43,44,45,46,47,48,49,50,51,
++52,53,54,55,56,57,58,59,60,61,62,63,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
++0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,
 diff --git a/src/mission/PhoneRules.h b/src/mission/PhoneRules.h
 new file mode 100755
 index 0000000..3f64bf1
