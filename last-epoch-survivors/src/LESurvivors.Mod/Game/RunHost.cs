@@ -215,7 +215,7 @@ internal sealed class RunHost
     {
         var b = Run.Build;
         if (b.ActiveProcs.Count == 0 || _procBudget < 1f) return;
-        void Echo(Tag tag, float chance)
+        void Echo(Tag tag, double chance)
         {
             if (_r.NextDouble() > chance || _procBudget < 1f) return;
             var s = b.Skills.FirstOrDefault(x => (x.Def.Tags & tag) != 0 && x.Def.Targeting is Targeting.Self or Targeting.Densest)

@@ -26,6 +26,7 @@
     <Reference Include="$(IA)\Il2Cppmscorlib.dll"><Private>false</Private></Reference>
     <Reference Include="$(IA)\Il2CppLE.dll"><Private>false</Private></Reference>
     <Reference Include="$(IA)\Il2CppLE.Core.dll"><Private>false</Private></Reference>
+    <Reference Include="$(IA)\Il2CppLE.Networking.Core.dll"><Private>false</Private></Reference>
     <Reference Include="$(IA)\Il2CppUniTask.dll"><Private>false</Private></Reference>
     <Reference Include="$(IA)\Il2CppRewired_Core.dll"><Private>false</Private></Reference>
     <Reference Include="$(IA)\UnityEngine.CoreModule.dll"><Private>false</Private></Reference>
