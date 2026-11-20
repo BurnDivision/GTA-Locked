@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..7b47d5a
+index 0000000..b32ffb6
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1964 @@
+@@ -0,0 +1,1991 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -16230,6 +16230,33 @@ index 0000000..7b47d5a
 +            bombs_[object->mObjectID]=Bomb{2,125};
 +            static_cast<Vehicle*>(object)->SetScriptDamage(0);
 +        }
++        return WorldResult::Done;
++    }
++    if(token=="EXPL_PED") {
++        // 00477260: a ped outside a car (state not 6/7) explodes where it stands
++        // (00425170, no owner); a seated ped's car gets damage 100 instead, and
++        // the model car (0x2f) also stops. No type or health guard; R and S follow.
++        if(!entity || !entity->value || (entity->type!=99 && entity->type!=3)) return WorldResult::Unresolved;
++        auto* object=ResolveObject(*entity);
++        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) {
++            Once("expl-ped-stale","UNRESOLVED EXPL_PED on a ped that no longer exists (original reads the stale slot)");
++            return WorldResult::Unresolved;
++        }
++        auto* ped=static_cast<Pedestrian*>(object);
++        if(ped->IsEnteringOrExitingCar()) {
++            Once("expl-ped-entering","UNRESOLVED EXPL_PED while the ped enters or leaves a car");
++            return WorldResult::Unresolved;
++        }
++        if(ped->mCurrentCar) {
++            if(static_cast<int>(ped->mCurrentCar->mCarInfo->mModelID)==0x2f) {
++                Once("expl-ped-model-car","UNRESOLVED EXPL_PED speed reset of the model car (car+0x1c)");
++                return WorldResult::Unresolved;
++            }
++            ped->mCurrentCar->SetScriptDamage(100);
++            return WorldResult::Done;
++        }
++        if(!gGameObjectsManager.CreateExplosion(nullptr,nullptr,eExplosionType_Rocket,ped->mTransform.mPosition))
++            return WorldResult::Unresolved;
 +        return WorldResult::Done;
 +    }
 +    if(token=="MAKEOBJ") {
@@ -17396,7 +17423,7 @@ index 0000000..657622a
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..bfee210
+index 0000000..800559a
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -17488,7 +17515,7 @@ index 0000000..bfee210
 +{"PLAYER_ARE_BOTH_ONSCREEN", "004488fb", true}, // 84
 +{"CHECK_CAR", "00448a10", true}, // 85
 +{"WAIT_FOR_PLAYER", "00448c0b", false}, // 86
-+{"EXPL_PED", "00448d09", false}, // 87
++{"EXPL_PED", "00448d09", true}, // 87
 +{"PARKED_ON", "00448d6a", true}, // 88
 +{"KICKSTART", "00448edd", true}, // 89
 +{"IS_PED_IN_CAR", "00449884", true}, // 90
