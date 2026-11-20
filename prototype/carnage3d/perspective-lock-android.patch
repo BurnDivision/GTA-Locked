@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..dc3f2c3
+index 0000000..7b47d5a
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1958 @@
+@@ -0,0 +1,1964 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -16463,6 +16463,12 @@ index 0000000..dc3f2c3
 +        auto at=r.entities.find(id);
 +        if(at==r.entities.end() || at->second.type!=99) return WorldResult::Unresolved;
 +        auto* object=ResolveObject(at->second);
++        if(!object && at->second.value && *at->second.value>=0) {
++            // 00441fd0 / 0044a583 write the ped slot without a live-ped guard and
++            // take S. The ped is gone here (removed or deleted), so nothing moves.
++            Once("sendto-stale","PED_SENDTO/SET_PED_SPEED on a ped that no longer exists: no effect, success branch");
++            return WorldResult::Done;
++        }
 +        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Unresolved;
 +        auto* ped=static_cast<Pedestrian*>(object); auto state=scriptPeds_.find(ped->mObjectID);
 +        if(state==scriptPeds_.end() || state->second.removed || ped->IsDead() || ped->IsDies() ||
