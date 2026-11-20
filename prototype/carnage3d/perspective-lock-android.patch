@@ -13583,10 +13583,10 @@ index 3847938..fb5b7af 100644
 +    mRemapClut = (mRemapIndex == NO_REMAP) ? 0 : (mCarInfo->mRemapsBaseIndex + mRemapIndex);
 +}
 diff --git a/src/Vehicle.h b/src/Vehicle.h
-index 0d3a52f..c1f2f2b 100644
+index 0d3a52f..8e30a82 100644
 --- a/src/Vehicle.h
 +++ b/src/Vehicle.h
-@@ -1,186 +1,196 @@
+@@ -1,186 +1,197 @@
 -#pragma once
 -
 -#include "GameDefs.h"
@@ -13884,6 +13884,7 @@ index 0d3a52f..c1f2f2b 100644
 +
 +    // Get current vehicle damage level
 +    int GetCurrentDamage() const;
++    void SetScriptDamage(int damage) { mCurrentDamage = damage; } // mission scripts (car+0xfc)
 +
 +    // Get current vehicle speed in meters per hour
 +    float GetCurrentSpeed() const;
@@ -15268,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..59b3531
+index 0000000..30d9eae
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1820 @@
+@@ -0,0 +1,1883 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -15445,7 +15446,7 @@ index 0000000..59b3531
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    parkCars_={}; parkRemovals_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
@@ -15453,6 +15454,7 @@ index 0000000..59b3531
 +    UpdateScriptPeds();
 +    UpdateDoors();
 +    UpdateCameras();
++    UpdateBombs();
 +    // 00401280 -> 00445580 -> 0040b660: a parked car leaves the world when
 +    // its timer runs out.
 +    for(auto it=parkRemovals_.begin();it!=parkRemovals_.end();) {
@@ -15541,6 +15543,48 @@ index 0000000..59b3531
 +    arrows_={}; // 00481a00
 +    if(!resolved) Once("cleanup-view","Script world cleanup incomplete: an entity has no recovered rule");
 +    return resolved;
++}
++void CarnageMissionWorld::UpdateBombs() {
++    // 0040adc0: only an active car advances its bomb. A car is active when a
++    // player's widened screen rectangle holds it or it is in use (state+4);
++    // the flags +0xec, +0x116 and +0xca are not represented.
++    for(auto it=bombs_.begin();it!=bombs_.end();) {
++        auto* object=gGameObjectsManager.GetGameObjectByID(it->first);
++        if(!object || object->IsMarkedForDeletion() || !object->IsVehicleClass()) {it=bombs_.erase(it); continue;}
++        auto* car=static_cast<Vehicle*>(object);
++        const auto at=car->mTransform.mPosition;
++        const int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x)*64));
++        const int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z)*64));
++        bool active=car->GetCarDriver()!=nullptr;
++        for(int owner=0;owner<4 && !active;++owner) {
++            auto* human=player(owner);
++            if(!human || !human->mCharacter || !rectangles_[owner]) continue;
++            active=rectangles_[owner]->nearScreen(x,y);
++        }
++        if(!active || it->second.mode!=2) {++it; continue;}
++        // Mode 2: the old timer is compared with 0, then decremented; the
++        // first step to 124 announces the bomb (00478b00, text bomb_set).
++        const int old=it->second.timer--;
++        if(old==0) {
++            // 00425480: an explosion at the car and one at each corner, 8 pixels higher.
++            const float angle=car->mTransform.mOrientation.to_radians();
++            const glm::vec3 forward(std::cos(angle),0.0f,std::sin(angle)),side(-forward.z,0.0f,forward.x);
++            const float length=car->mCarInfo->mDimensions.z*0.5f,width=car->mCarInfo->mDimensions.x*0.5f;
++            gGameObjectsManager.CreateExplosion(nullptr,nullptr,eExplosionType_Rocket,at);
++            for(int corner=0;corner<4;++corner) {
++                glm::vec3 point=at+forward*((corner&1)?length:-length)+side*((corner&2)?width:-width);
++                point.y+=Convert::MapUnitsToMeters(8.0f/64.0f);
++                gGameObjectsManager.CreateExplosion(nullptr,nullptr,eExplosionType_Rocket,point);
++            }
++            Once("bomb-corners","Car bomb corner blasts use the engine car rectangle (00434300 not recovered); killer credit not represented");
++            it=bombs_.erase(it); continue;
++        }
++        if(it->second.timer==0x7c) {
++            if(auto* human=player(0)) human->mHUD.ShowMissionText(gGameTexts.GetText("bomb_set"), hud::briefingArea("ARMEDMESS"));
++            Once("bomb-set-text","bomb_set text is shown without its seconds value (0047d9a0 formatting not recovered)");
++        }
++        ++it;
++    }
 +}
 +void CarnageMissionWorld::UpdateCameras() {
 +    for(int owner=0;owner<4;++owner) {
@@ -16103,6 +16147,26 @@ index 0000000..59b3531
 +        }
 +        Once("kill-drop","UNRESOLVED KILL_DROP original object slot has no engine object");
 +        return WorldResult::Unresolved;
++    }
++    if(token=="SETBOMB") {
++        // 004764a0: the whole D goes to car+0x9c, the timer car+0xa0 becomes
++        // 125 and a non-zero D clears the damage car+0xfc.
++        if(!entity || !entity->value || entity->type!=0) {
++            Once("setbomb-car","UNRESOLVED SETBOMB on a record without a constructed car"); return WorldResult::Unresolved;
++        }
++        auto* object=gGameObjectsManager.GetGameObjectByID(static_cast<GameObjectID>(*entity->value));
++        if(!object || object->IsMarkedForDeletion() || !object->IsVehicleClass()) return WorldResult::Unresolved;
++        if(i.D!=0 && i.D!=2) {
++            // 1 waits for 00407000, 3 is special, 4 is a damage trigger, 5/6 are speed triggers.
++            Once("setbomb-mode:"+std::to_string(i.D),"UNRESOLVED SETBOMB mode "+std::to_string(i.D));
++            return WorldResult::Unresolved;
++        }
++        if(i.D==0) bombs_.erase(object->mObjectID);
++        else {
++            bombs_[object->mObjectID]=Bomb{2,125};
++            static_cast<Vehicle*>(object)->SetScriptDamage(0);
++        }
++        return WorldResult::Done;
 +    }
 +    if(token=="MAKEOBJ") {
 +        // 0043f950: 0043e680 position, object type = record value (low 16
@@ -17094,10 +17158,10 @@ index 0000000..59b3531
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..dd10c67
+index 0000000..ee06cea
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,106 @@
+@@ -0,0 +1,109 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17202,6 +17266,9 @@ index 0000000..dd10c67
 +    // for the timed removal 00401050(10,0,car+200).
 +    std::array<unsigned int,4> parkCars_{};
 +    std::vector<std::pair<unsigned int,int>> parkRemovals_;
++    struct Bomb { int mode=0,timer=0; }; // car+0x9c / car+0xa0
++    std::map<unsigned int,Bomb> bombs_;
++    void UpdateBombs();
 +};
 +}
 diff --git a/src/mission/ChapterProgress.h b/src/mission/ChapterProgress.h
