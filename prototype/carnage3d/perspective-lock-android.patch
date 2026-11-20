@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..b32ffb6
+index 0000000..1dd729d
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1991 @@
+@@ -0,0 +1,1997 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -16237,7 +16237,13 @@ index 0000000..b32ffb6
 +        // (00425170, no owner); a seated ped's car gets damage 100 instead, and
 +        // the model car (0x2f) also stops. No type or health guard; R and S follow.
 +        if(!entity || !entity->value || (entity->type!=99 && entity->type!=3)) return WorldResult::Unresolved;
-+        auto* object=ResolveObject(*entity);
++        GameObject* object=nullptr;
++        if(entity->type==3) {
++            // PLAYER record: the bound participant ped.
++            auto binding=playerBindings_.find(i.A);
++            auto* human=player(0); auto* character=human?human->mCharacter:nullptr;
++            if(binding!=playerBindings_.end() && character && character->mObjectID==binding->second) object=character;
++        } else object=ResolveObject(*entity);
 +        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) {
 +            Once("expl-ped-stale","UNRESOLVED EXPL_PED on a ped that no longer exists (original reads the stale slot)");
 +            return WorldResult::Unresolved;
