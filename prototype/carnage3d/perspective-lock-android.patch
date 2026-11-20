@@ -18223,7 +18223,7 @@ index 0000000..8a8b42a
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..c66b57a
+index 0000000..2ca86b0
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
 @@ -0,0 +1,759 @@
@@ -18979,7 +18979,7 @@ index 0000000..c66b57a
 +    }
 +    // Immediate commands with known outer S and explicit reward exclusions.
 +    // Guards/spawn fields/coordinate transforms remain part of execute's contract.
-+    if(oneOf(op,{11,12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,
++    if(oneOf(op,{11,12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,87,
 +                 64,65,68,74,76,79,80,81,91,92,93,94,100,110,111,116,119,124,126,129,134,144,146})) {
 +        effect(!oneOf(op,{15,37,64,68,80,100,110,111,116})); return;
 +    }
