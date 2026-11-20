@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..30d9eae
+index 0000000..eadf7d1
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1883 @@
+@@ -0,0 +1,1896 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -15893,7 +15893,9 @@ index 0000000..30d9eae
 +        // 00475840 -> 00407ab0 -> 004067c0, no driver. The constructor is
 +        // generic except for the tank (0x25: turret objects) and the model
 +        // car (0x2f); D is stored at car+0x24c and is 0 in every script use.
-+        if(model==0x25 || model==0x2f || static_cast<std::int16_t>(i.D)!=0 ||
++        // The tank is built as a plain car: its turret objects and gun are not represented.
++        if(model==0x25) Once("tank-turret","Tank (model 0x25) constructed without its turret objects or gun");
++        if(model==0x2f || static_cast<std::int16_t>(i.D)!=0 ||
 +           !gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return WorldResult::Unresolved;
 +        VehicleInfo* info=nullptr;
 +        for(auto& desc:gGameMap.mStyleData.mVehicles) if(static_cast<int>(desc.mModelID)==model) {info=&desc; break;}
@@ -16906,6 +16908,17 @@ index 0000000..30d9eae
 +        // 00478690: strict inequalities on both axes.
 +        return (*target)[0]<x+radius && x-radius<(*target)[0] &&
 +               (*target)[1]<y+radius && y-radius<(*target)[1];
++    }
++    if(r.token=="IS_PED_ARRESTED") {
++        // 0044a3c0: true only in ped state 9 (arrested). The engine has no
++        // police capture yet, so the bound participant is never in it.
++        auto at=r.entities.find(r.instruction.A);
++        auto binding=playerBindings_.find(r.instruction.A);
++        if(at==r.entities.end() || at->second.type!=3 || binding==playerBindings_.end()) return {};
++        auto* human=player(0); auto* ped=human?human->mCharacter:nullptr;
++        if(!ped || ped->mObjectID!=binding->second) return {};
++        Once("arrest-state","IS_PED_ARRESTED: arrest (state9) has no engine source until police capture is recovered");
++        return false;
 +    }
 +    if(r.token=="DEAD_ARRESTED") {
 +        // 0044a710: true when the ped is in state9 (arrested) or 0043e870
