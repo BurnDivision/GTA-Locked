@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..1dd729d
+index 0000000..42a6bc7
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1997 @@
+@@ -0,0 +1,2003 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -15446,7 +15446,7 @@ index 0000000..1dd729d
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
@@ -16329,12 +16329,18 @@ index 0000000..1dd729d
 +        Once("arrow-location","Mission arrow location unresolved"); return WorldResult::Unresolved;
 +    }
 +    if(token=="KF_PROCESS" || token=="RESET_KF") {
-+        // 0043d150/00444d60 visit mission cars, not ambient cars.
-+        // There is no proved engine equivalent of their lock bits yet.
-+        for(auto id:missionEntities_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id))
-+            if(object->mClassID==eGameObjectClass_Car && !object->IsMarkedForDeletion()) {
-+                Once("kf-lock","Unresolved KF mission vehicle lock projection"); return WorldResult::Unresolved;
-+            }
++        // 0043d150/00444d60: every mission car record (runtime type 0, value and
++        // car+0x134 non-negative) gets car+0x248 = 1 (KF_PROCESS) or 0 (RESET_KF).
++        // The lock only stops AI peds from picking the car (0045def0 car choice,
++        // 00466f10 entry gate); engine AI peds never enter cars, so it has no
++        // other effect yet and is kept for when they do.
++        for(const auto& entry:carRecords_) {
++            if(entry.second<0) continue;
++            auto* object=gGameObjectsManager.GetGameObjectByID(entry.first);
++            if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Car) continue;
++            if(token=="KF_PROCESS") kfLockedCars_.insert(entry.first); else kfLockedCars_.erase(entry.first);
++        }
++        Once("kf-lock","KF car lock stored; engine AI peds do not enter cars, so it has no further effect yet");
 +        return WorldResult::Done;
 +    }
 +    if(token=="POWERUP_OFF") {
@@ -17272,10 +17278,10 @@ index 0000000..1dd729d
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..e1a3bf6
+index 0000000..f150ba2
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,113 @@
+@@ -0,0 +1,119 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17385,6 +17391,12 @@ index 0000000..e1a3bf6
 +    void UpdateBombs();
 +    // ped+0xe: updates a script ped has spent off every player's screen (00453540)
 +    std::map<unsigned int,int> pedOffscreen_;
++    // car+0x248: set by KF_PROCESS on mission cars, cleared by RESET_KF. In the
++    // original it keeps AI peds from choosing the car (0045def0, 00466f10).
++    std::set<unsigned int> kfLockedCars_;
++public:
++    bool IsKfLocked(unsigned int carId) const { return kfLockedCars_.count(carId)!=0; }
++private:
 +    void UpdatePedOffscreen();
 +    bool PedOnScreen(const GameObject& ped, bool& known) const;
 +};
