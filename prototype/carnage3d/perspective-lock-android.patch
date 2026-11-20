@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..7544c61
+index 0000000..dc3f2c3
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1904 @@
+@@ -0,0 +1,1958 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -15446,7 +15446,7 @@ index 0000000..7544c61
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
@@ -15455,6 +15455,7 @@ index 0000000..7544c61
 +    UpdateDoors();
 +    UpdateCameras();
 +    UpdateBombs();
++    UpdatePedOffscreen();
 +    // 00401280 -> 00445580 -> 0040b660: a parked car leaves the world when
 +    // its timer runs out.
 +    for(auto it=parkRemovals_.begin();it!=parkRemovals_.end();) {
@@ -15491,10 +15492,37 @@ index 0000000..7544c61
 +        if(object->mClassID==eGameObjectClass_Pedestrian || !std::isfinite(at.x) || !std::isfinite(at.z)) {
 +            // 0043cfe0: unless it has been off screen for 30 checks the ped
 +            // simply stops being a script ped and joins the ambient crowd.
-+            if(object->mClassID==eGameObjectClass_Pedestrian) {
-+                Once("cleanup-ped", "UNRESOLVED script ped cleanup: original offscreen timer/ambient conversion unavailable");
-+                resolved=false; ++it; continue;
++            if(object->mClassID==eGameObjectClass_Pedestrian && std::isfinite(at.x) && std::isfinite(at.z)) {
++                // 0043cfe0: a ped 00453540 still counts as seen becomes an ordinary
++                // ped (objective 0x19, state 1); otherwise 00477320 removes it.
++                auto* ped=static_cast<Pedestrian*>(object);
++                if(ped->IsDead() || ped->IsDies()) {it=missionEntities_.erase(it); continue;} // 00477320 keeps states 0xc/0x17
++                if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) {
++                    Once("cleanup-ped-car","UNRESOLVED script ped cleanup for a seated ped (00477320 car states 6/7)");
++                    resolved=false; ++it; continue;
++                }
++                bool known=true;
++                const bool seen=PedOnScreen(*ped,known);
++                if(!known) {resolved=false; ++it; continue;}
++                // The counter grows by one or two per update; RESET adds one and
++                // compares with 30, so it is certain only outside 15..28 unseen updates.
++                const int unseen=seen?0:pedOffscreen_[ped->mObjectID];
++                const bool nearEdge=Convert::MetersToMapUnits(at.x)*64<0x10 || Convert::MetersToMapUnits(at.z)*64<0x10 ||
++                                    Convert::MetersToMapUnits(at.x)*64>=0x3ff0 || Convert::MetersToMapUnits(at.z)*64>=0x3ff0;
++                if(!nearEdge && unseen>=15 && unseen<=28) {
++                    Once("cleanup-ped-count","UNRESOLVED script ped cleanup: off-screen count between 15 and 28 updates");
++                    resolved=false; ++it; continue;
++                }
++                if(nearEdge || unseen>=29) ped->MarkForDeletion();
++                else {
++                    ped->mObjectFlags=(ped->mObjectFlags | GameObjectFlags_Traffic);
++                    ped->mMissionMoveEnabled=false;
++                    scriptPeds_.erase(ped->mObjectID);
++                }
++                pedOffscreen_.erase(ped->mObjectID);
++                ownedObjects_.erase(*it); it=missionEntities_.erase(it); continue;
 +            }
++            if(object->mClassID==eGameObjectClass_Pedestrian) {resolved=false; ++it; continue;}
 +            object->mObjectFlags=(object->mObjectFlags | GameObjectFlags_Traffic);
 +            ownedObjects_.erase(*it); it=missionEntities_.erase(it); continue;
 +        }
@@ -15543,6 +15571,32 @@ index 0000000..7544c61
 +    arrows_={}; // 00481a00
 +    if(!resolved) Once("cleanup-view","Script world cleanup incomplete: an entity has no recovered rule");
 +    return resolved;
++}
++bool CarnageMissionWorld::PedOnScreen(const GameObject& ped, bool& known) const {
++    // 00453540: the ped's pixel position inside a player's screen rectangle, away from the map edge.
++    known=true;
++    const auto& at=ped.mTransform.mPosition;
++    const int x=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.x)*64));
++    const int y=static_cast<int>(std::floor(Convert::MetersToMapUnits(at.z)*64));
++    for(int owner=0;owner<4;++owner) {
++        auto* human=player(owner);
++        if(!human || !human->mCharacter) continue;
++        if(!rectangles_[owner]) {known=false; continue;}
++        if(rectangles_[owner]->contains(x,y) && x>0xf && y>0xf && x<0x3ff1 && y<0x3ff1) return true;
++    }
++    return false;
++}
++void CarnageMissionWorld::UpdatePedOffscreen() {
++    // The ped update (0045a3b0) calls 00453540 once, sometimes twice, per update:
++    // a visible ped resets the counter, an unseen one counts up.
++    for(auto id:missionEntities_) {
++        auto* object=gGameObjectsManager.GetGameObjectByID(id);
++        if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Pedestrian) continue;
++        bool known=true;
++        int& count=pedOffscreen_[id];
++        if(PedOnScreen(*object,known)) count=0;
++        else if(count<1000) ++count;
++    }
 +}
 +void CarnageMissionWorld::UpdateBombs() {
 +    // 0040adc0: only an active car advances its bomb. A car is active when a
@@ -17179,10 +17233,10 @@ index 0000000..7544c61
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..ee06cea
+index 0000000..e1a3bf6
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,109 @@
+@@ -0,0 +1,113 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17290,6 +17344,10 @@ index 0000000..ee06cea
 +    struct Bomb { int mode=0,timer=0; }; // car+0x9c / car+0xa0
 +    std::map<unsigned int,Bomb> bombs_;
 +    void UpdateBombs();
++    // ped+0xe: updates a script ped has spent off every player's screen (00453540)
++    std::map<unsigned int,int> pedOffscreen_;
++    void UpdatePedOffscreen();
++    bool PedOnScreen(const GameObject& ped, bool& known) const;
 +};
 +}
 diff --git a/src/mission/ChapterProgress.h b/src/mission/ChapterProgress.h
