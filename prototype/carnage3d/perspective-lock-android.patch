@@ -15269,10 +15269,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..eadf7d1
+index 0000000..7544c61
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1896 @@
+@@ -0,0 +1,1904 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -15799,9 +15799,17 @@ index 0000000..eadf7d1
 +        if(object->mClassID==eGameObjectClass_Car) {
 +            auto* car=static_cast<Vehicle*>(object);
 +            if(!car->mCarInfo) return false;
-+            const float radius=1+Convert::MetersToMapUnits(glm::length(car->mCarInfo->mDimensions));
-+            if(std::floor(oz/64)==std::floor((z-1)/64.0) &&
-+               std::abs(ox-x/64.0f)<=radius && std::abs(oy-y/64.0f)<=radius) return false;
++            // 00435e00, as for PARKED_ON: a car is in the cell when a corner or
++            // the centre of its box lies in it, on the same layer.
++            if(std::floor(oz/64)==std::floor((z-1)/64.0)) {
++                const auto cx=std::llround(ox*pickup::cell),cy=std::llround(oy*pickup::cell);
++                const int cw=Convert::MetersToPixels(car->mCarInfo->mDimensions.x)/2;
++                const int cd=Convert::MetersToPixels(car->mCarInfo->mDimensions.z)/2;
++                const int ca=static_cast<int>(std::lround((90-car->mTransform.mOrientation.to_degrees())*1024/360))&1023;
++                const auto shape=pickup::box(cx,cy,0,cw,cd,ca);
++                for(const auto& point:shape.p)
++                    if(point.x>=0 && point.y>=0 && point.x/pickup::cell==x/64 && point.y/pickup::cell==y/64) return false;
++            }
 +        } else if(std::floor(ox)==x/64 && std::floor(oy)==y/64 &&
 +                  std::floor(oz/64)==z/64) return false;
 +    }
