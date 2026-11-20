@@ -1311,10 +1311,10 @@ index 0000000..f7a26fe
 +}
 +}
 diff --git a/src/Explosion.cpp b/src/Explosion.cpp
-index 47484a5..fcb6bea 100644
+index 47484a5..5501194 100644
 --- a/src/Explosion.cpp
 +++ b/src/Explosion.cpp
-@@ -1,201 +1,178 @@
+@@ -1,201 +1,182 @@
 -#include "stdafx.h"
 -#include "Explosion.h"
 -#include "TimeManager.h"
@@ -1564,6 +1564,10 @@ index 47484a5..fcb6bea 100644
 +        }
 +        DamageCarsNearby();
 +        DamagePedsNearby(mExplosionType == eExplosionType_Rocket);
++        if (mSecondBlastLayer >= 0)
++        {
++            DamagePedsNearby(false, mSecondBlastLayer);
++        }
 +    }
 +
 +    if (!mAnimationState.IsActive())
@@ -1608,13 +1612,13 @@ index 47484a5..fcb6bea 100644
 +    return static_cast<int>(std::floor(Convert::MetersToMapUnits(targetMeters - centreMeters) * 64.0f));
 +}
 +
-+void Explosion::DamagePedsNearby(bool)
++void Explosion::DamagePedsNearby(bool, int layerOverride)
 +{
 +    // 00425ca0: square boxes in pixels, not a radius, and every explosion kills in the inner box
 +    glm::vec2 centerPoint (mTransform.mPosition.x, mTransform.mPosition.z);
 +    float reach = Convert::MapUnitsToMeters(61.0f / 64.0f);
 +    glm::vec2 extents (reach, reach);
-+    const int blastLayer = blast::layerOf(Convert::MetersToMapUnits(mTransform.mPosition.y));
++    const int blastLayer = layerOverride >= 0 ? layerOverride : blast::layerOf(Convert::MetersToMapUnits(mTransform.mPosition.y));
 +
 +    PhysicsQueryResult queryResult;
 +    gPhysics.QueryObjectsWithinBox(centerPoint, extents, queryResult, CollisionGroup_Pedestrian);
@@ -1695,6 +1699,85 @@ index 47484a5..fcb6bea 100644
 +    }
 +    queryResult.Clear();
 +}
+diff --git a/src/Explosion.h b/src/Explosion.h
+index daef4a6..66ba313 100644
+--- a/src/Explosion.h
++++ b/src/Explosion.h
+@@ -1,35 +1,39 @@
+-#pragma once
+-
+-#include "GameObject.h"
+-
+-class Explosion final: public GameObject
+-{
+-    friend class GameObjectsManager;
+-
+-public:
+-    // readonly
+-    eExplosionType mExplosionType = eExplosionType_Rocket;
+-    GameObjectHandle mExplodingObject;
+-    PedestrianHandle mExplosionCauser;
+-  
+-public:
+-    // ctor
+-    // @param explodingObject: Object that exploded
+-    // @param causer: Pedestrian causing explosion
+-    // @param explosionType: Type identifier
+-    Explosion(GameObject* explodingObject, Pedestrian* causer, eExplosionType explosionType);
+-
+-    // override GameObject
+-    void UpdateFrame() override;
+-    void DebugDraw(DebugRenderer& debugRender) override;
+-    void HandleSpawn() override;
+-
+-private:
+-    void DamageObjectInContact();
+-    void DamagePedsNearby(bool enableInstantKill);
+-    void DamageCarsNearby();
+-
+-private:
+-    SpriteAnimation mAnimationState;
+-    int mUpdatesCounter = 0;
++#pragma once
++
++#include "GameObject.h"
++
++class Explosion final: public GameObject
++{
++    friend class GameObjectsManager;
++
++public:
++    // readonly
++    eExplosionType mExplosionType = eExplosionType_Rocket;
++    GameObjectHandle mExplodingObject;
++    PedestrianHandle mExplosionCauser;
++  
++public:
++    // ctor
++    // @param explodingObject: Object that exploded
++    // @param causer: Pedestrian causing explosion
++    // @param explosionType: Type identifier
++    Explosion(GameObject* explodingObject, Pedestrian* causer, eExplosionType explosionType);
++
++    // override GameObject
++    void UpdateFrame() override;
++    void DebugDraw(DebugRenderer& debugRender) override;
++    void HandleSpawn() override;
++
++private:
++public:
++    // 00425520 follows the explosion with a second blast pass (00425ca0) at this original layer
++    int mSecondBlastLayer = -1;
++private:
++    void DamageObjectInContact();
++    void DamagePedsNearby(bool enableInstantKill, int layerOverride = -1);
++    void DamageCarsNearby();
++
++private:
++    SpriteAnimation mAnimationState;
++    int mUpdatesCounter = 0;
+ };
+\ No newline at end of file
 diff --git a/src/FileSystem.cpp b/src/FileSystem.cpp
 index feb69e3..c671b9d 100644
 --- a/src/FileSystem.cpp
@@ -15185,11 +15268,12 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..38e2388
+index 0000000..bf3e136
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1718 @@
+@@ -0,0 +1,1764 @@
 +#include "../stdafx.h"
++#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
 +#include "../GameMapManager.h"
@@ -15917,6 +16001,51 @@ index 0000000..38e2388
 +        if(!position) {Once("arrow-location","Mission arrow location unresolved"); return WorldResult::Unresolved;}
 +        arrows_[r.owner]=position;
 +        Once("arrow-render","Mission target uses an edge-clamped HUD pointer; original radial placement is approximated");
++        return WorldResult::Done;
++    }
++    if(token=="EXPLODE") {
++        // 00447654: 0043e680(A) pixels -> cell XYZ, direction D and the root
++        // owner go to 00425520. Reward and S follow in the VM.
++        if(!entity || !gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded()) return WorldResult::Unresolved;
++        auto at=OriginalPosition(*entity,i.A);
++        if(!at) return WorldResult::Unresolved;
++        int dx=0,dy=0;
++        switch(i.D) {
++        case 0: dx=-1; break; case 1: dx=1; break; case 2: dy=-1; break; case 3: dy=1; break;
++        default:
++            Once("explode-direction","UNRESOLVED EXPLODE direction outside 0..3 (original diagnostic path)");
++            return WorldResult::Unresolved;
++        }
++        // The blast sits on the cell edge named by D: (2*cell+1+d)*32 pixels, top of the cell layer.
++        const int cz=(*at)[2]>>6;
++        const int x=((*at)[0]>>6)*64+32+32*dx, y=((*at)[1]>>6)*64+32+32*dy, z=cz*64;
++        const auto centre=EnginePosition(x,y,z-1);
++        if(!centre) return WorldResult::Unresolved;
++        auto* human=player(r.owner);
++        // 00425170 (explosion and its blast) then 00425ca0 again at layer 1,
++        // which reaches peds on every layer.
++        auto* explosion=gGameObjectsManager.CreateExplosion(nullptr,human?human->mCharacter:nullptr,
++                                                             eExplosionType_Rocket,*centre);
++        if(!explosion) return WorldResult::Unresolved;
++        explosion->mSecondBlastLayer=1;
++        // 0044cef0 debris: type 5 twice one half cell further on, types
++        // 0x2c/0x2d/0x2b four pixels further on. Only plain decorations exist in the engine.
++        auto debris=[&](int type,int px,int py,int pz,int rotation) {
++            auto& objects=gGameMap.mStyleData.mObjects;
++            if((px>>6)<1 || (px>>6)>0xff || (py>>6)<1 || (py>>6)>0xff) return;
++            auto position=EnginePosition(px,py,pz);
++            if(!position || type>=static_cast<int>(objects.size()) || objects[type].mClassID!=eGameObjectClass_Decoration) {
++                Once("explode-debris:"+std::to_string(type),"EXPLODE debris object type "+std::to_string(type)+" is not represented");
++                return;
++            }
++            gGameObjectsManager.CreateDecoration(*position,-Convert::Fix16ToAngle(static_cast<unsigned short>(rotation)),&objects[type]);
++        };
++        debris(5,x+32*dx,y+32*dy,z+15,0x200); debris(5,x+32*dx,y+32*dy,z+15,0x200);
++        debris(0x2c,x+4*dx,y+4*dy,z+31,0); debris(0x2d,x+4*dx,y+4*dy,z+31,0); debris(0x2b,x+4*dx,y+4*dy,z+31,0);
++        // 0044d3d0 moving effects (two of type 0x2e, two of type 0x12) have no engine counterpart.
++        // The two 00476fe0 removals are given cell numbers where that routine compares pixels, so
++        // they only reach top-layer objects at the map corner; nothing is removed here.
++        Once("explode-effects","EXPLODE moving fire/debris effects (0044d3d0 types 0x2e, 0x12) are not represented");
 +        return WorldResult::Done;
 +    }
 +    if(token=="MAKEOBJ") {
