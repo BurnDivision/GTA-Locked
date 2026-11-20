@@ -15268,10 +15268,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..bf3e136
+index 0000000..59b3531
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,1764 @@
+@@ -0,0 +1,1820 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -16047,6 +16047,62 @@ index 0000000..bf3e136
 +        // they only reach top-layer objects at the map corner; nothing is removed here.
 +        Once("explode-effects","EXPLODE moving fire/debris effects (0044d3d0 types 0x2e, 0x12) are not represented");
 +        return WorldResult::Done;
++    }
++    if(token=="DROP_ON") {
++        // 00447935: 00478790(x+32, y+32, z, value(A), D) -> 0044cef0; the
++        // returned handle replaces the value and the record becomes OBJECT (type 2).
++        if(!entity || !entity->value || entity->type==2 || !gGameMap.IsLoaded() || !gGameMap.mStyleData.IsLoaded())
++            return WorldResult::Unresolved;
++        auto at=OriginalPosition(*entity,i.A);
++        if(!at) return WorldResult::Unresolved;
++        const int type=*entity->value&0xffff;
++        const int x=(*at)[0]+32,y=(*at)[1]+32;
++        const long long fixedZ=static_cast<long long>((*at)[2])*pickup::unit-1;
++        std::int32_t handle=-1;
++        if((x>>6)>=1 && (x>>6)<=0xff && (y>>6)>=1 && (y>>6)<=0xff &&
++           fixedZ>0x3bffff && fixedZ<=0x1400000 && type!=0xffff) {
++            auto& objects=gGameMap.mStyleData.mObjects;
++            if(type>=static_cast<int>(objects.size()) || objects[type].mClassID!=eGameObjectClass_Decoration) {
++                Once("drop-class:"+std::to_string(type),"DROP_ON object type "+std::to_string(type)+" has no decoration mapping");
++                return WorldResult::Unresolved;
++            }
++            const auto position=EnginePosition(x,y,(*at)[2]-1);
++            if(!position) return WorldResult::Unresolved;
++            if(auto* object=gGameObjectsManager.CreateDecoration(*position,
++                   -Convert::Fix16ToAngle(static_cast<unsigned short>(i.D)),&objects[type])) {
++                object->SetLifeDuration(0);
++                handle=static_cast<std::int32_t>(object->mObjectID);
++                ownedObjects_.insert(object->mObjectID); missionEntities_.insert(object->mObjectID);
++            }
++        }
++        entity->value=handle; entity->type=2;
++        return WorldResult::Done;
++    }
++    if(token=="KILL_DROP" || token=="KILL_OBJ") {
++        // 00447a0f: handle<0 takes F; otherwise 0044eb90(handle) removes the
++        // object and the record becomes type 101. 00447cab (KILL_OBJ) has no
++        // sign test; only its removal of an object this mission created is projected.
++        if(!entity || !entity->value) return WorldResult::Unresolved;
++        const int handle=*entity->value;
++        if(entity->type==2 && handle>=0 && ownedObjects_.count(static_cast<GameObjectID>(handle))) {
++            if(auto* object=gGameObjectsManager.GetGameObjectByID(static_cast<GameObjectID>(handle))) object->MarkForDeletion();
++            ownedObjects_.erase(static_cast<GameObjectID>(handle)); missionEntities_.erase(static_cast<GameObjectID>(handle));
++            entity->type=101; return WorldResult::Done;
++        }
++        if(token=="KILL_OBJ") {
++            Once("kill-obj","UNRESOLVED KILL_OBJ on a record without a mission-created object (004787d0)");
++            return WorldResult::Unresolved;
++        }
++        if(handle<0) return WorldResult::Failure;
++        if(entity->type!=2 && handle<0x800) {
++            // Never dropped: the value is still the declared object type, which the original
++            // passes to 0044eb90 as an object slot. Slots are handed out from 0xdab downward
++            // (0044cef0), so such a low slot is unallocated and nothing in the world is removed.
++            Once("kill-drop-slot","KILL_DROP before DROP_ON addresses an unallocated original object slot; nothing removed");
++            entity->type=101; return WorldResult::Done;
++        }
++        Once("kill-drop","UNRESOLVED KILL_DROP original object slot has no engine object");
++        return WorldResult::Unresolved;
 +    }
 +    if(token=="MAKEOBJ") {
 +        // 0043f950: 0043e680 position, object type = record value (low 16
