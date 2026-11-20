@@ -15269,7 +15269,7 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..42a6bc7
+index 0000000..837a684
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
 @@ -0,0 +1,2003 @@
@@ -16236,7 +16236,7 @@ index 0000000..42a6bc7
 +        // 00477260: a ped outside a car (state not 6/7) explodes where it stands
 +        // (00425170, no owner); a seated ped's car gets damage 100 instead, and
 +        // the model car (0x2f) also stops. No type or health guard; R and S follow.
-+        if(!entity || !entity->value || (entity->type!=99 && entity->type!=3)) return WorldResult::Unresolved;
++        if(!entity || (entity->type!=99 && entity->type!=3) || (entity->type==99 && !entity->value)) return WorldResult::Unresolved;
 +        GameObject* object=nullptr;
 +        if(entity->type==3) {
 +            // PLAYER record: the bound participant ped.
