@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..55cd8e2
+index 0000000..2ad84ae
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2087 @@
+@@ -0,0 +1,2141 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -16742,6 +16742,34 @@ index 0000000..55cd8e2
 +            state->second.stand(i.D); ped->mMissionVelocity={0,0};
 +            return WorldResult::Success;
 +        }
++        if(i.D==7) {
++            // 00477c80: state 1, act 5, threat +86, pinned (+8b); the objective is kept.
++            auto threat=r.entities.find(i.E);
++            GameObject* from=nullptr;
++            if(threat!=r.entities.end()) {
++                if(threat->second.type==3) {
++                    auto binding=playerBindings_.find(i.E);
++                    if(binding!=playerBindings_.end()) from=gGameObjectsManager.GetGameObjectByID(binding->second);
++                } else if(threat->second.type==99) from=ResolveObject(threat->second);
++            }
++            if(!from || from->mClassID!=eGameObjectClass_Pedestrian) {
++                Once("ped-flee-target","UNRESOLVED CHANGE_PED_TYPE 7 threat is not a live ped or the player");
++                return WorldResult::Unresolved;
++            }
++            if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) {
++                Once("ped-flee-car","UNRESOLVED CHANGE_PED_TYPE 7 for a seated ped");
++                return WorldResult::Unresolved;
++            }
++            auto state=scriptPeds_.find(ped->mObjectID);
++            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
++            auto& motion=state->second;
++            motion.destination.reset(); motion.state=1; motion.action=5;
++            motion.attackTarget=0; motion.attacking=false;
++            motion.fleeFrom=from->mObjectID; motion.fleeCounter=4; // first update turns away
++            motion.fleeHeading=ped->mTransform.mOrientation.to_radians();
++            Once("ped-flee-path","Fleeing ped runs straight with engine collision; original waypoint refresh 00455040 and ground probes are not represented");
++            return WorldResult::Success;
++        }
 +        if(i.D==23) {
 +            // 00478380 case 0x17: objective 0x1b, state 3, act 8, target +86, weapon 1, pinned (+8b).
 +            auto target=r.entities.find(i.E);
@@ -17401,6 +17429,32 @@ index 0000000..55cd8e2
 +        auto* object=gGameObjectsManager.GetGameObjectByID(entry.first);
 +        if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Pedestrian) continue;
 +        auto* ped=static_cast<Pedestrian*>(object); ped->mMissionVelocity={0,0};
++        if(state.state==1 && state.fleeFrom) {
++            // 00456fb0 state 1: every fifth update face directly away from the threat (or the
++            // car it sits in) and run toward a point 63 units ahead at the desired speed (+08).
++            if(state.removed || ped->IsDead() || ped->IsDies() || ped->mCurrentCar) continue;
++            const auto& at=ped->mTransform.mPosition;
++            if(state.fleeCounter==4) {
++                auto* from=gGameObjectsManager.GetGameObjectByID(state.fleeFrom);
++                if(from && from->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(from)->mCurrentCar)
++                    from=static_cast<Pedestrian*>(from)->mCurrentCar;
++                if(!from || from->IsMarkedForDeletion()) {
++                    // The threat's car is gone: the original drops the threat (state 2, act 2).
++                    state.fleeFrom=0; state.state=3; state.action=8; state.current=0;
++                    Once("ped-flee-wander","Fleeing ped lost its threat; original wander state 2 projected as standing");
++                    continue;
++                }
++                const auto& threat=from->mTransform.mPosition;
++                const double dx=Convert::MetersToMapUnits(at.x-threat.x),dy=Convert::MetersToMapUnits(at.z-threat.z);
++                if(dx!=0 || dy!=0) state.fleeHeading=std::atan2(-dy,dx);
++            }
++            state.fleeCounter=state.fleeCounter>=4?0:state.fleeCounter+1;
++            state.current=state.desired;
++            ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(state.fleeHeading)));
++            const float velocity=Convert::MapUnitsToMeters(state.desired*25.0f/64);
++            ped->mMissionVelocity=glm::vec2(std::cos(state.fleeHeading),-std::sin(state.fleeHeading))*velocity;
++            continue;
++        }
 +        if(state.objective==0x1b && state.state==3 && state.attackTarget) {
 +            // 00456770 state 3: face the target, fire when the delay is spent.
 +            auto holder=pedControllers_.find(entry.first);
@@ -19608,10 +19662,10 @@ index 0000000..f7c987c
 +}
 diff --git a/src/mission/PedMotion.h b/src/mission/PedMotion.h
 new file mode 100755
-index 0000000..8b9810e
+index 0000000..38f9d83
 --- /dev/null
 +++ b/src/mission/PedMotion.h
-@@ -0,0 +1,29 @@
+@@ -0,0 +1,33 @@
 +#pragma once
 +#include <algorithm>
 +#include <cmath>
@@ -19631,6 +19685,10 @@ index 0000000..8b9810e
 +    unsigned int attackTarget=0;
 +    int attackDelay=0,attackCooldown=0;
 +    bool attacking=false;
++    // Flee (state 1): threat +86 (engine ID), update counter +0x88 (0..4), heading +0xa8 in radians.
++    unsigned int fleeFrom=0;
++    int fleeCounter=0;
++    double fleeHeading=0;
 +    void send(int x,int y) {destination=std::array<int,2>{{x,y}};objective=0x19;state=4;mode=8;action=2;}
 +    int speedFor(double x,double y) {
 +        if(!destination || state!=4) return current=0;
