@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..2ad84ae
+index 0000000..605fb30
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2141 @@
+@@ -0,0 +1,2165 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -15623,7 +15623,7 @@ index 0000000..2ad84ae
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); pedControllers_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); pedControllers_.clear(); aimCounter_=aimSide_=0; scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    for(int owner=0;owner<4;++owner) if(auto* human=player(owner)) human->mEnterExitFrozen=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
@@ -16770,8 +16770,10 @@ index 0000000..2ad84ae
 +            Once("ped-flee-path","Fleeing ped runs straight with engine collision; original waypoint refresh 00455040 and ground probes are not represented");
 +            return WorldResult::Success;
 +        }
-+        if(i.D==23) {
-+            // 00478380 case 0x17: objective 0x1b, state 3, act 8, target +86, weapon 1, pinned (+8b).
++        if(i.D==23 || i.D==22 || i.D==21 || i.D==1) {
++            // 00478380 cases 0x15/0x16/0x17 (objective 0x18/0x1a/0x1b) and 00478000 (D 1,
++            // objective 0x18): state 3, act 8, target +86, weapon 1, pinned (+8b).
++            const int objective=i.D==22?0x1a:i.D==23?0x1b:0x18;
 +            auto target=r.entities.find(i.E);
 +            GameObject* victim=nullptr;
 +            if(target!=r.entities.end()) {
@@ -16781,7 +16783,7 @@ index 0000000..2ad84ae
 +                } else if(target->second.type==99) victim=ResolveObject(target->second);
 +            }
 +            if(!victim || victim->mClassID!=eGameObjectClass_Pedestrian) {
-+                Once("ped-attack-target","UNRESOLVED CHANGE_PED_TYPE 23 target is not a live ped or the player");
++                Once("ped-attack-target","UNRESOLVED CHANGE_PED_TYPE attacker target is not a live ped or the player");
 +                return WorldResult::Unresolved;
 +            }
 +            if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) {
@@ -16797,7 +16799,7 @@ index 0000000..2ad84ae
 +            if(!pedControllers_.count(ped->mObjectID))
 +                pedControllers_[ped->mObjectID]=std::make_shared<ScriptPedControllerHolder>(ped);
 +            auto& motion=state->second;
-+            motion.destination.reset(); motion.objective=0x1b; motion.state=3; motion.action=8; motion.current=0;
++            motion.destination.reset(); motion.objective=objective; motion.state=3; motion.action=8; motion.current=0;
 +            motion.attackTarget=victim->mObjectID; motion.attackDelay=0; motion.attackCooldown=0; motion.attacking=false;
 +            ped->mWeapons[eWeapon_Pistol].Setup(eWeapon_Pistol,99);
 +            ped->ChangeWeapon(eWeapon_Pistol);
@@ -17455,7 +17457,7 @@ index 0000000..2ad84ae
 +            ped->mMissionVelocity=glm::vec2(std::cos(state.fleeHeading),-std::sin(state.fleeHeading))*velocity;
 +            continue;
 +        }
-+        if(state.objective==0x1b && state.state==3 && state.attackTarget) {
++        if((state.objective==0x1b || state.objective==0x1a || state.objective==0x18) && state.state==3 && state.attackTarget) {
 +            // 00456770 state 3: face the target, fire when the delay is spent.
 +            auto holder=pedControllers_.find(entry.first);
 +            if(holder==pedControllers_.end() || ped->mController!=&holder->second->controller) continue;
@@ -17473,18 +17475,40 @@ index 0000000..2ad84ae
 +            if(victim->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(victim)->mCurrentCar)
 +                aim=static_cast<Pedestrian*>(victim)->mCurrentCar->mTransform.mPosition; // state 7: the car
 +            const auto& at=ped->mTransform.mPosition;
-+            const double dx=Convert::MetersToMapUnits(aim.x-at.x),dy=Convert::MetersToMapUnits(aim.z-at.z);
++            double dx=Convert::MetersToMapUnits(aim.x-at.x)*64,dy=Convert::MetersToMapUnits(aim.z-at.z)*64; // pixels
++            const bool seated=victim->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(victim)->mCurrentCar;
++            // aim threshold / lateral offset: 0x18 -> 10/16, 0x1a -> 5/8, 0x1b direct (counter set to 1)
++            const int threshold=state.objective==0x18?10:state.objective==0x1a?5:0;
++            const int lateral=state.objective==0x18?16:state.objective==0x1a?8:0;
++            if(state.objective==0x1b) aimCounter_=1;
++            if(!seated) {
++                if(threshold<aimCounter_) aimCounter_=0; // aim straight at the target
++                else {
++                    const double distance=std::floor(std::hypot(std::floor(std::abs(dx)),std::floor(std::abs(dy))));
++                    const double offset=distance>64?lateral:distance>32?lateral/2:0;
++                    const double length=std::hypot(dx,dy);
++                    if(offset>0 && length>0) {
++                        // perpendicular to the aim line; the side alternates with 007284c8
++                        const double side=aimSide_==0?1.0:-1.0;
++                        const double px=dy/length,py=-dx/length;
++                        dx+=side*px*offset; dy+=side*py*offset;
++                    }
++                    ++aimCounter_;
++                }
++            }
 +            if(dx!=0 || dy!=0) ped->SetTransform(at,cxx::angle_t::from_radians(std::atan2(-dy,dx)));
++            bool shotStarted=false;
 +            if(state.attacking) {
 +                if(state.attackCooldown>0) --state.attackCooldown;
 +                if(state.attackCooldown==0) {state.attacking=false; state.attackDelay=50;}
 +            } else if(state.attackDelay==0) {
 +                // fire byte set, act 0x10; weapon 1 fires once and sets cooldown 15 (00488e20).
-+                state.attacking=true; state.attackCooldown=15;
++                state.attacking=true; state.attackCooldown=15; shotStarted=true; ++aimCounter_;
 +                ped->mWeapons[eWeapon_Pistol].SetAmmunition(99);
 +                ctl.mShoot=true;
 +                Once("ped-attack-cadence","Script attacker cadence: one shot, 15-update cooldown then 50-update delay (cooldown decrement per update assumed)");
 +            } else --state.attackDelay;
++            if(!shotStarted) aimSide_=aimSide_?0:1; // 00456e68, skipped by the early return that starts a shot
 +            continue;
 +        }
 +        if(state.removed || !state.destination || ped->IsDead() || ped->IsDies() ||
@@ -17591,10 +17615,10 @@ index 0000000..2ad84ae
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..dee92cc
+index 0000000..dd96ae3
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,121 @@
+@@ -0,0 +1,122 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17708,6 +17732,7 @@ index 0000000..dee92cc
 +    // car+0x248: set by KF_PROCESS on mission cars, cleared by RESET_KF. In the
 +    // original it keeps AI peds from choosing the car (0045def0, 00466f10).
 +    std::set<unsigned int> kfLockedCars_;
++    int aimCounter_=0, aimSide_=0; // 007284d8, 007284c8
 +    std::map<unsigned int,std::shared_ptr<class ScriptPedControllerHolder>> pedControllers_;
 +public:
 +    bool IsKfLocked(unsigned int carId) const { return kfLockedCars_.count(carId)!=0; }
