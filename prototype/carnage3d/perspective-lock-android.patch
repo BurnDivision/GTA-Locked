@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..f8e3aa5
+index 0000000..3ed5520
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2204 @@
+@@ -0,0 +1,2280 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -15634,6 +15634,14 @@ index 0000000..f8e3aa5
 +    UpdateCameras();
 +    UpdateBombs();
 +    UpdatePedOffscreen();
++    if(auto* human=player(0); human && human->mCharacter) {
++        const auto& at=human->mCharacter->mTransform.mPosition;
++        if(playerLastValid_) {
++            const double moved=std::max(std::abs(Convert::MetersToMapUnits(at.x-playerLast_.x)),std::abs(Convert::MetersToMapUnits(at.z-playerLast_.z)))*64;
++            playerSpeed_=static_cast<int>(std::lround(moved));
++        }
++        playerLast_=at; playerLastValid_=true;
++    }
 +    // 00401280 -> 00445580 -> 0040b660: a parked car leaves the world when
 +    // its timer runs out.
 +    for(auto it=parkRemovals_.begin();it!=parkRemovals_.end();) {
@@ -16653,7 +16661,7 @@ index 0000000..f8e3aa5
 +               !integer(operands[1],heading) || !integer(operands[2],occupation)) return WorldResult::Unresolved;
 +            if(kind==14) kind=0; // 0043da0b calls 004773f0, unlike PED_ON14
 +        }
-+        const bool attacker=kind==1 || kind==0x15 || kind==0x16 || kind==0x17;
++        const bool attacker=kind==1 || kind==0x15 || kind==0x16 || kind==0x17 || kind==8 || kind==0x18 || kind==0x19 || kind==0x1a;
 +        if(kind!=0 && kind!=4 && kind!=7 && !attacker) {
 +            Once("ped-kind:"+std::to_string(kind),"PED_ON pedestrian type "+std::to_string(kind)+" (armed/following/car objectives) not constructed yet");
 +            return WorldResult::Unresolved;
@@ -16713,7 +16721,9 @@ index 0000000..f8e3aa5
 +        if(attacker) {
 +            // 00477460 (type 1, O 0x18) / 00477900 (0x15 -> 0x18, 0x16 -> 0x1a, 0x17 -> 0x1b): state 3, act 8, weapon 1.
 +            auto& motion=scriptPeds_[ped->mObjectID];
-+            motion.objective=kind==0x16?0x1a:kind==0x17?0x1b:0x18; motion.state=3; motion.action=8; motion.current=0;
++            motion.objective=kind==0x16?0x1a:kind==0x17?0x1b:kind==8||kind==0x18?0x1c:kind==0x19?0x1d:kind==0x1a?0x1e:0x18;
++            motion.state=(kind==8||kind>=0x18)?4:3; motion.action=8; motion.current=0;
++            motion.moveHeading=ped->mTransform.mOrientation.to_radians();
 +            motion.attackTarget=pedTarget?pedTarget->mObjectID:0;
 +            ped->mWeapons[eWeapon_Pistol].Setup(eWeapon_Pistol,99);
 +            ped->ChangeWeapon(eWeapon_Pistol);
@@ -16809,10 +16819,11 @@ index 0000000..f8e3aa5
 +            Once("ped-flee-path","Fleeing ped runs straight with engine collision; original waypoint refresh 00455040 and ground probes are not represented");
 +            return WorldResult::Success;
 +        }
-+        if(i.D==23 || i.D==22 || i.D==21 || i.D==1) {
++        if(i.D==23 || i.D==22 || i.D==21 || i.D==1 || i.D==8 || i.D==24 || i.D==25 || i.D==26) {
 +            // 00478380 cases 0x15/0x16/0x17 (objective 0x18/0x1a/0x1b) and 00478000 (D 1,
 +            // objective 0x18): state 3, act 8, target +86, weapon 1, pinned (+8b).
-+            const int objective=i.D==22?0x1a:i.D==23?0x1b:0x18;
++            const int objective=i.D==22?0x1a:i.D==23?0x1b:i.D==8||i.D==24?0x1c:i.D==25?0x1d:i.D==26?0x1e:0x18;
++            const int attackState=(i.D==8||i.D==24||i.D==25||i.D==26)?4:3;
 +            auto target=r.entities.find(i.E);
 +            GameObject* victim=nullptr;
 +            if(target!=r.entities.end()) {
@@ -16838,7 +16849,7 @@ index 0000000..f8e3aa5
 +            if(!pedControllers_.count(ped->mObjectID))
 +                pedControllers_[ped->mObjectID]=std::make_shared<ScriptPedControllerHolder>(ped);
 +            auto& motion=state->second;
-+            motion.destination.reset(); motion.objective=objective; motion.state=3; motion.action=8; motion.current=0;
++            motion.destination.reset(); motion.objective=objective; motion.state=attackState; motion.moveHeading=ped->mTransform.mOrientation.to_radians(); motion.action=8; motion.current=0;
 +            motion.attackTarget=victim->mObjectID; motion.attackDelay=0; motion.attackCooldown=0; motion.attacking=false;
 +            ped->mWeapons[eWeapon_Pistol].Setup(eWeapon_Pistol,99);
 +            ped->ChangeWeapon(eWeapon_Pistol);
@@ -17496,6 +17507,71 @@ index 0000000..f8e3aa5
 +            ped->mMissionVelocity=glm::vec2(std::cos(state.fleeHeading),-std::sin(state.fleeHeading))*velocity;
 +            continue;
 +        }
++        if((state.objective==0x1c || state.objective==0x1d || state.objective==0x1e) && state.state==4 && state.attackTarget) {
++            auto holder=pedControllers_.find(entry.first);
++            if(holder==pedControllers_.end() || ped->mController!=&holder->second->controller) continue;
++            auto& ctl=holder->second->controller.mCtlState; ctl.mShoot=false;
++            if(state.removed || ped->IsDead() || ped->IsDies() || ped->mCurrentCar) continue;
++            GameObject* victim=gGameObjectsManager.GetGameObjectByID(state.attackTarget);
++            if(!victim || victim->IsMarkedForDeletion()) continue;
++            const bool seated=victim->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(victim)->mCurrentCar;
++            if(seated) victim=static_cast<Pedestrian*>(victim)->mCurrentCar;
++            const auto& at=ped->mTransform.mPosition;
++            const double tx=Convert::MetersToMapUnits(victim->mTransform.mPosition.x-at.x)*64;
++            const double ty=Convert::MetersToMapUnits(victim->mTransform.mPosition.z-at.z)*64;
++            // 00456770 state 4: aim (always the positive side), fire, or count the delay down.
++            bool known=true; bool stationary=false;
++            if(!PedOnScreen(*ped,known)) {
++                if(known) {state.attacking=false; state.attackDelay=50;}
++            } else {
++                double dx=tx,dy=ty;
++                const int threshold=state.objective==0x1c?10:state.objective==0x1d?5:0;
++                const int lateral=state.objective==0x1c?16:state.objective==0x1d?8:0;
++                if(state.objective==0x1e) aimCounter_=1;
++                if(!seated) {
++                    if(threshold<aimCounter_) aimCounter_=0;
++                    else {
++                        const double distance=std::floor(std::hypot(std::floor(std::abs(dx)),std::floor(std::abs(dy))));
++                        const double offset=distance>64?lateral:distance>32?lateral/2:0;
++                        const double length=std::hypot(dx,dy);
++                        if(offset>0 && length>0) {const double px=dy/length,py=-dx/length; dx+=px*offset; dy+=py*offset;}
++                        ++aimCounter_;
++                    }
++                }
++                const double aim=std::atan2(-dy,dx);
++                if(state.attacking) {
++                    if(state.attackCooldown>0) --state.attackCooldown;
++                    if(state.attackCooldown==0) {state.attacking=false; state.attackDelay=200;}
++                    else {ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(aim))); stationary=true;}
++                } else if(state.attackDelay==0) {
++                    state.attacking=true; state.attackCooldown=15;
++                    ped->mWeapons[eWeapon_Pistol].SetAmmunition(99);
++                    ctl.mShoot=true;
++                    ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(aim)));
++                    Once("ped-pursue-probe","Moving attacker: the 4x4 probe 8 units ahead that cancels a shot (00434e80) is not represented");
++                    stationary=true;
++                } else --state.attackDelay;
++            }
++            if(stationary) continue; // act 0x10: no movement while shooting
++            aimSide_=aimSide_?0:1;
++            // 00456fb0 state 4 pursuit: stop near the target, otherwise close in.
++            const double d=std::max(std::floor(std::abs(tx)),std::floor(std::abs(ty)));
++            int speed=state.desired;
++            if(d<(seated?96:32)) {speed=0; state.attackDelay=0;}
++            else if(!seated && d<=64) {
++                // Original quirk: the middle band copies the speed of ped slot 0 (the player), 4 -> 3, <= 0 -> 2.
++                speed=playerSpeed_==4?3:playerSpeed_<=0?2:playerSpeed_;
++                Once("ped-pursue-mid","Moving attacker middle band copies the player's speed (original slot-0 quirk)");
++            }
++            state.current=speed;
++            if(speed>0 && (tx!=0 || ty!=0)) {
++                state.moveHeading=std::atan2(-ty,tx);
++                const double length=std::hypot(tx,ty);
++                ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(state.moveHeading)));
++                ped->mMissionVelocity=glm::vec2(tx/length,ty/length)*Convert::MapUnitsToMeters(speed*25.0f/64);
++            }
++            continue;
++        }
 +        if((state.objective==0x1b || state.objective==0x1a || state.objective==0x18) && state.state==3 && state.attackTarget) {
 +            // 00456770 state 3: face the target, fire when the delay is spent.
 +            auto holder=pedControllers_.find(entry.first);
@@ -17654,10 +17730,10 @@ index 0000000..f8e3aa5
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..dd96ae3
+index 0000000..ea2135c
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,122 @@
+@@ -0,0 +1,123 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17772,6 +17848,7 @@ index 0000000..dd96ae3
 +    // original it keeps AI peds from choosing the car (0045def0, 00466f10).
 +    std::set<unsigned int> kfLockedCars_;
 +    int aimCounter_=0, aimSide_=0; // 007284d8, 007284c8
++    glm::vec3 playerLast_{0,0,0}; int playerSpeed_=0; bool playerLastValid_=false; // ped slot 0 speed (pursuit quirk)
 +    std::map<unsigned int,std::shared_ptr<class ScriptPedControllerHolder>> pedControllers_;
 +public:
 +    bool IsKfLocked(unsigned int carId) const { return kfLockedCars_.count(carId)!=0; }
@@ -19726,10 +19803,10 @@ index 0000000..f7c987c
 +}
 diff --git a/src/mission/PedMotion.h b/src/mission/PedMotion.h
 new file mode 100755
-index 0000000..38f9d83
+index 0000000..de91a75
 --- /dev/null
 +++ b/src/mission/PedMotion.h
-@@ -0,0 +1,33 @@
+@@ -0,0 +1,34 @@
 +#pragma once
 +#include <algorithm>
 +#include <cmath>
@@ -19753,6 +19830,7 @@ index 0000000..38f9d83
 +    unsigned int fleeFrom=0;
 +    int fleeCounter=0;
 +    double fleeHeading=0;
++    double moveHeading=0; // heading kept while an attacker waits (+a8 restored)
 +    void send(int x,int y) {destination=std::array<int,2>{{x,y}};objective=0x19;state=4;mode=8;action=2;}
 +    int speedFor(double x,double y) {
 +        if(!destination || state!=4) return current=0;
