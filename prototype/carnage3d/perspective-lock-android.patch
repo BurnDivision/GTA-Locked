@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..605fb30
+index 0000000..f8e3aa5
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2165 @@
+@@ -0,0 +1,2204 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -16653,9 +16653,34 @@ index 0000000..605fb30
 +               !integer(operands[1],heading) || !integer(operands[2],occupation)) return WorldResult::Unresolved;
 +            if(kind==14) kind=0; // 0043da0b calls 004773f0, unlike PED_ON14
 +        }
-+        if(kind!=0 && kind!=4) {
++        const bool attacker=kind==1 || kind==0x15 || kind==0x16 || kind==0x17;
++        if(kind!=0 && kind!=4 && kind!=7 && !attacker) {
 +            Once("ped-kind:"+std::to_string(kind),"PED_ON pedestrian type "+std::to_string(kind)+" (armed/following/car objectives) not constructed yet");
 +            return WorldResult::Unresolved;
++        }
++        // Target T = value(r(E)) (PED_ON) or the declaration's fourth operand (LOAD_PED); extended
++        // attackers keep a negative E as "no target" (Ts).
++        GameObject* pedTarget=nullptr; bool noTarget=false;
++        if(attacker || kind==7) {
++            int targetId=i.E;
++            if(loading) {
++                const auto& operands=entity->declaration.operands;
++                if(operands.size()<4 || !integer(operands[3],targetId)) targetId=-1;
++            }
++            if(targetId<0 && kind!=7) noTarget=true;
++            else {
++                auto target=r.entities.find(targetId);
++                if(target!=r.entities.end()) {
++                    if(target->second.type==3) {
++                        auto binding=playerBindings_.find(targetId);
++                        if(binding!=playerBindings_.end()) pedTarget=gGameObjectsManager.GetGameObjectByID(binding->second);
++                    } else if(target->second.type==99) pedTarget=ResolveObject(target->second);
++                }
++                if(!pedTarget || pedTarget->mClassID!=eGameObjectClass_Pedestrian) {
++                    Once("ped-kind-target:"+std::to_string(kind),"UNRESOLVED PED_ON type "+std::to_string(kind)+" target is not a live ped or the player");
++                    return WorldResult::Unresolved;
++                }
++            }
 +        }
 +        auto at=loading?std::optional<std::array<int,3>>{}:OriginalPosition(*entity,i.A);
 +        if(loading) {
@@ -16684,7 +16709,21 @@ index 0000000..605fb30
 +        ped->SetTransform(*position,-Convert::Fix16ToAngle(static_cast<unsigned short>(heading)));
 +        int prefix=-1;
 +        if(integer(entity->declaration.prefix,prefix) && prefix>=0) missionEntities_.erase(ped->mObjectID);
-+        scriptPeds_[ped->mObjectID].stand(kind);
++        scriptPeds_[ped->mObjectID].stand(kind==4?4:0);
++        if(attacker) {
++            // 00477460 (type 1, O 0x18) / 00477900 (0x15 -> 0x18, 0x16 -> 0x1a, 0x17 -> 0x1b): state 3, act 8, weapon 1.
++            auto& motion=scriptPeds_[ped->mObjectID];
++            motion.objective=kind==0x16?0x1a:kind==0x17?0x1b:0x18; motion.state=3; motion.action=8; motion.current=0;
++            motion.attackTarget=pedTarget?pedTarget->mObjectID:0;
++            ped->mWeapons[eWeapon_Pistol].Setup(eWeapon_Pistol,99);
++            ped->ChangeWeapon(eWeapon_Pistol);
++            if(!ped->mController) pedControllers_[ped->mObjectID]=std::make_shared<ScriptPedControllerHolder>(ped);
++            if(noTarget) Once("ped-kind-notarget","Armed script ped without target stands (00456770 is not called while +86 is -1)");
++        } else if(kind==7) {
++            // 004776b0: state 1, act 5, threat +86.
++            auto& motion=scriptPeds_[ped->mObjectID];
++            motion.state=1; motion.action=5; motion.fleeFrom=pedTarget->mObjectID; motion.fleeCounter=4;
++        }
 +        ped->mMissionMoveEnabled=true;
 +        entity->value=static_cast<std::int32_t>(ped->mObjectID); entity->type=99;
 +        return WorldResult::Success;
