@@ -15444,12 +15444,14 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..e2a767f
+index 0000000..55cd8e2
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2018 @@
+@@ -0,0 +1,2087 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
++#include "ScriptPedController.h"
++namespace mission { class ScriptPedControllerHolder { public: explicit ScriptPedControllerHolder(Pedestrian* p): controller(p) {} ScriptPedController controller; }; }
 +#include "CarnageMissionWorld.h"
 +#include "../GameObjectsManager.h"
 +#include "../GameMapManager.h"
@@ -15621,7 +15623,7 @@ index 0000000..e2a767f
 +    }
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
-+    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); pedControllers_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
 +    for(int owner=0;owner<4;++owner) if(auto* human=player(owner)) human->mEnterExitFrozen=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
@@ -16740,6 +16742,41 @@ index 0000000..e2a767f
 +            state->second.stand(i.D); ped->mMissionVelocity={0,0};
 +            return WorldResult::Success;
 +        }
++        if(i.D==23) {
++            // 00478380 case 0x17: objective 0x1b, state 3, act 8, target +86, weapon 1, pinned (+8b).
++            auto target=r.entities.find(i.E);
++            GameObject* victim=nullptr;
++            if(target!=r.entities.end()) {
++                if(target->second.type==3) {
++                    auto binding=playerBindings_.find(i.E);
++                    if(binding!=playerBindings_.end()) victim=gGameObjectsManager.GetGameObjectByID(binding->second);
++                } else if(target->second.type==99) victim=ResolveObject(target->second);
++            }
++            if(!victim || victim->mClassID!=eGameObjectClass_Pedestrian) {
++                Once("ped-attack-target","UNRESOLVED CHANGE_PED_TYPE 23 target is not a live ped or the player");
++                return WorldResult::Unresolved;
++            }
++            if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) {
++                Once("ped-attack-car","UNRESOLVED CHANGE_PED_TYPE 23 for a seated ped");
++                return WorldResult::Unresolved;
++            }
++            auto state=scriptPeds_.find(ped->mObjectID);
++            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
++            if(ped->mController && !pedControllers_.count(ped->mObjectID)) {
++                Once("ped-attack-controller","UNRESOLVED CHANGE_PED_TYPE 23 for a ped driven by another controller");
++                return WorldResult::Unresolved;
++            }
++            if(!pedControllers_.count(ped->mObjectID))
++                pedControllers_[ped->mObjectID]=std::make_shared<ScriptPedControllerHolder>(ped);
++            auto& motion=state->second;
++            motion.destination.reset(); motion.objective=0x1b; motion.state=3; motion.action=8; motion.current=0;
++            motion.attackTarget=victim->mObjectID; motion.attackDelay=0; motion.attackCooldown=0; motion.attacking=false;
++            ped->mWeapons[eWeapon_Pistol].Setup(eWeapon_Pistol,99);
++            ped->ChangeWeapon(eWeapon_Pistol);
++            ped->mMissionVelocity={0,0};
++            Once("ped-attack-weapon","Script attacker weapon 1 projected as the engine pistol (00488e20 single projectile)");
++            return WorldResult::Success;
++        }
 +        Once("ped-change:"+std::to_string(i.D),"CHANGE_PED_TYPE "+std::to_string(i.D)+" objective not implemented yet");
 +        return WorldResult::Unresolved;
 +    }
@@ -17364,6 +17401,38 @@ index 0000000..e2a767f
 +        auto* object=gGameObjectsManager.GetGameObjectByID(entry.first);
 +        if(!object || object->IsMarkedForDeletion() || object->mClassID!=eGameObjectClass_Pedestrian) continue;
 +        auto* ped=static_cast<Pedestrian*>(object); ped->mMissionVelocity={0,0};
++        if(state.objective==0x1b && state.state==3 && state.attackTarget) {
++            // 00456770 state 3: face the target, fire when the delay is spent.
++            auto holder=pedControllers_.find(entry.first);
++            if(holder==pedControllers_.end() || ped->mController!=&holder->second->controller) continue;
++            auto& ctl=holder->second->controller.mCtlState; ctl.mShoot=false;
++            if(state.removed || ped->IsDead() || ped->IsDies() || ped->mCurrentCar) continue;
++            bool known=true;
++            if(!PedOnScreen(*ped,known)) {
++                // 00453480 failed: fire off, act 8, delay 0.
++                if(known) {state.attacking=false; state.attackDelay=0;}
++                continue;
++            }
++            auto* victim=gGameObjectsManager.GetGameObjectByID(state.attackTarget);
++            if(!victim || victim->IsMarkedForDeletion()) continue;
++            glm::vec3 aim=victim->mTransform.mPosition;
++            if(victim->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(victim)->mCurrentCar)
++                aim=static_cast<Pedestrian*>(victim)->mCurrentCar->mTransform.mPosition; // state 7: the car
++            const auto& at=ped->mTransform.mPosition;
++            const double dx=Convert::MetersToMapUnits(aim.x-at.x),dy=Convert::MetersToMapUnits(aim.z-at.z);
++            if(dx!=0 || dy!=0) ped->SetTransform(at,cxx::angle_t::from_radians(std::atan2(-dy,dx)));
++            if(state.attacking) {
++                if(state.attackCooldown>0) --state.attackCooldown;
++                if(state.attackCooldown==0) {state.attacking=false; state.attackDelay=50;}
++            } else if(state.attackDelay==0) {
++                // fire byte set, act 0x10; weapon 1 fires once and sets cooldown 15 (00488e20).
++                state.attacking=true; state.attackCooldown=15;
++                ped->mWeapons[eWeapon_Pistol].SetAmmunition(99);
++                ctl.mShoot=true;
++                Once("ped-attack-cadence","Script attacker cadence: one shot, 15-update cooldown then 50-update delay (cooldown decrement per update assumed)");
++            } else --state.attackDelay;
++            continue;
++        }
 +        if(state.removed || !state.destination || ped->IsDead() || ped->IsDies() ||
 +           ped->mCurrentCar || !ped->IsIdle()) continue;
 +        const auto& at=ped->mTransform.mPosition;
@@ -17468,10 +17537,10 @@ index 0000000..e2a767f
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..f150ba2
+index 0000000..dee92cc
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,119 @@
+@@ -0,0 +1,121 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17482,6 +17551,7 @@ index 0000000..f150ba2
 +#include "../GameDefs.h"
 +#include <array>
 +#include <set>
++#include <memory>
 +#include <glm/vec2.hpp>
 +#include <glm/vec3.hpp>
 +class GameObject;
@@ -17584,6 +17654,7 @@ index 0000000..f150ba2
 +    // car+0x248: set by KF_PROCESS on mission cars, cleared by RESET_KF. In the
 +    // original it keeps AI peds from choosing the car (0045def0, 00466f10).
 +    std::set<unsigned int> kfLockedCars_;
++    std::map<unsigned int,std::shared_ptr<class ScriptPedControllerHolder>> pedControllers_;
 +public:
 +    bool IsKfLocked(unsigned int carId) const { return kfLockedCars_.count(carId)!=0; }
 +private:
@@ -19537,10 +19608,10 @@ index 0000000..f7c987c
 +}
 diff --git a/src/mission/PedMotion.h b/src/mission/PedMotion.h
 new file mode 100755
-index 0000000..28f0329
+index 0000000..8b9810e
 --- /dev/null
 +++ b/src/mission/PedMotion.h
-@@ -0,0 +1,24 @@
+@@ -0,0 +1,29 @@
 +#pragma once
 +#include <algorithm>
 +#include <cmath>
@@ -19555,6 +19626,11 @@ index 0000000..28f0329
 +    std::optional<std::array<int,2>> destination;
 +    bool removed=false;
 +    unsigned int killer=0; // engine ID; zero projects original -1
++    // Attack objectives (00456770): target +86 (engine ID), delay byte +68, weapon cooldown +64,
++    // act 0x10 while a shot is in progress.
++    unsigned int attackTarget=0;
++    int attackDelay=0,attackCooldown=0;
++    bool attacking=false;
 +    void send(int x,int y) {destination=std::array<int,2>{{x,y}};objective=0x19;state=4;mode=8;action=2;}
 +    int speedFor(double x,double y) {
 +        if(!destination || state!=4) return current=0;
@@ -19848,6 +19924,21 @@ index 0000000..c317fdd
 +    return false;
 +}
 +}
++}
+diff --git a/src/mission/ScriptPedController.h b/src/mission/ScriptPedController.h
+new file mode 100755
+index 0000000..d7d899b
+--- /dev/null
++++ b/src/mission/ScriptPedController.h
+@@ -0,0 +1,9 @@
++#pragma once
++#include "../CharacterController.h"
++namespace mission {
++// Holds the control state of a script ped whose objective the mission world drives.
++class ScriptPedController: public CharacterController {
++public:
++    explicit ScriptPedController(Pedestrian* ped): CharacterController(ped, eCharacterControllerType_Null) {}
++};
 +}
 diff --git a/src/path_utils.cpp b/src/path_utils.cpp
 index 117d3a9..dfff4c9 100644

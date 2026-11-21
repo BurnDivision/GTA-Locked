@@ -11,8 +11,8 @@ android {
         applicationId 'com.burndivision.gtaperspectivelock'
         minSdk 26
         targetSdk 35
-        versionCode 23
-        versionName '0.7.4'
+        versionCode 27
+        versionName '0.7.8'
         externalNativeBuild {
             cmake {
                 arguments '-DANDROID_STL=c++_shared'
