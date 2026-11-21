@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..2d80d76
+index 0000000..e2a767f
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2011 @@
+@@ -0,0 +1,2018 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -16374,6 +16374,13 @@ index 0000000..2d80d76
 +            entity->type=101; return WorldResult::Done;
 +        }
 +        if(token=="KILL_OBJ") {
++            // 004787d0 removes the object only when slot +0xc is in use. A record that
++            // never got an object still holds its declared type, a low slot number that
++            // 0044cef0 (which hands out slots from 0xdab downward) leaves unused.
++            if(entity->type!=2 && handle>=0 && handle<0x800) {
++                Once("kill-obj-slot","KILL_OBJ on a record without an object addresses an unused original slot; nothing removed");
++                entity->type=101; return WorldResult::Done;
++            }
 +            Once("kill-obj","UNRESOLVED KILL_OBJ on a record without a mission-created object (004787d0)");
 +            return WorldResult::Unresolved;
 +        }
