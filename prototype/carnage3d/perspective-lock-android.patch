@@ -7259,7 +7259,7 @@ index 0000000..c5466fa
 +}
 +}
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..dea916d 100644
+index a13af22..5b604d2 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
 @@ -1,157 +1,180 @@
@@ -8024,7 +8024,7 @@ index a13af22..dea916d 100644
 +        case eInputAction_EnterCar:
 +        case eInputAction_LeaveCar:
 +        case eInputAction_EnterCarAsPassenger:
-+            if (isActivated)
++            if (isActivated && !mEnterExitFrozen) // 00463ec0 ignores the key while frozen
 +            {
 +                EnterOrExitCar(action == eInputAction_EnterCarAsPassenger);
 +            }
@@ -8798,22 +8798,129 @@ index a13af22..dea916d 100644
 +    mHUD.mScreenArea = screenViewArea;
 +}
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..3c2d455 100644
+index c272fba..db6afdd 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
-@@ -5,6 +5,8 @@
- #include "InputActionsMapping.h"
- #include "AudioListener.h"
- #include "FollowCameraController.h"
+@@ -1,97 +1,146 @@
+-#pragma once
+-
+-#include "GameDefs.h"
+-#include "CharacterController.h"
+-#include "InputActionsMapping.h"
+-#include "AudioListener.h"
+-#include "FollowCameraController.h"
+-#include "FreeLookCameraController.h"
+-#include "HUD.h"
+-
+-//////////////////////////////////////////////////////////////////////////
+-
+-enum ePlayerCameraMode
+-{
+-    ePlayerCameraMode_Follow, // default
+-    ePlayerCameraMode_FreeLook, // debug
+-};
+-
+-//////////////////////////////////////////////////////////////////////////
+-
+-// Contains human player related information but also processes character controller logic
+-class HumanPlayer final: public CharacterController
+-{
+-public:
+-    // readonly
+-    InputActionsMapping mActionsMapping;
+-    glm::vec3 mSpawnPosition;
+-    AudioListener* mAudioListener = nullptr;
+-    GameCamera mViewCamera;
+-    HUD mHUD;
+-
+-public:
+-    HumanPlayer(Pedestrian* character);
+-    ~HumanPlayer();
+-
+-    void EnterGameScenario();
+-    void LeaveGameScenario();
+-
+-    // override CharacterController
+-    void OnCharacterUpdateFrame() override;
+-
+-    // Get or set current police attention level
+-    int GetWantedLevel() const;
+-    void SetWantedLevel(int wantedLevel);
+-   
+-    // Mouse aiming control
+-    void SetMouseAiming(bool isEnabled);
+-    bool IsMouseAmingEnabled() const;
+-
+-    void SetRespawnTimer();
+-    void SetScreenViewArea(const Rect& screenViewArea);
+-
+-    // process players inputs
+-    // @param inputEvent: Event data
+-    void InputEvent(KeyInputEvent& inputEvent);
+-    void InputEvent(GamepadInputEvent& inputEvent);
+-    void InputEvent(MouseButtonInputEvent& inputEvent);
+-    void InputEvent(MouseMovedInputEvent& inputEvent);
+-    void InputEvent(MouseScrollInputEvent& inputEvent);
+-    void InputEventLost();
+-
+-    // public for debug purposes
+-    void SetCurrentCameraMode(ePlayerCameraMode cameraMode);
+-    ePlayerCameraMode GetCurrentCameraMode() const;
+-
+-    // cheats
+-    void Cheat_GiveAllAmmunitions();
+-
+-private:
+-    void SwitchNextWeapon();
+-    void SwitchPrevWeapon();
+-    void EnterOrExitCar(bool alternative);
+-
+-    void Respawn();
+-
+-    void ProcessRepetitiveActions();
+-    void ProcessInputAction(eInputAction action, bool isActivated);
+-    bool GetActionState(eInputAction action) const;
+-
+-    void ShowLastDistrictLocation();
+-
+-    void UpdateDistrictLocation();
+-    void UpdateMouseAiming();
+-    void UpdateRespawnTimer();
+-
+-private:
+-    int mLastDistrictIndex = 0; // district index where character was last time
+-    int mWantedLevel = 0; // current police attention level
+-    
+-    float mRespawnTime = 0.0f;
+-    bool mUpdateInputs = false;
+-    bool mMouseAimingEnabled = false;
+-
+-    FollowCameraController mFollowCameraController;
+-    FreeLookCameraController mFreeLookCameraController;
+-    CameraController* mCameraController = nullptr;
++#pragma once
++
++#include "GameDefs.h"
++#include "CharacterController.h"
++#include "InputActionsMapping.h"
++#include "AudioListener.h"
++#include "FollowCameraController.h"
 +#include "reperspective/TwinStick.h"
 +#include <unordered_set>
- #include "FreeLookCameraController.h"
- #include "HUD.h"
- 
-@@ -19,6 +21,37 @@ enum ePlayerCameraMode
- //////////////////////////////////////////////////////////////////////////
- 
- // Contains human player related information but also processes character controller logic
++#include "FreeLookCameraController.h"
++#include "HUD.h"
++
++//////////////////////////////////////////////////////////////////////////
++
++enum ePlayerCameraMode
++{
++    ePlayerCameraMode_Follow, // default
++    ePlayerCameraMode_FreeLook, // debug
++};
++
++//////////////////////////////////////////////////////////////////////////
++
++// Contains human player related information but also processes character controller logic
 +// test-only scripted gamepad input + telemetry (active only when config/test_input.txt exists)
 +struct ReperspectiveTestScript
 +{
@@ -8845,13 +8952,78 @@ index c272fba..3c2d455 100644
 +    bool mUseRealPad = false; // @realpad: telemetry only, input from the real / virtual (touch) gamepad
 +};
 +
- class HumanPlayer final: public CharacterController
- {
- public:
-@@ -90,6 +123,21 @@ private:
-     float mRespawnTime = 0.0f;
-     bool mUpdateInputs = false;
-     bool mMouseAimingEnabled = false;
++class HumanPlayer final: public CharacterController
++{
++public:
++    // readonly
++    InputActionsMapping mActionsMapping;
++    glm::vec3 mSpawnPosition;
++    AudioListener* mAudioListener = nullptr;
++    GameCamera mViewCamera;
++    HUD mHUD;
++
++public:
++    HumanPlayer(Pedestrian* character);
++    ~HumanPlayer();
++
++    void EnterGameScenario();
++    void LeaveGameScenario();
++
++    // override CharacterController
++    void OnCharacterUpdateFrame() override;
++
++    // Get or set current police attention level
++    int GetWantedLevel() const;
++    void SetWantedLevel(int wantedLevel);
++    bool mEnterExitFrozen = false; // mission FREEZE_ENTER (player byte 0074f2d1)
++   
++    // Mouse aiming control
++    void SetMouseAiming(bool isEnabled);
++    bool IsMouseAmingEnabled() const;
++
++    void SetRespawnTimer();
++    void SetScreenViewArea(const Rect& screenViewArea);
++
++    // process players inputs
++    // @param inputEvent: Event data
++    void InputEvent(KeyInputEvent& inputEvent);
++    void InputEvent(GamepadInputEvent& inputEvent);
++    void InputEvent(MouseButtonInputEvent& inputEvent);
++    void InputEvent(MouseMovedInputEvent& inputEvent);
++    void InputEvent(MouseScrollInputEvent& inputEvent);
++    void InputEventLost();
++
++    // public for debug purposes
++    void SetCurrentCameraMode(ePlayerCameraMode cameraMode);
++    ePlayerCameraMode GetCurrentCameraMode() const;
++
++    // cheats
++    void Cheat_GiveAllAmmunitions();
++
++private:
++    void SwitchNextWeapon();
++    void SwitchPrevWeapon();
++    void EnterOrExitCar(bool alternative);
++
++    void Respawn();
++
++    void ProcessRepetitiveActions();
++    void ProcessInputAction(eInputAction action, bool isActivated);
++    bool GetActionState(eInputAction action) const;
++
++    void ShowLastDistrictLocation();
++
++    void UpdateDistrictLocation();
++    void UpdateMouseAiming();
++    void UpdateRespawnTimer();
++
++private:
++    int mLastDistrictIndex = 0; // district index where character was last time
++    int mWantedLevel = 0; // current police attention level
++    
++    float mRespawnTime = 0.0f;
++    bool mUpdateInputs = false;
++    bool mMouseAimingEnabled = false;
 +    bool mGamepadActive = false; // the last input came from the gamepad (not keyboard / touch)
 +
 +    bool mInputFocusLost = false; // another input handler (UI) took the input focus
@@ -8867,9 +9039,12 @@ index c272fba..3c2d455 100644
 +    bool GetCursorWorldPosition(glm::vec2& worldPosition);
 +    void UpdateTestScript();
 +    void ExecuteTestLine(const std::string& line);
- 
-     FollowCameraController mFollowCameraController;
-     FreeLookCameraController mFreeLookCameraController;
++
++    FollowCameraController mFollowCameraController;
++    FreeLookCameraController mFreeLookCameraController;
++    CameraController* mCameraController = nullptr;
+ };
+\ No newline at end of file
 diff --git a/src/ImGuiManager.cpp b/src/ImGuiManager.cpp
 index aaad5bb..8861b3a 100644
 --- a/src/ImGuiManager.cpp
@@ -15269,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..837a684
+index 0000000..2d80d76
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2003 @@
+@@ -0,0 +1,2011 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "CarnageMissionWorld.h"
@@ -15447,6 +15622,7 @@ index 0000000..837a684
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
 +    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    for(int owner=0;owner<4;++owner) if(auto* human=player(owner)) human->mEnterExitFrozen=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
 +void CarnageMissionWorld::Update(float dt) {
@@ -16263,6 +16439,13 @@ index 0000000..837a684
 +        }
 +        if(!gGameObjectsManager.CreateExplosion(nullptr,nullptr,eExplosionType_Rocket,ped->mTransform.mPosition))
 +            return WorldResult::Unresolved;
++        return WorldResult::Done;
++    }
++    if(token=="FREEZE_ENTER" || token=="UNFREEZE_ENTER") {
++        // 004647c0(owner, 1/0): while set, the player's enter/exit-car key does nothing.
++        auto* human=player(r.owner);
++        if(!human) return WorldResult::Unresolved;
++        human->mEnterExitFrozen=token=="FREEZE_ENTER";
 +        return WorldResult::Done;
 +    }
 +    if(token=="MAKEOBJ") {
