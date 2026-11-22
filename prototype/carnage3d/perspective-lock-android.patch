@@ -7259,10 +7259,10 @@ index 0000000..c5466fa
 +}
 +}
 diff --git a/src/HumanPlayer.cpp b/src/HumanPlayer.cpp
-index a13af22..5b604d2 100644
+index a13af22..340dd42 100644
 --- a/src/HumanPlayer.cpp
 +++ b/src/HumanPlayer.cpp
-@@ -1,157 +1,180 @@
+@@ -1,157 +1,202 @@
 -#include "stdafx.h"
 -#include "HumanPlayer.h"
 -#include "Pedestrian.h"
@@ -7517,6 +7517,28 @@ index a13af22..5b604d2 100644
 +
 +    ProcessRepetitiveActions();
 +
++    if (mRemoteDriver)
++    {
++        if (mRemoteDriver->IsMarkedForDeletion() || mRemoteDriver->mController == nullptr)
++        {
++            EndRemoteControl();
++        }
++        else
++        {
++            // The control state is rebuilt every frame above; hand the driving part to the model car.
++            PedestrianCtlState& remote = mRemoteDriver->mController->mCtlState;
++            const PedestrianCtlState idle;
++            remote.mAcceleration = mCtlState.mAcceleration;
++            remote.mSteerDirection = mCtlState.mSteerDirection;
++            remote.mHandBrake = mCtlState.mHandBrake;
++            remote.mHorn = mCtlState.mHorn;
++            mCtlState.mAcceleration = idle.mAcceleration;
++            mCtlState.mSteerDirection = idle.mSteerDirection;
++            mCtlState.mHandBrake = idle.mHandBrake;
++            mCtlState.mHorn = idle.mHorn;
++        }
++    }
++
 +    UpdateDistrictLocation();
 +
 +    // update audio listener location
@@ -7589,7 +7611,7 @@ index a13af22..5b604d2 100644
      }
  
      // handle special keys
-@@ -161,61 +184,68 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
+@@ -161,61 +206,68 @@ void HumanPlayer::InputEvent(KeyInputEvent& inputEvent)
          inputEvent.SetConsumed();
      }
  }
@@ -7712,7 +7734,7 @@ index a13af22..5b604d2 100644
              if (mCharacter->IsCarPassenger())
              {
                  mCtlState.mHorn = isActivated;
-@@ -223,287 +253,800 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
+@@ -223,287 +275,820 @@ void HumanPlayer::ProcessInputAction(eInputAction action, bool isActivated)
                  {
                      mCharacter->mCurrentCar->EnableEmergencyLights(isActivated);
                  }
@@ -8041,6 +8063,26 @@ index a13af22..5b604d2 100644
 +int HumanPlayer::GetWantedLevel() const
 +{
 +    return mWantedLevel;
++}
++
++void HumanPlayer::BeginRemoteControl(Pedestrian* driver)
++{
++    if (mRemoteDriver == nullptr)
++    {
++        mRemoteSavedEnterExit = mEnterExitFrozen;
++    }
++    mRemoteDriver = driver;
++    mEnterExitFrozen = true;
++    mFollowCameraController.SetFollowTarget(driver ? driver : mCharacter);
++}
++
++void HumanPlayer::EndRemoteControl()
++{
++    if (mRemoteDriver == nullptr)
++        return;
++    mRemoteDriver = nullptr;
++    mEnterExitFrozen = mRemoteSavedEnterExit;
++    mFollowCameraController.SetFollowTarget(mCharacter);
 +}
 +
 +void HumanPlayer::SetWantedLevel(int wantedLevel)
@@ -8798,10 +8840,10 @@ index a13af22..5b604d2 100644
 +    mHUD.mScreenArea = screenViewArea;
 +}
 diff --git a/src/HumanPlayer.h b/src/HumanPlayer.h
-index c272fba..db6afdd 100644
+index c272fba..fe62686 100644
 --- a/src/HumanPlayer.h
 +++ b/src/HumanPlayer.h
-@@ -1,97 +1,146 @@
+@@ -1,97 +1,151 @@
 -#pragma once
 -
 -#include "GameDefs.h"
@@ -8976,6 +9018,11 @@ index c272fba..db6afdd 100644
 +    int GetWantedLevel() const;
 +    void SetWantedLevel(int wantedLevel);
 +    bool mEnterExitFrozen = false; // mission FREEZE_ENTER (player byte 0074f2d1)
++    // Mission START_MODEL..RETURN_CONTROL: input drives a model car through this stand-in driver.
++    Pedestrian* mRemoteDriver = nullptr;
++    bool mRemoteSavedEnterExit = false;
++    void BeginRemoteControl(Pedestrian* driver);
++    void EndRemoteControl();
 +   
 +    // Mouse aiming control
 +    void SetMouseAiming(bool isEnabled);
@@ -15444,10 +15491,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..de7ac0c
+index 0000000..94eab78
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2470 @@
+@@ -0,0 +1,2562 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -15649,6 +15696,7 @@ index 0000000..de7ac0c
 +    enabledDoors_.clear(); animatingDoors_.clear(); doors_.clear(); doorOrder_.clear(); doorSlots_.clear(); savedDoorBlocks_.clear(); rectangles_={};
 +    for(auto id:ownedObjects_) if(auto* object=gGameObjectsManager.GetGameObjectByID(id)) object->MarkForDeletion();
 +    parkCars_={}; parkRemovals_.clear(); bombs_.clear(); pedOffscreen_.clear(); kfLockedCars_.clear(); pedControllers_.clear(); aimCounter_=aimSide_=0; for(int k=0;k<4;++k) kfBrief_[k]=kfGeneral_[k]=-1; scriptPeds_.clear(); doorUpdateUnresolved_=false;
++    for(int owner=0;owner<4;++owner) EndRemoteModel(owner);
 +    for(int owner=0;owner<4;++owner) if(auto* human=player(owner)) human->mEnterExitFrozen=false;
 +    playerBindings_.clear(); carRecords_.clear(); carRemaps_.clear(); briefKeys_={}; pickups_={}; ownedObjects_.clear(); missionEntities_.clear(); phones_.clear(); soundPhones_.fill(-1); arrows_={}; logged_.clear();
 +}
@@ -16522,6 +16570,71 @@ index 0000000..de7ac0c
 +        human->SetWantedLevel(0);
 +        Once("drop-wanted","DROP_WANTED_LEVEL clears the engine wanted level; original separate wanted points are not modelled");
 +        return WorldResult::Done;
++    }
++    if(token=="START_MODEL" || token=="DO_MODEL" || token=="RETURN_CONTROL") {
++        if(r.owner<0 || r.owner>=4) return WorldResult::Unresolved;
++        auto* human=player(r.owner);
++        if(!human || !human->mCharacter) return WorldResult::Unresolved;
++        auto* ped=human->mCharacter;
++        auto& state=remote_[r.owner];
++        auto* rc=state.rc?dynamic_cast<Vehicle*>(gGameObjectsManager.GetGameObjectByID(state.rc)):nullptr;
++        if(token=="START_MODEL") {
++            // 004423f0: E==0 -> F. Waits (no branch) until the player ped drives a car and no model car is
++            // active (+fc). Then: hold the car, spawn model 0x2f, hand control and camera over, E-1 uses; S.
++            if(i.E==0) return WorldResult::Failure;
++            if(state.active) return WorldResult::Hold;
++            auto* car=ped->mCurrentCar;
++            if(!car || ped->IsDead() || ped->IsDies() || car->GetCarDriver()!=ped) return WorldResult::Hold;
++            if(!SpawnRemoteModel(r.owner,*human,*car)) return WorldResult::Failure;
++            state.uses=i.E-1; state.wait=1;
++            if(entity) {entity->value=static_cast<std::int32_t>(state.rc); entity->type=0;}
++            return WorldResult::Success;
++        }
++        if(token=="DO_MODEL") {
++            // 004427c0 (m44.asm): player dead -> control back, process ends (not representable: logged).
++            if(ped->IsDead() || ped->IsDies()) {
++                EndRemoteModel(r.owner);
++                Once("rc-dead","DO_MODEL: player died while driving the model car; original ends the process");
++                return WorldResult::Unresolved;
++            }
++            bool targetDead=false;
++            if(i.D>=0) {
++                auto target=r.entities.find(i.D);
++                if(target==r.entities.end()) return WorldResult::Unresolved;
++                auto* object=ResolveObject(target->second);
++                if(object && object->mClassID==eGameObjectClass_Car) {
++                    auto* car=static_cast<Vehicle*>(object); targetDead=car->IsWrecked() || car->GetCurrentDamage()>=100;
++                } else if(object && object->mClassID==eGameObjectClass_Pedestrian) {
++                    auto* victim=static_cast<Pedestrian*>(object); targetDead=victim->IsDead() || victim->IsDies();
++                } else return WorldResult::Unresolved;
++            }
++            // Both outcomes wait on the process stage counter (starts at 1, +1 per call, acts at 100).
++            if(targetDead) {
++                if(state.wait<100) {++state.wait; return WorldResult::Hold;}
++                state.wait=1; return WorldResult::Success;
++            }
++            if(!state.active || !rc || rc->IsMarkedForDeletion()) {
++                EndRemoteModel(r.owner); state.wait=1; return WorldResult::Failure; // 00473d80 false: release, F
++            }
++            if(!rc->IsWrecked() && rc->GetCurrentDamage()<100) return WorldResult::Hold;
++            if(state.wait<100) {++state.wait; return WorldResult::Hold;}
++            if(state.uses>0) {
++                // A new model car; the stage counter is not reset here (original quirk).
++                auto* playerCar=dynamic_cast<Vehicle*>(gGameObjectsManager.GetGameObjectByID(state.playerCar));
++                if(!playerCar) return WorldResult::Unresolved;
++                const int uses=state.uses-1;
++                if(state.driver) if(auto* old=gGameObjectsManager.GetGameObjectByID(state.driver)) old->MarkForDeletion();
++                pedControllers_.erase(state.driver);
++                if(!SpawnRemoteModel(r.owner,*human,*playerCar)) return WorldResult::Unresolved;
++                state.uses=uses; state.wait=100;
++                return WorldResult::Hold;
++            }
++            state.wait=1; return WorldResult::Failure; // control stays with the wreck until RETURN_CONTROL
++        }
++        // RETURN_CONTROL 00442ca0: control and camera back to the held car, release it, seat the player; R, S.
++        EndRemoteModel(r.owner);
++        Once("rc-return","RETURN_CONTROL: the model car stays where it is (004773a0 not recovered)");
++        return WorldResult::Success;
 +    }
 +    if(token=="CHANGE_TYPE") {
 +        if(!entity || entity->declaration.token!="BLOCK_INFO" || entity->declaration.operands.size()<2) return WorldResult::Unresolved;
@@ -17832,6 +17945,32 @@ index 0000000..de7ac0c
 +        ped->mMissionVelocity=glm::vec2(dx/length,dy/length)*velocity;
 +    }
 +}
++// START_MODEL / DO_MODEL respawn: model car 0x2f at the player car's X/Y with a stand-in driver.
++bool CarnageMissionWorld::SpawnRemoteModel(int owner,HumanPlayer& human,Vehicle& playerCar) {
++    const auto at=playerCar.mTransform.mPosition;
++    const int heading=static_cast<int>(std::lround((90-playerCar.mTransform.mOrientation.to_degrees())*1024/360))&1023;
++    auto* rc=SpawnVehicle(at,0x2f,heading);
++    if(!rc) return false;
++    auto* driver=SpawnPedestrian(at,NO_REMAP);
++    if(!driver) {rc->MarkForDeletion(); return false;}
++    if(!driver->mController) pedControllers_[driver->mObjectID]=std::make_shared<ScriptPedControllerHolder>(driver);
++    driver->PutInsideCar(rc,eCarSeat_Driver);
++    auto& state=remote_[owner];
++    state.rc=rc->mObjectID; state.driver=driver->mObjectID; state.playerCar=playerCar.mObjectID; state.active=true;
++    kfLockedCars_.insert(playerCar.mObjectID); // 00475800: car+0x248 lock
++    human.BeginRemoteControl(driver);
++    Once("rc-spawn","Model car spawned at the player car with the player car's heading (original: Z and heading of A); the held player car is stopped only by zeroed controls");
++    return true;
++}
++void CarnageMissionWorld::EndRemoteModel(int owner) {
++    if(owner<0 || owner>=4) return;
++    auto& state=remote_[owner];
++    if(auto* human=player(owner)) if(human->mRemoteDriver) human->EndRemoteControl();
++    if(state.driver) if(auto* driver=gGameObjectsManager.GetGameObjectByID(state.driver)) driver->MarkForDeletion();
++    if(state.driver) pedControllers_.erase(state.driver);
++    if(state.playerCar) kfLockedCars_.erase(state.playerCar);
++    state=RemoteModel{};
++}
 +void CarnageMissionWorld::UpdateDoors() {
 +    doorUpdateUnresolved_=false;
 +    // Original00430c00: animation tick BEFORE scheduler00479e00/00479f00.
@@ -17920,10 +18059,10 @@ index 0000000..de7ac0c
 +}
 diff --git a/src/mission/CarnageMissionWorld.h b/src/mission/CarnageMissionWorld.h
 new file mode 100755
-index 0000000..143deeb
+index 0000000..bf2270d
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.h
-@@ -0,0 +1,124 @@
+@@ -0,0 +1,128 @@
 +#pragma once
 +#include "MissionVM.h"
 +#include "GameEconomy.h"
@@ -17971,6 +18110,8 @@ index 0000000..143deeb
 +    // Explicit engine creation primitives. Callers must prove declaration/type/AI policy.
 +    Pedestrian* SpawnPedestrian(const glm::vec3& position,int remap);
 +    Vehicle* SpawnVehicle(const glm::vec3& position,int model,int heading);
++    bool SpawnRemoteModel(int owner,class HumanPlayer& human,class Vehicle& playerCar);
++    void EndRemoteModel(int owner);
 +    // GTA declaration tuples are map cells. Resolved opcode XYZ are 1/64 cells.
 +    static std::optional<glm::vec3> DeclarationPosition(const Record&);
 +    static std::optional<glm::vec3> ParseDeclarationPosition(const Record&);
@@ -18039,6 +18180,8 @@ index 0000000..143deeb
 +    std::set<unsigned int> kfLockedCars_;
 +    int aimCounter_=0, aimSide_=0; // 007284d8, 007284c8
 +    int kfBrief_[4]={-1,-1,-1,-1}, kfGeneral_[4]={-1,-1,-1,-1}; // player 0074f2f6 / 0074f2f8 countdowns
++    struct RemoteModel { unsigned int rc=0, driver=0, playerCar=0; int uses=0, wait=1; bool active=false; };
++    RemoteModel remote_[4]; // START_MODEL spare record + player remote slot 007713b0 / ped+0xfc
 +    glm::vec3 playerLast_{0,0,0}; int playerSpeed_=0; bool playerLastValid_=false; // ped slot 0 speed (pursuit quirk)
 +    std::map<unsigned int,std::shared_ptr<class ScriptPedControllerHolder>> pedControllers_;
 +public:
@@ -18088,7 +18231,7 @@ index 0000000..657622a
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..a188d9f
+index 0000000..eca7ddb
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -18140,9 +18283,9 @@ index 0000000..a188d9f
 +{"DO_GTA", "00447d12", true}, // 44
 +{"MISSION_END", "0044a569", true}, // 45
 +{"EXPLODE_CAR", "00447dae", false}, // 46
-+{"START_MODEL", "004423f0", false}, // 47
-+{"DO_MODEL", "004427c0", false}, // 48
-+{"RETURN_CONTROL", "00442ca0", false}, // 49
++{"START_MODEL", "004423f0", true}, // 47
++{"DO_MODEL", "004427c0", true}, // 48
++{"RETURN_CONTROL", "00442ca0", true}, // 49
 +{"KILL_CAR", "00447e07", true}, // 50
 +{"ARROWPED", "00447e5c", true}, // 51
 +{"ARROWCAR", "00447e8f", true}, // 52
@@ -18888,7 +19031,7 @@ index 0000000..8a8b42a
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..a4c8a65
+index 0000000..d299579
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
 @@ -0,0 +1,759 @@
@@ -19628,7 +19771,7 @@ index 0000000..a4c8a65
 +        return;
 +    }
 +    // Complex partial handler protocol. No default success or reward guess.
-+    if(oneOf(op,{2,16,22,23,31,33,44,57,60,69,88,121,125,135})) {
++    if(oneOf(op,{2,16,22,23,31,33,44,47,48,49,57,60,69,88,121,125,135})) {
 +        if(op==2 && p.state==1) {
 +            p.state=low16(wrap(static_cast<std::uint32_t>(i.D)+10U)); i.E=1;
 +        }
@@ -19639,7 +19782,7 @@ index 0000000..a4c8a65
 +        if(result==WorldResult::Hold) return;
 +        if(result==WorldResult::Failure) {branch(slot,i.C); return;}
 +        // E1c: PED_ON / CHANGE_PED_TYPE E is a target, never money.
-+        if(!oneOf(op,{2,16,31,44,60,69,135})) pay(slot,i);
++        if(!oneOf(op,{2,16,31,44,47,48,60,69,135})) pay(slot,i);
 +        branch(slot,i.B); return;
 +    }
 +    // Immediate commands with known outer S and explicit reward exclusions.
