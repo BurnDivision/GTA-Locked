@@ -15444,15 +15444,16 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..31e47fa
+index 0000000..85dfb07
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2380 @@
+@@ -0,0 +1,2416 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
 +namespace mission { class ScriptPedControllerHolder { public: explicit ScriptPedControllerHolder(Pedestrian* p): controller(p) {} ScriptPedController controller; }; }
 +#include "CarnageMissionWorld.h"
++#include "../AiManager.h"
 +#include "../GameObjectsManager.h"
 +#include "../GameMapManager.h"
 +#include "../CarnageGame.h"
@@ -15484,6 +15485,22 @@ index 0000000..31e47fa
 +    case 0x2b: return 0x1c; case 0x2d: return 0x1d; case 0x2f: return 0x1e;
 +    default: return objective;
 +    }
++}
++// ped+0x60 weapon numbers -> engine weapons (00456770 fire switch, shot sounds 0x21..0x24).
++static eWeaponID ScriptWeapon(int weapon) {
++    switch(weapon) {
++    case 1: return eWeapon_Pistol; case 2: return eWeapon_Machinegun;
++    case 3: return eWeapon_RocketLauncher; case 4: return eWeapon_Flamethrower;
++    default: return eWeapon_Fists;
++    }
++}
++static void ArmScriptPed(Pedestrian& ped,int weapon) {
++    const eWeaponID id=ScriptWeapon(weapon);
++    if(id!=eWeapon_Fists) {
++        if(ped.mCurrentWeapon!=id) ped.mWeapons[id].Setup(id,99);
++        ped.mWeapons[id].SetAmmunition(99);
++    }
++    if(ped.mCurrentWeapon!=id) ped.ChangeWeapon(id);
 +}
 +HumanPlayer* player(int owner) {
 +    return owner>=0 && owner<4 ? gCarnageGame.mHumanPlayers[owner] : nullptr;
@@ -16146,7 +16163,7 @@ index 0000000..31e47fa
 +        soundPhones_.fill(-1);
 +        return CleanupScriptWorld()?WorldResult::Done:WorldResult::Unresolved;
 +    }
-+    if(token=="PARKED_ON" || token=="LOAD_PARKED") {
++    if(token=="PARKED_ON" || token=="LOAD_PARKED" || token=="CAR_ON") {
 +        const bool loading=token=="LOAD_PARKED";
 +        if(!entity) return WorldResult::Failure;
 +        const bool pixels=loading && entity->declaration.token=="PARKED_PIXELS";
@@ -16278,6 +16295,15 @@ index 0000000..31e47fa
 +        // cleanup list (006b3b90).
 +        int prefix=-1;
 +        if(integer(entity->declaration.prefix,prefix) && prefix>=0) missionEntities_.erase(car->mObjectID);
++        if(token=="CAR_ON") {
++            // 00441cd0: the car's own driver (ped slot car+200), health 100, seated, ordinary objective 0x19.
++            auto* driver=SpawnPedestrian(*spawn,NO_REMAP);
++            if(!driver) return WorldResult::Unresolved;
++            driver->mObjectFlags=(driver->mObjectFlags|GameObjectFlags_Traffic);
++            if(gAiManager.CreateAiController(driver)) driver->PutInsideCar(car,eCarSeat_Driver);
++            Once("car-on-driver","CAR_ON driver is an engine traffic driver; the original 0x19 in-car driving logic is not represented");
++            if(model==0x29 || model==3) Once("car-on-0044f7a0","CAR_ON model 0x29/3 extra setup 0044f7a0 not recovered");
++        }
 +        return WorldResult::Success;
 +    }
 +    if(token=="PHONE_MISSION_CLEANUP")
@@ -16495,6 +16521,16 @@ index 0000000..31e47fa
 +        if(!human) return WorldResult::Unresolved;
 +        human->SetWantedLevel(0);
 +        Once("drop-wanted","DROP_WANTED_LEVEL clears the engine wanted level; original separate wanted points are not modelled");
++        return WorldResult::Done;
++    }
++    if(token=="PED_WEAPON") {
++        // Case 0x72: weapon field of ped(value(A)) = D; no live-ped check; R(E), S.
++        if(!entity || entity->type!=99 || i.D<0 || i.D>4) return WorldResult::Unresolved;
++        auto* object=ResolveObject(*entity);
++        if(!object || object->mClassID!=eGameObjectClass_Pedestrian) return WorldResult::Unresolved;
++        auto* ped=static_cast<Pedestrian*>(object);
++        if(auto state=scriptPeds_.find(ped->mObjectID); state!=scriptPeds_.end()) state->second.weapon=i.D;
++        if(!ped->IsDead() && !ped->IsDies()) ArmScriptPed(*ped,i.D);
 +        return WorldResult::Done;
 +    }
 +    if(token=="FREEZE_ENTER" || token=="UNFREEZE_ENTER") {
@@ -17622,7 +17658,7 @@ index 0000000..31e47fa
 +                    else {ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(aim))); stationary=true;}
 +                } else if(state.attackDelay==0) {
 +                    state.attacking=true; state.attackCooldown=15;
-+                    ped->mWeapons[eWeapon_Pistol].SetAmmunition(99);
++                    ArmScriptPed(*ped,state.weapon); if(state.weapon!=1) Once("ped-weapon-cadence","Script attacker with a non-pistol weapon keeps the pistol shot cadence; original fire routines 00488fb0/00489150/00488fd0 not represented");
 +                    ctl.mShoot=true;
 +                    ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(aim)));
 +                    Once("ped-pursue-probe","Moving attacker: the 4x4 probe 8 units ahead that cancels a shot (00434e80) is not represented");
@@ -17696,7 +17732,7 @@ index 0000000..31e47fa
 +            } else if(state.attackDelay==0) {
 +                // fire byte set, act 0x10; weapon 1 fires once and sets cooldown 15 (00488e20).
 +                state.attacking=true; state.attackCooldown=15; shotStarted=true; ++aimCounter_;
-+                ped->mWeapons[eWeapon_Pistol].SetAmmunition(99);
++                ArmScriptPed(*ped,state.weapon); if(state.weapon!=1) Once("ped-weapon-cadence","Script attacker with a non-pistol weapon keeps the pistol shot cadence; original fire routines 00488fb0/00489150/00488fd0 not represented");
 +                ctl.mShoot=true;
 +                Once("ped-attack-cadence","Script attacker cadence: one shot, 15-update cooldown then 50-update delay (cooldown decrement per update assumed)");
 +            } else --state.attackDelay;
@@ -17998,7 +18034,7 @@ index 0000000..657622a
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..e571822
+index 0000000..aa6ddef
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -18036,7 +18072,7 @@ index 0000000..e571822
 +{"DROP_ON", "00447935", true}, // 30
 +{"PED_ON", "00441600", true}, // 31
 +{"KILL_DROP", "00447a0f", true}, // 32
-+{"CAR_ON", "00441cd0", false}, // 33
++{"CAR_ON", "00441cd0", true}, // 33
 +{"ARMEDMESS", "00447a6b", true}, // 34
 +{"DISARMMESS", "00447a85", true}, // 35
 +{"ARROW_OFF", "00481a00", true}, // 36
@@ -18117,7 +18153,7 @@ index 0000000..e571822
 +{"MOBILE_BRIEF", "00449f20", true}, // 111
 +{"PIXEL_CAR_ON", "00449fdf", false}, // 112
 +{"SET_NO_COLLIDE", "0044a16a", false}, // 113
-+{"PED_WEAPON", "0044a18d", false}, // 114
++{"PED_WEAPON", "0044a18d", true}, // 114
 +{"FREEUP_CAR", "0044a1b7", false}, // 115
 +{"MESSAGE_BRIEF", "0044a1ea", true}, // 116
 +{"PARKED_PIXELS_ON", "0044a230", false}, // 117
@@ -18798,7 +18834,7 @@ index 0000000..8a8b42a
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..cc94f12
+index 0000000..0b47c3d
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
 @@ -0,0 +1,759 @@
@@ -19538,7 +19574,7 @@ index 0000000..cc94f12
 +        return;
 +    }
 +    // Complex partial handler protocol. No default success or reward guess.
-+    if(oneOf(op,{2,16,22,23,31,44,57,60,69,88,121,125,135})) {
++    if(oneOf(op,{2,16,22,23,31,33,44,57,60,69,88,121,125,135})) {
 +        if(op==2 && p.state==1) {
 +            p.state=low16(wrap(static_cast<std::uint32_t>(i.D)+10U)); i.E=1;
 +        }
@@ -19555,7 +19591,7 @@ index 0000000..cc94f12
 +    // Immediate commands with known outer S and explicit reward exclusions.
 +    // Guards/spawn fields/coordinate transforms remain part of execute's contract.
 +    if(oneOf(op,{11,12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,87,
-+                 64,65,68,74,76,79,80,81,91,92,93,94,100,110,111,116,119,124,126,129,134,137,138,139,140,144,146})) {
++                 64,65,68,74,76,79,80,81,91,92,93,94,100,110,111,114,116,119,124,126,129,134,137,138,139,140,144,146})) {
 +        effect(!oneOf(op,{15,37,64,68,80,100,110,111,116,137,139})); return;
 +    }
 +    block(slot,std::string(commands[op].name)+" dispatch missing");
@@ -19904,10 +19940,10 @@ index 0000000..f7c987c
 +}
 diff --git a/src/mission/PedMotion.h b/src/mission/PedMotion.h
 new file mode 100755
-index 0000000..4bfd46c
+index 0000000..d9cd018
 --- /dev/null
 +++ b/src/mission/PedMotion.h
-@@ -0,0 +1,35 @@
+@@ -0,0 +1,36 @@
 +#pragma once
 +#include <algorithm>
 +#include <cmath>
@@ -19931,6 +19967,7 @@ index 0000000..4bfd46c
 +    unsigned int fleeFrom=0;
 +    int fleeCounter=0;
 +    double fleeHeading=0;
++    int weapon=1; // ped+0x60; constructors of armed types set 1
 +    unsigned int followTarget=0; // +86 for O 0x19 state 4 (follow)
 +    double moveHeading=0; // heading kept while an attacker waits (+a8 restored)
 +    void send(int x,int y) {destination=std::array<int,2>{{x,y}};objective=0x19;state=4;mode=8;action=2;}
