@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..3ed5520
+index 0000000..12fe59f
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2280 @@
+@@ -0,0 +1,2332 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -16662,20 +16662,20 @@ index 0000000..3ed5520
 +            if(kind==14) kind=0; // 0043da0b calls 004773f0, unlike PED_ON14
 +        }
 +        const bool attacker=kind==1 || kind==0x15 || kind==0x16 || kind==0x17 || kind==8 || kind==0x18 || kind==0x19 || kind==0x1a;
-+        if(kind!=0 && kind!=4 && kind!=7 && !attacker) {
++        if(kind!=0 && kind!=4 && kind!=5 && kind!=7 && !attacker) {
 +            Once("ped-kind:"+std::to_string(kind),"PED_ON pedestrian type "+std::to_string(kind)+" (armed/following/car objectives) not constructed yet");
 +            return WorldResult::Unresolved;
 +        }
 +        // Target T = value(r(E)) (PED_ON) or the declaration's fourth operand (LOAD_PED); extended
 +        // attackers keep a negative E as "no target" (Ts).
 +        GameObject* pedTarget=nullptr; bool noTarget=false;
-+        if(attacker || kind==7) {
++        if(attacker || kind==7 || kind==5) {
 +            int targetId=i.E;
 +            if(loading) {
 +                const auto& operands=entity->declaration.operands;
 +                if(operands.size()<4 || !integer(operands[3],targetId)) targetId=-1;
 +            }
-+            if(targetId<0 && kind!=7) noTarget=true;
++            if(targetId<0 && kind!=7 && kind!=5) noTarget=true;
 +            else {
 +                auto target=r.entities.find(targetId);
 +                if(target!=r.entities.end()) {
@@ -16733,6 +16733,10 @@ index 0000000..3ed5520
 +            // 004776b0: state 1, act 5, threat +86.
 +            auto& motion=scriptPeds_[ped->mObjectID];
 +            motion.state=1; motion.action=5; motion.fleeFrom=pedTarget->mObjectID; motion.fleeCounter=4;
++        } else if(kind==5) {
++            // 00477630: O 0x19, state 4, act 2, follow +86.
++            auto& motion=scriptPeds_[ped->mObjectID];
++            motion.state=4; motion.action=2; motion.followTarget=pedTarget->mObjectID;
 +        }
 +        ped->mMissionMoveEnabled=true;
 +        entity->value=static_cast<std::int32_t>(ped->mObjectID); entity->type=99;
@@ -16789,6 +16793,31 @@ index 0000000..3ed5520
 +            auto state=scriptPeds_.find(ped->mObjectID);
 +            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
 +            state->second.stand(i.D); ped->mMissionVelocity={0,0};
++            return WorldResult::Success;
++        }
++        if(i.D==5) {
++            // 00477bd0: state 4, act 2, target +86; the objective is kept.
++            auto leader=r.entities.find(i.E);
++            GameObject* to=nullptr;
++            if(leader!=r.entities.end()) {
++                if(leader->second.type==3) {
++                    auto binding=playerBindings_.find(i.E);
++                    if(binding!=playerBindings_.end()) to=gGameObjectsManager.GetGameObjectByID(binding->second);
++                } else if(leader->second.type==99) to=ResolveObject(leader->second);
++            }
++            if(!to || to->mClassID!=eGameObjectClass_Pedestrian) {
++                Once("ped-follow-target","UNRESOLVED CHANGE_PED_TYPE 5 target is not a live ped or the player");
++                return WorldResult::Unresolved;
++            }
++            if(ped->mCurrentCar || ped->IsEnteringOrExitingCar()) {
++                Once("ped-follow-car","UNRESOLVED CHANGE_PED_TYPE 5 for a seated ped");
++                return WorldResult::Unresolved;
++            }
++            auto state=scriptPeds_.find(ped->mObjectID);
++            if(state==scriptPeds_.end()) return WorldResult::Unresolved;
++            auto& motion=state->second;
++            motion.destination.reset(); motion.state=4; motion.action=2;
++            motion.followTarget=to->mObjectID; motion.fleeFrom=0;
 +            return WorldResult::Success;
 +        }
 +        if(i.D==7) {
@@ -17624,6 +17653,29 @@ index 0000000..3ed5520
 +                Once("ped-attack-cadence","Script attacker cadence: one shot, 15-update cooldown then 50-update delay (cooldown decrement per update assumed)");
 +            } else --state.attackDelay;
 +            if(!shotStarted) aimSide_=aimSide_?0:1; // 00456e68, skipped by the early return that starts a shot
++            continue;
++        }
++        if(state.state==4 && state.followTarget && !state.destination && (state.objective<0x18 || state.objective>0x1e)) {
++            if(state.removed || ped->IsDead() || ped->IsDies() || ped->mCurrentCar || !ped->IsIdle()) continue;
++            GameObject* leader=gGameObjectsManager.GetGameObjectByID(state.followTarget);
++            if(!leader || leader->IsMarkedForDeletion()) {ped->mMissionVelocity={0,0}; continue;}
++            const bool seated=leader->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(leader)->mCurrentCar;
++            int leaderSpeed=state.desired;
++            if(auto* human=player(0); human && human->mCharacter==leader) leaderSpeed=playerSpeed_;
++            else if(auto other=scriptPeds_.find(state.followTarget); other!=scriptPeds_.end()) leaderSpeed=other->second.current;
++            if(seated) leader=static_cast<Pedestrian*>(leader)->mCurrentCar;
++            const auto& at=ped->mTransform.mPosition;
++            const double tx=Convert::MetersToMapUnits(leader->mTransform.mPosition.x-at.x)*64;
++            const double ty=Convert::MetersToMapUnits(leader->mTransform.mPosition.z-at.z)*64;
++            // 00457c81: Chebyshev bands; 12..24 copies the target's current speed capped by the desired speed.
++            const double d=std::max(std::floor(std::abs(tx)),std::floor(std::abs(ty)));
++            int speed=d<8?0:d<12?2:d<25?(leaderSpeed<=0?2:std::min(leaderSpeed,state.desired)):state.desired;
++            state.current=speed;
++            if(speed==0 || (tx==0 && ty==0)) {ped->mMissionVelocity={0,0}; continue;}
++            const double length=std::hypot(tx,ty);
++            ped->SetTransform(at,cxx::angle_t::from_radians(static_cast<float>(std::atan2(-ty,tx))));
++            ped->mMissionVelocity=glm::vec2(tx/length,ty/length)*Convert::MapUnitsToMeters(speed*25.0f/64);
++            Once("ped-follow-path","Following ped walks straight at its target with engine collision; original path refresh is not represented");
 +            continue;
 +        }
 +        if(state.removed || !state.destination || ped->IsDead() || ped->IsDies() ||
@@ -19803,10 +19855,10 @@ index 0000000..f7c987c
 +}
 diff --git a/src/mission/PedMotion.h b/src/mission/PedMotion.h
 new file mode 100755
-index 0000000..de91a75
+index 0000000..4bfd46c
 --- /dev/null
 +++ b/src/mission/PedMotion.h
-@@ -0,0 +1,34 @@
+@@ -0,0 +1,35 @@
 +#pragma once
 +#include <algorithm>
 +#include <cmath>
@@ -19830,6 +19882,7 @@ index 0000000..de91a75
 +    unsigned int fleeFrom=0;
 +    int fleeCounter=0;
 +    double fleeHeading=0;
++    unsigned int followTarget=0; // +86 for O 0x19 state 4 (follow)
 +    double moveHeading=0; // heading kept while an attacker waits (+a8 restored)
 +    void send(int x,int y) {destination=std::array<int,2>{{x,y}};objective=0x19;state=4;mode=8;action=2;}
 +    int speedFor(double x,double y) {
