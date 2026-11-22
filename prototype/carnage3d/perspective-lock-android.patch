@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..85dfb07
+index 0000000..d59c0a1
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2416 @@
+@@ -0,0 +1,2451 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -16521,6 +16521,41 @@ index 0000000..85dfb07
 +        if(!human) return WorldResult::Unresolved;
 +        human->SetWantedLevel(0);
 +        Once("drop-wanted","DROP_WANTED_LEVEL clears the engine wanted level; original separate wanted points are not modelled");
++        return WorldResult::Done;
++    }
++    if(token=="CHANGE_BLOCK") {
++        if(!entity || entity->declaration.token!="BLOCK_INFO" || entity->declaration.operands.empty()) return WorldResult::Unresolved;
++        int value=0;
++        if(!integer(entity->declaration.operands[0],value)) return WorldResult::Unresolved;
++        auto pos=DeclarationPosition(entity->declaration);
++        if(!pos || !gGameMap.IsLoaded()) return WorldResult::Unresolved;
++        const int x=static_cast<int>(Convert::MetersToMapUnits(pos->x));
++        const int y=static_cast<int>(Convert::MetersToMapUnits(pos->z));
++        const int z=INVERT_MAP_LAYER(static_cast<int>(Convert::MetersToMapUnits(pos->y)));
++        const auto* current=gGameMap.GetBlockInfo(x,y,z);
++        if(!current) return WorldResult::Unresolved;
++        MapBlockInfo block=*current;
++        const unsigned typeMap=static_cast<unsigned>(value)&0xffff, ext=(static_cast<unsigned>(value)>>16)&0xff;
++        // Same decoding as the map loader (GameMapManager type_map / type_map_ext); faces are kept.
++        block.mUpDirection=(typeMap&0x01)!=0; block.mDownDirection=(typeMap&0x02)!=0;
++        block.mLeftDirection=(typeMap&0x04)!=0; block.mRightDirection=(typeMap&0x08)!=0;
++        block.mGroundType=static_cast<eGroundType>((typeMap>>4)&0x07);
++        block.mIsFlat=(typeMap&0x80)!=0;
++        block.mSlopeType=(typeMap>>8)&0x3f;
++        block.mLidRotation=static_cast<eLidRotation>((typeMap>>14)&0x03);
++        switch(ext&0x07) {
++        case 1: block.mTrafficHint=eTrafficHint_TrafficLights; break;
++        case 4: block.mTrafficHint=eTrafficHint_TrainTurnEnd; break;
++        case 5: block.mTrafficHint=eTrafficHint_TrainTurnStart; break;
++        case 6: block.mTrafficHint=eTrafficHint_TrainStationEnd; break;
++        case 7: block.mTrafficHint=eTrafficHint_TrainStationStart; break;
++        case 0: block.mTrafficHint=eTrafficHint_None; break;
++        default: return WorldResult::Unresolved; // 2/3 are rejected by the map loader too
++        }
++        block.mRemap=(ext>>3)&0x03;
++        block.mFlipTopBottomFaces=(ext&0x20)!=0; block.mFlipLeftRightFaces=(ext&0x40)!=0;
++        block.mIsRailway=(ext&0x80)!=0;
++        if(!gGameMap.SetBlockInfo(x,y,z,block)) return WorldResult::Unresolved;
 +        return WorldResult::Done;
 +    }
 +    if(token=="PED_WEAPON") {
@@ -18034,7 +18069,7 @@ index 0000000..657622a
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..aa6ddef
+index 0000000..13e8884
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -18105,7 +18140,7 @@ index 0000000..aa6ddef
 +{"DUMMY_OFF", "00448192", false}, // 63
 +{"POWERUP_ON", "004481cb", true}, // 64
 +{"PLAIN_EXPL_BUILDING", "004482bb", true}, // 65
-+{"CHANGE_BLOCK", "0044834c", false}, // 66
++{"CHANGE_BLOCK", "0044834c", true}, // 66
 +{"CHANGE_TYPE", "004483c9", false}, // 67
 +{"P_BRIEF_TIMED", "0044846a", true}, // 68
 +{"CHANGE_PED_TYPE", "00443690", true}, // 69
@@ -18834,7 +18869,7 @@ index 0000000..8a8b42a
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..0b47c3d
+index 0000000..f5f6028
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
 @@ -0,0 +1,759 @@
@@ -19591,7 +19626,7 @@ index 0000000..0b47c3d
 +    // Immediate commands with known outer S and explicit reward exclusions.
 +    // Guards/spawn fields/coordinate transforms remain part of execute's contract.
 +    if(oneOf(op,{11,12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,87,
-+                 64,65,68,74,76,79,80,81,91,92,93,94,100,110,111,114,116,119,124,126,129,134,137,138,139,140,144,146})) {
++                 64,65,68,74,76,79,80,81,66,91,92,93,94,100,110,111,114,116,119,124,126,129,134,137,138,139,140,144,146})) {
 +        effect(!oneOf(op,{15,37,64,68,80,100,110,111,116,137,139})); return;
 +    }
 +    block(slot,std::string(commands[op].name)+" dispatch missing");

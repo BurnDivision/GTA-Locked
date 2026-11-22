@@ -1,4 +1,4 @@
-GTA Perspective Lock 0.7.9 - Windows 10/11 x64
+GTA Perspective Lock 0.8.0 - Windows 10/11 x64
 
 Extract the ENTIRE zip into a writable, short ASCII path, for example:
   C:/Games/GTA-Perspective-Lock
