@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..f6329b0
+index 0000000..31e47fa
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2360 @@
+@@ -0,0 +1,2380 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -15476,6 +15476,14 @@ index 0000000..f6329b0
 +        if(n!=s.size() || v<INT32_MIN || v>INT32_MAX) return false;
 +        value=static_cast<int>(v); return true;
 +    } catch(const std::exception&) {return false;}
++}
++// 00456770 / 00456fb0 group the 0x29.. objectives with their 0x18.. counterparts.
++static int AttackClass(int objective) {
++    switch(objective) {
++    case 0x29: return 0x18; case 0x2c: return 0x1a; case 0x2e: return 0x1b;
++    case 0x2b: return 0x1c; case 0x2d: return 0x1d; case 0x2f: return 0x1e;
++    default: return objective;
++    }
 +}
 +HumanPlayer* player(int owner) {
 +    return owner>=0 && owner<4 ? gCarnageGame.mHumanPlayers[owner] : nullptr;
@@ -16480,6 +16488,15 @@ index 0000000..f6329b0
 +        if(general) Once("kf-general-reader","KF general countdown (0074f2f8) kept; its consumer is not recovered");
 +        return WorldResult::Done;
 +    }
++    if(token=="DROP_WANTED_LEVEL") {
++        // Case 0x77: player ped state 9 (arrested) and ped+0xfc (set while a model car is driven,
++        // see START_MODEL 004423f0) skip the clear. Neither exists in the engine, so the clear always runs.
++        auto* human=player(r.owner);
++        if(!human) return WorldResult::Unresolved;
++        human->SetWantedLevel(0);
++        Once("drop-wanted","DROP_WANTED_LEVEL clears the engine wanted level; original separate wanted points are not modelled");
++        return WorldResult::Done;
++    }
 +    if(token=="FREEZE_ENTER" || token=="UNFREEZE_ENTER") {
 +        // 004647c0(owner, 1/0): while set, the player's enter/exit-car key does nothing.
 +        auto* human=player(r.owner);
@@ -16683,7 +16700,7 @@ index 0000000..f6329b0
 +               !integer(operands[1],heading) || !integer(operands[2],occupation)) return WorldResult::Unresolved;
 +            if(kind==14) kind=0; // 0043da0b calls 004773f0, unlike PED_ON14
 +        }
-+        const bool attacker=kind==1 || kind==0x15 || kind==0x16 || kind==0x17 || kind==8 || kind==0x18 || kind==0x19 || kind==0x1a;
++        const bool attacker=kind==1 || kind==0x15 || kind==0x16 || kind==0x17 || kind==8 || kind==0x18 || kind==0x19 || kind==0x1a || (kind>=0x29 && kind<=0x2e);
 +        if(kind!=0 && kind!=4 && kind!=5 && kind!=7 && !attacker) {
 +            Once("ped-kind:"+std::to_string(kind),"PED_ON pedestrian type "+std::to_string(kind)+" (armed/following/car objectives) not constructed yet");
 +            return WorldResult::Unresolved;
@@ -16743,8 +16760,10 @@ index 0000000..f6329b0
 +        if(attacker) {
 +            // 00477460 (type 1, O 0x18) / 00477900 (0x15 -> 0x18, 0x16 -> 0x1a, 0x17 -> 0x1b): state 3, act 8, weapon 1.
 +            auto& motion=scriptPeds_[ped->mObjectID];
-+            motion.objective=kind==0x16?0x1a:kind==0x17?0x1b:kind==8||kind==0x18?0x1c:kind==0x19?0x1d:kind==0x1a?0x1e:0x18;
-+            motion.state=(kind==8||kind>=0x18)?4:3; motion.action=8; motion.current=0;
++            motion.objective=kind==0x16?0x1a:kind==0x17?0x1b:kind==8||kind==0x18?0x1c:kind==0x19?0x1d:kind==0x1a?0x1e:
++                kind==0x29?0x29:kind==0x2a?0x2c:kind==0x2b?0x2e:kind==0x2c?0x2b:kind==0x2d?0x2d:kind==0x2e?0x2f:0x18;
++            motion.state=(kind==8||(kind>=0x18&&kind<=0x1a)||kind>=0x2c)?4:3;
++            if(kind>=0x29) Once("ped-kind-2x","PED_ON types 0x29..0x2e use their 0x15..0x1a counterparts' aim and movement; any other difference is not recovered"); motion.action=8; motion.current=0;
 +            motion.moveHeading=ped->mTransform.mOrientation.to_radians();
 +            motion.attackTarget=pedTarget?pedTarget->mObjectID:0;
 +            ped->mWeapons[eWeapon_Pistol].Setup(eWeapon_Pistol,99);
@@ -17564,7 +17583,8 @@ index 0000000..f6329b0
 +            ped->mMissionVelocity=glm::vec2(std::cos(state.fleeHeading),-std::sin(state.fleeHeading))*velocity;
 +            continue;
 +        }
-+        if((state.objective==0x1c || state.objective==0x1d || state.objective==0x1e) && state.state==4 && state.attackTarget) {
++        const int attackClass=AttackClass(state.objective);
++        if((attackClass==0x1c || attackClass==0x1d || attackClass==0x1e) && state.state==4 && state.attackTarget) {
 +            auto holder=pedControllers_.find(entry.first);
 +            if(holder==pedControllers_.end() || ped->mController!=&holder->second->controller) continue;
 +            auto& ctl=holder->second->controller.mCtlState; ctl.mShoot=false;
@@ -17582,9 +17602,9 @@ index 0000000..f6329b0
 +                if(known) {state.attacking=false; state.attackDelay=50;}
 +            } else {
 +                double dx=tx,dy=ty;
-+                const int threshold=state.objective==0x1c?10:state.objective==0x1d?5:0;
-+                const int lateral=state.objective==0x1c?16:state.objective==0x1d?8:0;
-+                if(state.objective==0x1e) aimCounter_=1;
++                const int threshold=attackClass==0x1c?10:attackClass==0x1d?5:0;
++                const int lateral=attackClass==0x1c?16:attackClass==0x1d?8:0;
++                if(attackClass==0x1e) aimCounter_=1;
 +                if(!seated) {
 +                    if(threshold<aimCounter_) aimCounter_=0;
 +                    else {
@@ -17629,7 +17649,7 @@ index 0000000..f6329b0
 +            }
 +            continue;
 +        }
-+        if((state.objective==0x1b || state.objective==0x1a || state.objective==0x18) && state.state==3 && state.attackTarget) {
++        if((attackClass==0x1b || attackClass==0x1a || attackClass==0x18) && state.state==3 && state.attackTarget) {
 +            // 00456770 state 3: face the target, fire when the delay is spent.
 +            auto holder=pedControllers_.find(entry.first);
 +            if(holder==pedControllers_.end() || ped->mController!=&holder->second->controller) continue;
@@ -17650,9 +17670,9 @@ index 0000000..f6329b0
 +            double dx=Convert::MetersToMapUnits(aim.x-at.x)*64,dy=Convert::MetersToMapUnits(aim.z-at.z)*64; // pixels
 +            const bool seated=victim->mClassID==eGameObjectClass_Pedestrian && static_cast<Pedestrian*>(victim)->mCurrentCar;
 +            // aim threshold / lateral offset: 0x18 -> 10/16, 0x1a -> 5/8, 0x1b direct (counter set to 1)
-+            const int threshold=state.objective==0x18?10:state.objective==0x1a?5:0;
-+            const int lateral=state.objective==0x18?16:state.objective==0x1a?8:0;
-+            if(state.objective==0x1b) aimCounter_=1;
++            const int threshold=attackClass==0x18?10:attackClass==0x1a?5:0;
++            const int lateral=attackClass==0x18?16:attackClass==0x1a?8:0;
++            if(attackClass==0x1b) aimCounter_=1;
 +            if(!seated) {
 +                if(threshold<aimCounter_) aimCounter_=0; // aim straight at the target
 +                else {
@@ -17683,7 +17703,7 @@ index 0000000..f6329b0
 +            if(!shotStarted) aimSide_=aimSide_?0:1; // 00456e68, skipped by the early return that starts a shot
 +            continue;
 +        }
-+        if(state.state==4 && state.followTarget && !state.destination && (state.objective<0x18 || state.objective>0x1e)) {
++        if(state.state==4 && state.followTarget && !state.destination && (attackClass<0x18 || attackClass>0x1e)) {
 +            if(state.removed || ped->IsDead() || ped->IsDies() || ped->mCurrentCar || !ped->IsIdle()) continue;
 +            GameObject* leader=gGameObjectsManager.GetGameObjectByID(state.followTarget);
 +            if(!leader || leader->IsMarkedForDeletion()) {ped->mMissionVelocity={0,0}; continue;}
