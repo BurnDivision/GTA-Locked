@@ -15444,10 +15444,10 @@ index 3079c22..3d3c0c9 100644
          // @param nodeName: New node name
 diff --git a/src/mission/CarnageMissionWorld.cpp b/src/mission/CarnageMissionWorld.cpp
 new file mode 100755
-index 0000000..d59c0a1
+index 0000000..de7ac0c
 --- /dev/null
 +++ b/src/mission/CarnageMissionWorld.cpp
-@@ -0,0 +1,2451 @@
+@@ -0,0 +1,2470 @@
 +#include "../stdafx.h"
 +#include "../Explosion.h"
 +#include "ScriptPedController.h"
@@ -16521,6 +16521,25 @@ index 0000000..d59c0a1
 +        if(!human) return WorldResult::Unresolved;
 +        human->SetWantedLevel(0);
 +        Once("drop-wanted","DROP_WANTED_LEVEL clears the engine wanted level; original separate wanted points are not modelled");
++        return WorldResult::Done;
++    }
++    if(token=="CHANGE_TYPE") {
++        if(!entity || entity->declaration.token!="BLOCK_INFO" || entity->declaration.operands.size()<2) return WorldResult::Unresolved;
++        int selector=0,face=0;
++        if(!integer(entity->declaration.operands[0],selector) || !integer(entity->declaration.operands[1],face)) return WorldResult::Unresolved;
++        auto pos=DeclarationPosition(entity->declaration);
++        if(!pos || !gGameMap.IsLoaded()) return WorldResult::Unresolved;
++        const int x=static_cast<int>(Convert::MetersToMapUnits(pos->x));
++        const int y=static_cast<int>(Convert::MetersToMapUnits(pos->z));
++        const int z=INVERT_MAP_LAYER(static_cast<int>(Convert::MetersToMapUnits(pos->y)));
++        const auto* current=gGameMap.GetBlockInfo(x,y,z);
++        if(!current) return WorldResult::Unresolved;
++        selector&=0xff;
++        if(selector>4) return WorldResult::Done; // 00438020's switch has no other case
++        static const eBlockFace faces[5]={eBlockFace_W,eBlockFace_E,eBlockFace_N,eBlockFace_S,eBlockFace_Lid};
++        MapBlockInfo block=*current;
++        block.mFaces[faces[selector]]=static_cast<unsigned char>(face&0xff);
++        if(!gGameMap.SetBlockInfo(x,y,z,block)) return WorldResult::Unresolved;
 +        return WorldResult::Done;
 +    }
 +    if(token=="CHANGE_BLOCK") {
@@ -18069,7 +18088,7 @@ index 0000000..657622a
 +}
 diff --git a/src/mission/CommandTable.inc b/src/mission/CommandTable.inc
 new file mode 100755
-index 0000000..13e8884
+index 0000000..a188d9f
 --- /dev/null
 +++ b/src/mission/CommandTable.inc
 @@ -0,0 +1,151 @@
@@ -18141,7 +18160,7 @@ index 0000000..13e8884
 +{"POWERUP_ON", "004481cb", true}, // 64
 +{"PLAIN_EXPL_BUILDING", "004482bb", true}, // 65
 +{"CHANGE_BLOCK", "0044834c", true}, // 66
-+{"CHANGE_TYPE", "004483c9", false}, // 67
++{"CHANGE_TYPE", "004483c9", true}, // 67
 +{"P_BRIEF_TIMED", "0044846a", true}, // 68
 +{"CHANGE_PED_TYPE", "00443690", true}, // 69
 +{"DOOR_ON", "004484dd", true}, // 70
@@ -18869,7 +18888,7 @@ index 0000000..8a8b42a
 +}
 diff --git a/src/mission/MissionVM.cpp b/src/mission/MissionVM.cpp
 new file mode 100755
-index 0000000..f5f6028
+index 0000000..a4c8a65
 --- /dev/null
 +++ b/src/mission/MissionVM.cpp
 @@ -0,0 +1,759 @@
@@ -19626,7 +19645,7 @@ index 0000000..f5f6028
 +    // Immediate commands with known outer S and explicit reward exclusions.
 +    // Guards/spawn fields/coordinate transforms remain part of execute's contract.
 +    if(oneOf(op,{11,12,15,18,19,24,26,30,32,34,35,36,37,38,40,43,50,51,52,53,87,
-+                 64,65,68,74,76,79,80,81,66,91,92,93,94,100,110,111,114,116,119,124,126,129,134,137,138,139,140,144,146})) {
++                 64,65,68,74,76,79,80,81,66,67,91,92,93,94,100,110,111,114,116,119,124,126,129,134,137,138,139,140,144,146})) {
 +        effect(!oneOf(op,{15,37,64,68,80,100,110,111,116,137,139})); return;
 +    }
 +    block(slot,std::string(commands[op].name)+" dispatch missing");
