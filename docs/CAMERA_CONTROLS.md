@@ -65,7 +65,8 @@ the player now walks. Releasing or turning the stick re-aligns it.
   - Firing: automatic past `g_autoFireThreshold` (default 0.6) when `g_autoFire` is 1 (default). The right
     trigger always fires.
 - **Gamepad, in a car:** the left stick steers in proportion, the right trigger is the gas, and the left
-  trigger brakes or reverses.
+  trigger brakes or reverses. The right stick also drives: up is the gas and down brakes, then reverses.
+  It takes priority over the triggers outside its dead zone (`src/DrivingInput.h`).
 
 ### Constraints kept from the original game
 - The weapon fires along the character's facing, as in the original, so facing follows the aim whenever
@@ -103,7 +104,7 @@ later. The engine adapters live in `FollowCameraController` (camera) and `HumanP
   - Reperspective with twin-stick: held stick, strafe and fire, backward and fire, stationary aim,
     rapid changes, a full 360° sweep through ±180°;
   - Combat;
-  - driving.
+  - driving, including right-stick gas and reverse (distance moved along the car's heading).
 
   It checks world-space movement, actual velocity, facing, projectile headings and camera steps per frame.
 - **Not covered:**
@@ -112,7 +113,8 @@ later. The engine adapters live in `FollowCameraController` (camera) and `HumanP
   - Touch twin-stick: one emulator run (single-finger swipes; adb can't do two fingers at once).
 
 ## Open trade-offs and remaining work
-- Touch twin-stick (Codex T8, integrated in 0.5.1): in a car the aim stick acts as the gas, and touch has no brake/reverse yet.
+- Touch twin-stick: in a car the aim stick is the throttle (up = gas, down = brake/reverse). A sideways-only push
+  of the aim stick still counts as gas, because the touch layer also reports it as the fire trigger.
 - Combat mode is experimental:
   - gamepad only;
   - auto-fire is off in this mode because the right stick turns the view;
