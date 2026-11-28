@@ -4,8 +4,8 @@ The Diablo II PS2 port (D2PS2) is developed on the user's PC **PowerStorm** (Des
 `6b440ab5-a4ef-48aa-afce-2eb94c6b0ef8`), tree `D:\D2PS2\tree`. Its own `CLAUDE.md`, `AGENTS.md` and
 `integration-logs/act1/HANDOFF.md` are the project's rules and resume point: read them first.
 
-## Official project names (user, 2026-11-26)
-- PlayStation 2 port (D2PS2): **Diablo II: Obsidian Rune Edition**
+## Official project names (user, 2026-11-26; PS2 name changed 2026-11-28)
+- PlayStation 2 port (D2PS2): **Diablo II: Obsidian Calling** (formerly "Obsidian Rune Edition")
 - Original Xbox port: **Diablo II: Emerald Jewel Edition**
 Use them in user-facing text; internal code names and paths stay.
 
